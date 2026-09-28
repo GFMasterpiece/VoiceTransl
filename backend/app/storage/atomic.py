@@ -16,3 +16,18 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     except Exception:
         if temp.exists(): temp.unlink()
         raise
+
+def atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temp.open("wb") as stream:
+            stream.write(payload)
+            stream.flush(); os.fsync(stream.fileno())
+        os.replace(temp, path)
+    except Exception:
+        if temp.exists(): temp.unlink()
+        raise
+
+def atomic_write_text(path: Path, payload: str) -> None:
+    atomic_write_bytes(path, payload.encode("utf-8"))

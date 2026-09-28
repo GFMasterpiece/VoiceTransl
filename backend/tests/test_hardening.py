@@ -6,11 +6,15 @@ from httpx import ASGITransport, AsyncClient
 from fastapi.testclient import TestClient
 
 from app.application.event_bus import EventBus
-from app.domain import Job, JobStatus, PipelineStageName, Project, SourceAsset, StageStatus
+from app.domain import Job, JobStatus, PipelineStageName, Project, SourceAsset, StageStatus, Transcript, Segment
 from app.main import create_app
 from app.pipeline.context import PipelineContext
 from app.pipeline.runner import PipelineRunner
+from app.pipeline.stages import TranslationStage
+from app.exporters import render_srt, render_lrc
+from app.storage.atomic import atomic_write_json
 from app.storage import FileSystemProjectStore
+from app.storage.project_store import TranscriptProtectedError
 
 
 async def _create_project(client: AsyncClient) -> str:
@@ -145,6 +149,90 @@ def test_store_rejects_output_and_transcript_path_traversal(tmp_path: Path):
         store.load_transcript(project.id, "../raw")
     with pytest.raises(ValueError):
         SourceAsset(path="../outside.wav", original_name="outside.wav", size_bytes=0)
+
+
+def test_store_protects_edited_transcript_and_touches_project(tmp_path: Path):
+    store = FileSystemProjectStore(tmp_path)
+    project = Project(
+        id="prj_test",
+        name="test",
+        source=SourceAsset(path="source/original.wav", original_name="original.wav", size_bytes=0),
+    )
+    store.create_project(project)
+    value = Transcript(project_id=project.id, stage="raw", language="ja", segments=[Segment(id="1", source_text="a")])
+    store.save_transcript(project.id, "raw", value)
+    before = store.load_project(project.id).updated_at
+    edited = value.model_copy(update={"segments": [Segment(id="1", source_text="manual") ]})
+    with pytest.raises(TranscriptProtectedError):
+        store.save_transcript(project.id, "raw", edited)
+    store.save_transcript(project.id, "raw", edited, overwrite=True)
+    assert store.load_transcript(project.id, "raw").segments[0].source_text == "manual"
+    assert store.load_project(project.id).updated_at >= before
+
+
+def test_store_rejects_project_directory_symlink(tmp_path: Path):
+    real = tmp_path / "real-projects"
+    real.mkdir()
+    projects = tmp_path / "projects"
+    projects.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError):
+        FileSystemProjectStore(tmp_path)
+
+
+def test_store_rejects_source_directory_symlink(tmp_path: Path):
+    store = FileSystemProjectStore(tmp_path)
+    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project_dir = store.create_project(project)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (project_dir / "source").rmdir()
+    (project_dir / "source").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        store.save_source(project.id, "wav", b"x")
+
+
+def test_atomic_json_failure_keeps_previous_file(tmp_path: Path, monkeypatch):
+    import app.storage.atomic as atomic
+    path = tmp_path / "state.json"
+    atomic_write_json(path, {"version": 1})
+    monkeypatch.setattr(atomic.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed")))
+    with pytest.raises(OSError):
+        atomic_write_json(path, {"version": 2})
+    assert path.read_text(encoding="utf-8").find('"version": 1') >= 0
+
+
+def test_domain_models_round_trip_json():
+    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=1))
+    job = Job(id="job_test", project_id=project.id)
+    transcript = Transcript(project_id=project.id, stage="raw", language="ja", segments=[Segment(id="1", source_text="x")])
+    assert Project.model_validate_json(project.model_dump_json()) == project
+    assert Job.model_validate_json(job.model_dump_json()) == job
+    assert Transcript.model_validate_json(transcript.model_dump_json()) == transcript
+
+
+def test_formatters_use_half_up_and_carry():
+    segment = Segment(id="1", start=1.2345, end=2.0, source_text="日", translated_text="中")
+    assert "00:00:01,235" in render_srt([segment])
+    carry = Segment(id="1", start=59.9995, end=60.0, source_text="日", translated_text="中")
+    assert "00:01:00,000" in render_srt([carry])
+    assert "[01:00.00]" in render_lrc([carry])
+
+
+@pytest.mark.asyncio
+async def test_translation_provider_cannot_mutate_source_fields(tmp_path: Path):
+    store = FileSystemProjectStore(tmp_path)
+    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project_dir = store.create_project(project)
+    class MutatingProvider:
+        async def translate(self, segments, _context):
+            segments[0].source_text = "changed"
+            segments[0].translated_text = "ok"
+            return segments
+    transcript = Transcript(project_id=project.id, stage="aligned", language="ja", segments=[Segment(id="1", start=0, end=1, source_text="original")])
+    context = PipelineContext(project=project, project_dir=project_dir, job=Job(id="job_test", project_id=project.id), preset={}, store=store, cancel_event=asyncio.Event(), transcript=transcript, allow_transcript_overwrite=True)
+    with pytest.raises(ValueError, match="immutable"):
+        await TranslationStage(MutatingProvider()).run(context)
+    assert context.transcript.segments[0].source_text == "original"
 
 
 def test_event_bus_removes_empty_subscriptions():

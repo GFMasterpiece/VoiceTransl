@@ -13,13 +13,12 @@ from .api.routes import router
 def create_app(data_dir=None):
     config_path = os.getenv("VOICETRANSL_CONFIG")
     if config_path is None:
-        candidate = Path(__file__).resolve().parents[2] / "config" / "app.yaml"
-        config_path = candidate if candidate.exists() else None
+        config_path = Path(__file__).resolve().parents[2] / "config" / "app.yaml"
     settings=load_settings(config_path)
     if data_dir is not None: settings.data_dir=Path(data_dir)
     store = FileSystemProjectStore(settings.data_dir)
     events = EventBus()
-    jobs = JobManager(store, events, settings.mock_delay_ms, settings.max_concurrent)
+    jobs = JobManager(store, events, settings.mock_delay_ms, settings.max_concurrent, settings.preset_dir)
 
     @asynccontextmanager
     async def lifespan(_app):

@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from app.config import load_settings
+from app.config import load_preset
+import pytest
 
 
 def test_environment_overrides_yaml_settings(tmp_path, monkeypatch):
@@ -38,3 +40,25 @@ logging:
     assert settings.max_concurrent == 3
     assert settings.mock_delay_ms == 25
     assert settings.log_level == "DEBUG"
+
+
+def test_missing_or_invalid_config_is_explicit(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_settings(tmp_path / "missing.yaml")
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("app: [", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid YAML"):
+        load_settings(broken)
+
+
+def test_preset_is_loaded_and_validated(tmp_path):
+    presets = tmp_path / "presets"
+    presets.mkdir()
+    (presets / "mock.yaml").write_text(
+        "name: mock\nstages: [preprocess, asr, alignment, translation, export]\n"
+        "providers: {asr: mock, aligner: mock, translator: mock}\nmock: {delay_ms: 1}\n",
+        encoding="utf-8",
+    )
+    assert load_preset(presets, "mock").mock["delay_ms"] == 1
+    with pytest.raises(FileNotFoundError):
+        load_preset(presets, "missing")

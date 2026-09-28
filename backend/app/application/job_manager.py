@@ -4,12 +4,14 @@ from uuid import uuid4
 from ..domain import Job, JobError, JobStatus
 from ..pipeline import PipelineContext, PipelineRunner, PreprocessStage, ASRStage, AlignmentStage, TranslationStage, ExportStage
 from ..providers import MockASRProvider, MockAlignerProvider, MockTranslatorProvider
+from ..config import load_preset
 
 class JobManager:
-    def __init__(self,store,event_bus,delay_ms=500,max_concurrent=1):
+    def __init__(self,store,event_bus,delay_ms=500,max_concurrent=1,preset_dir=None):
         self.store=store
         self.event_bus=event_bus
         self.delay_ms=delay_ms
+        self.preset_dir = preset_dir
         self.tasks: dict[str, asyncio.Task] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
         self.locks: dict[str, asyncio.Lock] = {}
@@ -76,8 +78,10 @@ class JobManager:
                                 "data": {},
                             })
                             return
-                        stages=[PreprocessStage(),ASRStage(MockASRProvider(self.delay_ms)),AlignmentStage(MockAlignerProvider(self.delay_ms)),TranslationStage(MockTranslatorProvider(self.delay_ms)),ExportStage()]
-                        c=PipelineContext(project=project,project_dir=self.store.project_dir(project_id),job=job,preset={"name":"mock"},store=self.store,cancel_event=ev)
+                        preset = load_preset(self.preset_dir, project.preset) if self.preset_dir else None
+                        delay_ms = preset.mock.get("delay_ms", self.delay_ms) if preset else self.delay_ms
+                        stages=[PreprocessStage(),ASRStage(MockASRProvider(delay_ms)),AlignmentStage(MockAlignerProvider(delay_ms)),TranslationStage(MockTranslatorProvider(delay_ms)),ExportStage()]
+                        c=PipelineContext(project=project,project_dir=self.store.project_dir(project_id),job=job,preset=preset.model_dump(mode="json") if preset else {"name":"mock"},store=self.store,cancel_event=ev,allow_transcript_overwrite=not resume)
                         await PipelineRunner(stages,self.event_bus).run(c,resume=resume)
                 except asyncio.CancelledError:
                     # The public cancel API uses cooperative cancellation and

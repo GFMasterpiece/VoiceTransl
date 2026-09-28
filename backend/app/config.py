@@ -4,6 +4,26 @@ import os
 import yaml
 from pydantic import BaseModel, Field
 
+EXPECTED_STAGES = ["preprocess", "asr", "alignment", "translation", "export"]
+
+class PresetConfig(BaseModel):
+    name: str
+    stages: list[str]
+    providers: dict[str, str]
+    mock: dict[str, int] = Field(default_factory=dict)
+
+    @classmethod
+    def validate_preset(cls, value: "PresetConfig", expected_name: str) -> "PresetConfig":
+        if value.name != expected_name:
+            raise ValueError(f"preset name does not match {expected_name!r}")
+        if value.stages != EXPECTED_STAGES:
+            raise ValueError("preset stages must contain the five v0.1 stages in order")
+        if value.providers != {"asr": "mock", "aligner": "mock", "translator": "mock"}:
+            raise ValueError("v0.1 preset providers must use mock providers")
+        if value.mock.get("delay_ms", 0) < 0:
+            raise ValueError("preset mock.delay_ms must be non-negative")
+        return value
+
 class AppSettings(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8000
@@ -13,25 +33,42 @@ class AppSettings(BaseModel):
     max_concurrent: int = 1
     mock_delay_ms: int = 500
     log_level: str = "INFO"
+    preset_dir: Path = Path("./config/presets")
 
 def load_settings(config_path: str | Path | None = None) -> AppSettings:
     raw: dict = {}
-    if config_path and Path(config_path).exists():
-        raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+    config_file = Path(config_path).resolve() if config_path else None
+    if config_file:
+        if not config_file.is_file():
+            raise FileNotFoundError(f"configuration file does not exist: {config_file}")
+        try:
+            raw = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"invalid YAML configuration: {config_file}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("configuration root must be a mapping")
     app = raw.get("app", {})
     jobs = raw.get("jobs", {})
     mock = raw.get("mock", {})
     logging = raw.get("logging", {})
     defaults = AppSettings()
+    config_root = config_file.parent.parent if config_file else Path.cwd()
+    yaml_data_dir = app.get("data_dir", defaults.data_dir)
+    if isinstance(yaml_data_dir, str) and not Path(yaml_data_dir).is_absolute() and config_file:
+        yaml_data_dir = config_root / yaml_data_dir
+    preset_dir = app.get("preset_dir", config_file.parent / "presets" if config_file else Path("./config/presets"))
+    if isinstance(preset_dir, str) and not Path(preset_dir).is_absolute() and config_file:
+        preset_dir = config_root / preset_dir
     values = {
         "host": app.get("host", defaults.host),
         "port": app.get("port", defaults.port),
-        "data_dir": app.get("data_dir", os.getenv("VOICETRANSL_DATA_DIR", defaults.data_dir)),
+        "data_dir": yaml_data_dir,
         "max_upload_mb": app.get("max_upload_mb", defaults.max_upload_mb),
         "allowed_extensions": app.get("allowed_extensions", defaults.allowed_extensions),
         "max_concurrent": jobs.get("max_concurrent", defaults.max_concurrent),
         "mock_delay_ms": mock.get("delay_ms", defaults.mock_delay_ms),
         "log_level": logging.get("level", defaults.log_level),
+        "preset_dir": preset_dir,
     }
     # Environment variables are useful for container and test deployments and
     # intentionally cover only operational settings, never secrets.
@@ -45,6 +82,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "max_concurrent": ("VOICETRANSL_MAX_CONCURRENT", int),
         "mock_delay_ms": ("VOICETRANSL_MOCK_DELAY_MS", int),
         "log_level": ("VOICETRANSL_LOG_LEVEL", str),
+        "preset_dir": ("VOICETRANSL_PRESET_DIR", str),
     }
     for field, (variable, converter) in env_overrides.items():
         if os.getenv(variable) is not None:
@@ -56,3 +94,18 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
             if extension.strip()
         ]
     return AppSettings(**values)
+
+def load_preset(preset_dir: str | Path, name: str) -> PresetConfig:
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError("invalid preset name")
+    path = Path(preset_dir).resolve() / f"{name}.yaml"
+    root = Path(preset_dir).resolve()
+    if path.parent != root or not path.is_file():
+        raise FileNotFoundError(f"preset does not exist: {name}")
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid preset YAML: {name}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("preset root must be a mapping")
+    return PresetConfig.validate_preset(PresetConfig.model_validate(raw), name)
