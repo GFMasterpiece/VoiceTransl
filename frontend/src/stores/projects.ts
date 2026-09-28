@@ -21,11 +21,11 @@ async function parseError(response: Response): Promise<Error> {
   try {
     const payload = (await response.json()) as {
       error?: { message?: string }
-      detail?: { message?: string } | string
+      detail?: { message?: string; error?: { message?: string } } | string
     }
     const apiMessage = payload.error?.message
     const detail = payload.detail
-    const message = typeof detail === 'string' ? detail : detail?.message
+    const message = typeof detail === 'string' ? detail : detail?.error?.message || detail?.message
     return new Error(apiMessage || message || `请求失败（${response.status}）`)
   } catch {
     return new Error(`请求失败（${response.status}）`)
