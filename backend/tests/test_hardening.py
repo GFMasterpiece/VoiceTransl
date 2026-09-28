@@ -191,6 +191,26 @@ def test_store_rejects_source_directory_symlink(tmp_path: Path):
         store.save_source(project.id, "wav", b"x")
 
 
+@pytest.mark.parametrize("subdir", ["cache", "transcript", "output", "logs"])
+def test_store_rejects_artifact_directory_symlink(tmp_path: Path, subdir: str):
+    store = FileSystemProjectStore(tmp_path)
+    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project_dir = store.create_project(project)
+    outside = tmp_path / f"outside-{subdir}"
+    outside.mkdir()
+    (project_dir / subdir).rmdir()
+    (project_dir / subdir).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        if subdir == "cache":
+            store.save_cache_json(project.id, "x.json", {})
+        elif subdir == "output":
+            store.save_output_text(project.id, "x.srt", "x")
+        elif subdir == "logs":
+            store.append_log(project.id, "x")
+        else:
+            store.save_transcript(project.id, "raw", Transcript(project_id=project.id, stage="raw", language="ja"))
+
+
 def test_atomic_json_failure_keeps_previous_file(tmp_path: Path, monkeypatch):
     import app.storage.atomic as atomic
     path = tmp_path / "state.json"

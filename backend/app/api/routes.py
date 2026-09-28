@@ -39,22 +39,16 @@ async def create_project(request:Request,file:UploadFile=File(...),name:str|None
     pid="prj_"+uuid4().hex; jid="job_"+uuid4().hex
     project = Project(id=pid,name=name or Path(file.filename or "audio").stem,source=SourceAsset(path=f"source/original.{suffix}",original_name=file.filename or f"original.{suffix}",media_type=file.content_type,size_bytes=0,language=source_language),preset=preset)
     try:
-        state.store.create_project(project)
-        target, total = await state.store.save_source_upload(pid, suffix, file, state.settings.max_upload_mb * 1024 * 1024)
-        project.source.path = target.relative_to(state.store.project_dir(pid)).as_posix()
-        project.source.size_bytes = total
-        state.store.save_project(project)
         job=Job(id=jid,project_id=pid,stages=default_stages())
-        state.store.save_job(job)
+        project, job = await state.store.create_project_from_upload(
+            project, job, file, state.settings.max_upload_mb * 1024 * 1024
+        )
         return {"project":project,"job":job}
     except SourceUploadTooLarge:
-        state.store.remove_project(pid)
         raise HTTPException(413,detail={"error":{"code":"FILE_TOO_LARGE","message":"文件过大"}})
     except HTTPException:
-        state.store.remove_project(pid)
         raise
     except Exception:
-        state.store.remove_project(pid)
         raise HTTPException(500,detail={"error":{"code":"INTERNAL_ERROR","message":"项目创建失败"}})
 @router.get("/projects", response_model=ProjectListResponse)
 async def list_projects(request:Request): return {"items":deps(request).store.list_projects()}

@@ -48,17 +48,53 @@ class FileSystemProjectStore:
         return path
 
     def _source_dir(self, project_id: str) -> Path:
-        project_dir = self.project_dir(project_id)
-        source_dir = project_dir / "source"
-        if source_dir.exists() and source_dir.is_symlink():
-            raise ValueError("source directory must not be a symlink")
-        source_dir.mkdir(parents=True, exist_ok=True)
-        resolved = source_dir.resolve()
-        if project_dir.resolve() not in resolved.parents:
-            raise ValueError("source directory escapes project directory")
-        if source_dir.is_symlink():
-            raise ValueError("source directory must not be a symlink")
-        return source_dir
+        return self._project_subdir(project_id, "source")
+
+    def _project_subdir(self, project_id: str, name: str) -> Path:
+        project_dir = self.project_dir(project_id).resolve()
+        child = project_dir / name
+        if child.exists() and child.is_symlink():
+            raise ValueError(f"{name} directory must not be a symlink")
+        child.mkdir(parents=True, exist_ok=True)
+        resolved = child.resolve()
+        if project_dir not in resolved.parents or child.is_symlink():
+            raise ValueError(f"{name} directory escapes project directory")
+        return child
+
+    async def create_project_from_upload(self, project: Project, job: Job, upload, max_bytes: int) -> tuple[Project, Job]:
+        """Publish a complete project with one atomic rename."""
+        final_dir = self.project_dir(project.id)
+        if final_dir.exists():
+            raise FileExistsError(project.id)
+        temp_id = f".{project.id}.tmp_{uuid4().hex}"
+        temp_dir = self.project_dir(temp_id)
+        total = 0
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=False)
+            for name in ("source", "cache", "transcript", "output", "logs"):
+                (temp_dir / name).mkdir()
+            source_path = temp_dir / "source" / Path(project.source.path).name
+            temp_source = source_path.with_name(f".{source_path.name}.{uuid4().hex}.tmp")
+            try:
+                with temp_source.open("wb") as stream:
+                    while chunk := await upload.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise SourceUploadTooLarge
+                        stream.write(chunk)
+                    stream.flush(); os.fsync(stream.fileno())
+                os.replace(temp_source, source_path)
+            finally:
+                temp_source.unlink(missing_ok=True)
+            project.source.path = source_path.relative_to(temp_dir).as_posix()
+            project.source.size_bytes = total
+            atomic_write_json(temp_dir / "project.json", project.model_dump(mode="json"))
+            atomic_write_json(temp_dir / "job.json", job.model_dump(mode="json"))
+            os.replace(temp_dir, final_dir)
+            return project, job
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     def remove_project(self, project_id: str) -> None:
         """Remove an incomplete project directory during failed creation.
@@ -97,11 +133,11 @@ class FileSystemProjectStore:
         self._touch_project(job.project_id)
     def load_transcript(self, project_id: str, stage: str) -> Transcript:
         if stage not in {"raw","aligned","translated"}: raise ValueError("invalid transcript stage")
-        path=self.project_dir(project_id)/"transcript"/f"{stage}.json"
+        path=self._project_subdir(project_id, "transcript")/f"{stage}.json"
         return Transcript.model_validate_json(path.read_text(encoding="utf-8"))
     def save_transcript(self, project_id: str, name: str, value: Transcript, *, overwrite: bool = False) -> Path:
         if name not in {"raw","aligned","translated"}: raise ValueError("invalid transcript stage")
-        path=self.project_dir(project_id)/"transcript"/f"{name}.json"
+        path=self._project_subdir(project_id, "transcript")/f"{name}.json"
         if path.exists() and not overwrite:
             try:
                 existing = Transcript.model_validate_json(path.read_text(encoding="utf-8"))
@@ -145,27 +181,25 @@ class FileSystemProjectStore:
     def save_cache_json(self, project_id: str, name: str, payload: dict) -> Path:
         if not name or "/" in name or "\\" in name or ".." in name:
             raise ValueError("invalid cache name")
-        path = self.project_dir(project_id) / "cache" / name
+        path = self._project_subdir(project_id, "cache") / name
         atomic_write_json(path, payload); self._touch_project(project_id); return path
 
     def save_output_text(self, project_id: str, name: str, payload: str) -> Path:
         if not name or "/" in name or "\\" in name or ".." in name:
             raise ValueError("invalid output name")
-        path = self.project_dir(project_id) / "output" / name
+        path = self._project_subdir(project_id, "output") / name
         atomic_write_text(path, payload); self._touch_project(project_id); return path
 
     def append_log(self, project_id: str, message: str) -> Path:
-        path = self.project_dir(project_id) / "logs" / "pipeline.log"
+        path = self._project_subdir(project_id, "logs") / "pipeline.log"
         with path.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(message.rstrip("\n") + "\n")
         self._touch_project(project_id); return path
     def list_outputs(self, project_id: str) -> list[Path]:
-        d=self.project_dir(project_id)/"output"; return sorted([p for p in d.iterdir() if p.is_file() and not p.is_symlink()]) if d.exists() else []
+        d=self._project_subdir(project_id, "output"); return sorted([p for p in d.iterdir() if p.is_file() and not p.is_symlink()]) if d.exists() else []
     def resolve_output(self, project_id: str, filename: str) -> Path:
         if not filename or "/" in filename or "\\" in filename or ".." in filename: raise ValueError("invalid output filename")
-        output_dir = self.project_dir(project_id) / "output"
-        if output_dir.is_symlink(): raise ValueError("output directory must not be a symlink")
-        d=output_dir.resolve(); path=(d/filename).resolve()
+        d=self._project_subdir(project_id, "output").resolve(); path=(d/filename).resolve()
         if path.parent != d: raise ValueError("invalid output filename")
         return path
     def mark_interrupted(self) -> None:
