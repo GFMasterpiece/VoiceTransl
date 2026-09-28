@@ -26,12 +26,12 @@ class PresetConfig(BaseModel):
 
 class AppSettings(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = Field(default=8000, ge=1, le=65535)
     data_dir: Path = Path("./data")
-    max_upload_mb: int = 4096
+    max_upload_mb: int = Field(default=4096, ge=1)
     allowed_extensions: list[str] = Field(default_factory=lambda: ["wav","flac","mp3","m4a","aac","ogg","opus"])
-    max_concurrent: int = 1
-    mock_delay_ms: int = 500
+    max_concurrent: int = Field(default=1, ge=1)
+    mock_delay_ms: int = Field(default=500, ge=0)
     log_level: str = "INFO"
     preset_dir: Path = Path("./config/presets")
 

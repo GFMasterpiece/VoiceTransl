@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.config import load_settings
+from app.config import AppSettings, load_settings
 from app.config import load_preset
 import pytest
 
@@ -62,3 +62,12 @@ def test_preset_is_loaded_and_validated(tmp_path):
     assert load_preset(presets, "mock").mock["delay_ms"] == 1
     with pytest.raises(FileNotFoundError):
         load_preset(presets, "missing")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("port", 0), ("port", 65536), ("max_upload_mb", 0),
+    ("max_concurrent", 0), ("mock_delay_ms", -1),
+])
+def test_invalid_operational_limits_are_rejected(field, value):
+    with pytest.raises(ValueError):
+        AppSettings(**{field: value})
