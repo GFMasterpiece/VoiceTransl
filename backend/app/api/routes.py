@@ -106,6 +106,8 @@ async def events(ws:WebSocket,pid:str):
     try: state.store.load_project(pid)
     except Exception: await ws.close(code=4404); return
     await ws.accept(); q=state.events.subscribe(pid)
+    receive_task = None
+    event_task = None
     try:
         try:
             job = state.store.load_job(pid)
@@ -113,6 +115,24 @@ async def events(ws:WebSocket,pid:str):
             await ws.close(code=4404)
             return
         await ws.send_json({"schema_version":"1.0","event_id":f"evt_{uuid4().hex}","type":"job.snapshot","project_id":pid,"job_id":job.id,"timestamp":datetime.now(timezone.utc).isoformat(),"data":job.model_dump(mode="json")})
-        while True: await ws.send_json(await q.get())
-    except (WebSocketDisconnect,asyncio.CancelledError): pass
-    finally: state.events.unsubscribe(pid,q)
+        receive_task = asyncio.create_task(ws.receive())
+        event_task = asyncio.create_task(q.get())
+        while True:
+            done, _ = await asyncio.wait((receive_task, event_task), return_when=asyncio.FIRST_COMPLETED)
+            if receive_task in done:
+                message = receive_task.result()
+                if message["type"] == "websocket.disconnect":
+                    break
+                receive_task = asyncio.create_task(ws.receive())
+            if event_task in done:
+                await ws.send_json(event_task.result())
+                event_task = asyncio.create_task(q.get())
+    except (WebSocketDisconnect, asyncio.CancelledError, OSError, RuntimeError):
+        # A send can fail when the peer has already disconnected.
+        pass
+    finally:
+        for task in (receive_task, event_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (receive_task, event_task) if task is not None), return_exceptions=True)
+        state.events.unsubscribe(pid,q)
