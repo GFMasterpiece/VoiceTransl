@@ -1,0 +1,254 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useProjectDetailStore, type Job, type StageName } from './projectDetail'
+import { useProjectsStore, type Project } from './projects'
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+  } as Response
+}
+
+const project: Project = {
+  id: 'project-1',
+  name: 'Demo project',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  preset: 'mock',
+  source: {
+    original_name: 'demo.wav',
+    language: 'en',
+    size_bytes: 123,
+    media_type: 'audio/wav',
+  },
+}
+
+const stageNames: StageName[] = ['preprocess', 'asr', 'alignment', 'translation', 'export']
+
+function makeJob(overrides: Partial<Job> = {}): Job {
+  const stages = Object.fromEntries(
+    stageNames.map((name) => [
+      name,
+      {
+        status: name === 'asr' ? 'running' : 'pending',
+        progress: name === 'asr' ? 0.25 : 0,
+      },
+    ]),
+  ) as Job['stages']
+  return {
+    id: 'job-1',
+    project_id: project.id,
+    status: 'running',
+    current_stage: 'asr',
+    progress: 0.05,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    stages,
+    cancel_requested: false,
+    ...overrides,
+  }
+}
+
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+  readonly url: string
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: (() => void) | null = null
+  onclose: (() => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  close() {
+    // Deliberately do not call onclose: tests can stop a store without scheduling reconnects.
+  }
+}
+
+const detailStores: ReturnType<typeof useProjectDetailStore>[] = []
+
+afterEach(() => {
+  detailStores.forEach((store) => store.stop())
+  detailStores.length = 0
+  FakeWebSocket.instances.length = 0
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+describe('projects store', () => {
+  it('loads projects and clears loading state on success', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [project] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+
+    await store.fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects')
+    expect(store.projects).toEqual([project])
+    expect(store.loading).toBe(false)
+    expect(store.error).toBe('')
+  })
+
+  it('surfaces the backend error message when fetching projects fails', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: { message: '项目服务不可用' } }, 503))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+
+    await store.fetchProjects()
+
+    expect(store.projects).toEqual([])
+    expect(store.loading).toBe(false)
+    expect(store.error).toBe('项目服务不可用')
+  })
+
+  it('creates a project with the expected multipart form and prepends it', async () => {
+    setActivePinia(createPinia())
+    const created = { ...project, id: 'created-project' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ project: created }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    store.projects.push(project)
+    const file = new File(['audio'], 'voice.wav', { type: 'audio/wav' })
+
+    await expect(store.createProject(file, '  New voice  ', 'zh', 'custom')).resolves.toEqual(created)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/projects')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeInstanceOf(FormData)
+    const form = init.body as FormData
+    expect(form.get('file')).toBe(file)
+    expect(form.get('name')).toBe('New voice')
+    expect(form.get('source_language')).toBe('zh')
+    expect(form.get('preset')).toBe('custom')
+    expect(store.projects).toEqual([created, project])
+    expect(store.creating).toBe(false)
+  })
+
+  it('parses backend error.message when creating a project fails', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: { message: '文件格式不支持' } }, 400))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    const file = new File(['data'], 'voice.bin')
+
+    await expect(store.createProject(file, '', 'en')).rejects.toThrow('文件格式不支持')
+    expect(store.error).toBe('文件格式不支持')
+    expect(store.creating).toBe(false)
+  })
+})
+
+describe('project detail store', () => {
+  it('fetches all project resources and normalizes missing job stages', async () => {
+    setActivePinia(createPinia())
+    const incompleteJob = {
+      ...makeJob(),
+      stages: { asr: { status: 'running', progress: 0.4 } },
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(incompleteJob))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [{ name: 'out.srt', size_bytes: 20, download_url: '/download' }] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+
+    await store.load(project.id)
+
+    expect(store.project).toEqual(project)
+    expect(store.job?.stages.asr).toMatchObject({ status: 'running', progress: 0.4 })
+    expect(store.job?.stages.preprocess).toMatchObject({ status: 'pending', progress: 0 })
+    expect(store.job?.stages.export).toMatchObject({ status: 'pending', progress: 0 })
+    expect(store.transcript?.stage).toBe('asr')
+    expect(store.outputs[0].name).toBe('out.srt')
+  })
+
+  it('sends run and cancel requests for the loaded project', async () => {
+    setActivePinia(createPinia())
+    const initialJob = makeJob({ status: 'pending', current_stage: null })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/run') || path.endsWith('/cancel')) return Promise.resolve(jsonResponse({ ok: true }))
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(initialJob))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+
+    await store.load(project.id)
+    await store.run(false)
+    await store.cancel()
+
+    const runCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/run'))
+    expect(runCall).toBeDefined()
+    expect(runCall?.[1]).toMatchObject({ method: 'POST', headers: { 'Content-Type': 'application/json' } })
+    expect(JSON.parse(String(runCall?.[1] && (runCall[1] as RequestInit).body))).toEqual({ resume: false })
+    const cancelCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/cancel'))
+    expect(cancelCall?.[1]).toMatchObject({ method: 'POST' })
+    expect(store.actionLoading).toBe(false)
+  })
+
+  it('applies websocket snapshots, stage updates, and terminal job states', async () => {
+    setActivePinia(createPinia())
+    const runningJob = makeJob()
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(runningJob))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+    await store.load(project.id)
+    const ws = FakeWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    const emit = (type: string, data: Record<string, unknown> = {}) => {
+      ws.onmessage?.({ data: JSON.stringify({ type, data }) } as MessageEvent)
+    }
+    const snapshot = makeJob({ stages: { asr: { status: 'pending', progress: 0 } } as Job['stages'], status: 'pending', current_stage: null })
+    emit('job.snapshot', snapshot as unknown as Record<string, unknown>)
+    expect(store.job?.status).toBe('pending')
+    expect(store.job?.stages.export).toMatchObject({ status: 'pending', progress: 0 })
+
+    emit('stage.started', { stage: 'preprocess' })
+    expect(store.job?.status).toBe('running')
+    expect(store.job?.current_stage).toBe('preprocess')
+    expect(store.job?.stages.preprocess.status).toBe('running')
+    emit('stage.progress', { stage: 'preprocess', progress: 0.6 })
+    expect(store.job?.stages.preprocess.progress).toBe(0.6)
+    emit('stage.completed', { stage: 'preprocess' })
+    expect(store.job?.stages.preprocess).toMatchObject({ status: 'completed', progress: 1 })
+
+    emit('job.completed')
+    expect(store.job).toMatchObject({ status: 'completed', progress: 1, current_stage: null })
+
+    emit('job.snapshot', makeJob({ status: 'running', current_stage: 'asr' }) as unknown as Record<string, unknown>)
+    emit('job.failed', { stage: 'asr', code: 'ASR_FAILED', message: '识别失败' })
+    expect(store.job).toMatchObject({ status: 'failed', current_stage: 'asr' })
+    expect(store.job?.stages.asr.status).toBe('failed')
+    expect(store.job?.error).toMatchObject({ type: 'ASR_FAILED', message: '识别失败', stage: 'asr', retryable: true })
+
+    emit('job.snapshot', makeJob({ status: 'cancelling', current_stage: 'asr', cancel_requested: true }) as unknown as Record<string, unknown>)
+    emit('job.cancelled')
+    expect(store.job).toMatchObject({ status: 'cancelled', cancel_requested: true, current_stage: null })
+    expect(store.job?.stages.asr).toMatchObject({ status: 'pending', progress: 0 })
+  })
+})
