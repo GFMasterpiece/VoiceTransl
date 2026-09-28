@@ -71,7 +71,7 @@ async def run(pid:str,body:RunRequest,request:Request):
     except RuntimeError as error:
         if str(error) == "JOB_ALREADY_RUNNING":
             raise HTTPException(409,detail={"error":{"code":"JOB_ALREADY_RUNNING","message":"任务正在运行或已完成"}})
-        raise
+        raise HTTPException(500,detail={"error":{"code":"INTERNAL_ERROR","message":"任务启动失败","details":None}}) from error
     return {"job_id":job.id,"status":job.status}
 @router.post("/projects/{pid}/cancel")
 async def cancel(pid:str,request:Request):
@@ -83,17 +83,29 @@ async def job(pid:str,request:Request):
     state=deps(request); get_project(state,pid); return get_job(state,pid)
 @router.get("/projects/{pid}/transcript")
 async def transcript(pid:str,request:Request):
-    state=deps(request); get_project(state,pid)
+    state=deps(request); get_project(state,pid); current = get_job(state,pid)
+    stage_status = current.stages
     for stage in ("translated","aligned","raw"):
+        stage_name = {"translated": "translation", "aligned": "alignment", "raw": "asr"}[stage]
+        if stage_status.get(stage_name) is None or stage_status[stage_name].status.value != "completed":
+            continue
         try: return {"stage":stage,"transcript":state.store.load_transcript(pid,stage)}
         except (FileNotFoundError, ValueError): pass
     raise HTTPException(404,detail={"error":{"code":"TRANSCRIPT_NOT_FOUND","message":"字幕不存在"}})
 @router.get("/projects/{pid}/outputs")
 async def outputs(pid:str,request:Request):
-    state=deps(request); get_project(state,pid); return {"items":[{"name":p.name,"size_bytes":p.stat().st_size,"download_url":f"/api/v1/projects/{pid}/outputs/{p.name}"} for p in state.store.list_outputs(pid)]}
+    state=deps(request); get_project(state,pid); current = get_job(state,pid)
+    export = current.stages.get("export")
+    if export is None or export.status.value != "completed":
+        return {"items": []}
+    return {"items":[{"name":p.name,"size_bytes":p.stat().st_size,"download_url":f"/api/v1/projects/{pid}/outputs/{p.name}"} for p in state.store.list_outputs(pid)]}
 @router.get("/projects/{pid}/outputs/{filename}")
 async def output(pid:str,filename:str,request:Request):
     state=deps(request); get_project(state,pid)
+    current = get_job(state,pid)
+    export = current.stages.get("export")
+    if export is None or export.status.value != "completed":
+        raise HTTPException(404,detail={"error":{"code":"OUTPUT_NOT_FOUND","message":"输出不存在"}})
     try: path=state.store.resolve_output(pid,filename)
     except ValueError: raise HTTPException(404,detail={"error":{"code":"OUTPUT_NOT_FOUND","message":"输出不存在"}})
     if not path.is_file(): raise HTTPException(404,detail={"error":{"code":"OUTPUT_NOT_FOUND","message":"输出不存在"}})

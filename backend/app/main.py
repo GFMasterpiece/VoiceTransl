@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -16,7 +17,21 @@ def create_app(data_dir=None):
         config_path = candidate if candidate.exists() else None
     settings=load_settings(config_path)
     if data_dir is not None: settings.data_dir=Path(data_dir)
-    app=FastAPI(title="VoiceTransl API",version="0.1.0"); store=FileSystemProjectStore(settings.data_dir); store.mark_interrupted(); events=EventBus()
+    store = FileSystemProjectStore(settings.data_dir)
+    events = EventBus()
+    jobs = JobManager(store, events, settings.mock_delay_ms, settings.max_concurrent)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        # Scan only when the server actually starts. Constructing an app for
+        # tests or tooling must not mark a live job from another server.
+        store.mark_interrupted()
+        try:
+            yield
+        finally:
+            await jobs.shutdown()
+
+    app=FastAPI(title="VoiceTransl API",version="0.1.0", lifespan=lifespan)
     logger = logging.getLogger("voicetransl.api")
     @app.exception_handler(HTTPException)
     async def http_error(_request: Request, exc: HTTPException):
@@ -45,8 +60,6 @@ def create_app(data_dir=None):
             status_code=500,
             content={"error": {"code": "INTERNAL_ERROR", "message": "服务器内部错误", "details": None}},
         )
-    app.state.settings=settings; app.state.store=store; app.state.events=events; app.state.jobs=JobManager(store,events,settings.mock_delay_ms,settings.max_concurrent); app.include_router(router); return app
-try:
-    app=create_app(os.getenv("VOICETRANSL_DATA_DIR", "./data"))
-except OSError:
-    app=create_app("/tmp/voicetransl-data")
+    app.state.settings=settings; app.state.store=store; app.state.events=events; app.state.jobs=jobs; app.include_router(router); return app
+
+app = create_app()

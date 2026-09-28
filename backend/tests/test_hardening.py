@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from fastapi.testclient import TestClient
 
 from app.application.event_bus import EventBus
 from app.domain import Job, JobStatus, PipelineStageName, Project, SourceAsset, StageStatus
@@ -152,3 +153,41 @@ def test_event_bus_removes_empty_subscriptions():
     assert "prj_test" in bus._subs
     bus.unsubscribe("prj_test", queue)
     assert "prj_test" not in bus._subs
+
+
+def test_real_websocket_receives_events_and_cleans_subscription(tmp_path: Path):
+    app = create_app(tmp_path)
+    app.state.jobs.delay_ms = 1
+    with TestClient(app) as client:
+        project_id = client.post(
+            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+        ).json()["project"]["id"]
+        with client.websocket_connect(f"/api/v1/projects/{project_id}/events") as socket:
+            assert socket.receive_json()["type"] == "job.snapshot"
+            assert client.post(f"/api/v1/projects/{project_id}/run", json={}).status_code == 202
+            event_types = set()
+            while "job.completed" not in event_types:
+                event_types.add(socket.receive_json()["type"])
+            assert "stage.started" in event_types
+        assert project_id not in app.state.events._subs
+
+
+@pytest.mark.asyncio
+async def test_cancel_running_job_is_persisted_and_resumable(tmp_path: Path):
+    app = create_app(tmp_path)
+    app.state.jobs.delay_ms = 100
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        project_id = await _create_project(client)
+        assert (await client.post(f"/api/v1/projects/{project_id}/run", json={})).status_code == 202
+        # Let the task enter a stage before requesting cooperative cancellation.
+        for _ in range(100):
+            if app.state.jobs.running(project_id):
+                break
+            await asyncio.sleep(0.001)
+        assert (await client.post(f"/api/v1/projects/{project_id}/cancel")).status_code == 200
+        await app.state.jobs.tasks[project_id]
+        cancelled = app.state.store.load_job(project_id)
+        assert cancelled.status == JobStatus.CANCELLED
+        assert (await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})).status_code == 202
+    await app.state.jobs.tasks[project_id]
+    assert app.state.store.load_job(project_id).status == JobStatus.COMPLETED

@@ -58,6 +58,24 @@ class JobManager:
                 current_task = asyncio.current_task()
                 try:
                     async with self.semaphore:
+                        if ev.is_set():
+                            # A queued task can be cancelled before it gets a
+                            # semaphore slot; it never enters a pipeline
+                            # stage and is reported directly as cancelled.
+                            job.status = JobStatus.CANCELLED
+                            job.cancel_requested = True
+                            job.updated_at = datetime.now(timezone.utc)
+                            self.store.save_job(job)
+                            await self.event_bus.publish({
+                                "schema_version": "1.0",
+                                "event_id": f"evt_{uuid4().hex}",
+                                "type": "job.cancelled",
+                                "project_id": project_id,
+                                "job_id": job.id,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "data": {},
+                            })
+                            return
                         stages=[PreprocessStage(),ASRStage(MockASRProvider(self.delay_ms)),AlignmentStage(MockAlignerProvider(self.delay_ms)),TranslationStage(MockTranslatorProvider(self.delay_ms)),ExportStage()]
                         c=PipelineContext(project=project,project_dir=self.store.project_dir(project_id),job=job,preset={"name":"mock"},store=self.store,cancel_event=ev)
                         await PipelineRunner(stages,self.event_bus).run(c,resume=resume)
@@ -105,7 +123,23 @@ class JobManager:
             return False
         event.set()
         job=self.store.load_job(project_id)
+        if job.status not in {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.CANCELLING}:
+            return False
         job.cancel_requested=True
         job.status=JobStatus.CANCELLING
         self.store.save_job(job)
         return True
+
+    async def shutdown(self):
+        """Stop in-process jobs during application shutdown.
+
+        Cancellation is cooperative at stage boundaries, but the task itself
+        is also cancelled so shutdown cannot leave a dangling task waiting on
+        the global semaphore.
+        """
+        tasks = list(self.tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

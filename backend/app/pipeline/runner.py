@@ -12,30 +12,39 @@ class PipelineRunner:
     async def run(self,c,resume=True):
         job=c.job; job.status=JobStatus.RUNNING; job.error=None; await self._save(c); await self._event(c,"job.started")
         try:
-            for stage in self.stages:
+            reset_from = None
+            if resume:
+                # A completed stage can outlive its artifact (manual cleanup,
+                # partial restore, or a crash between writes).  Its dependants
+                # are no longer trustworthy and must be rerun as well.
+                for index, stage in enumerate(self.stages):
+                    state = job.stages[stage.name]
+                    if state.status != StageStatus.COMPLETED:
+                        continue
+                    try:
+                        self._restore_stage_artifact(stage.name, c, state)
+                    except (FileNotFoundError, ValueError):
+                        reset_from = index
+                        break
+            if reset_from is not None:
+                for stage in self.stages[reset_from:]:
+                    state = job.stages[stage.name]
+                    state.status = StageStatus.PENDING
+                    state.progress = 0
+                    state.started_at = None
+                    state.finished_at = None
+                    state.artifact = None
+                    state.error = None
+                job.progress = sum(s.progress for s in job.stages.values()) / len(job.stages)
+                await self._save(c)
+
+            for index, stage in enumerate(self.stages):
                 c.check_cancelled(); state=job.stages[stage.name]
                 if resume and state.status==StageStatus.COMPLETED:
-                    # A state file can be durable while its artifact was
-                    # deleted manually or by a partial restore.  Re-run that
-                    # stage instead of allowing recovery to fail outside the
-                    # normal stage error path.
-                    try:
-                        n={"asr":"raw","alignment":"aligned","translation":"translated"}.get(stage.name.value)
-                        if n:
-                            c.transcript=c.store.load_transcript(c.project.id,n)
-                        elif state.artifact:
-                            artifact=(c.project_dir / state.artifact).resolve()
-                            if c.project_dir.resolve() not in artifact.parents:
-                                raise ValueError("stage artifact escapes project directory")
-                            if not artifact.exists(): raise FileNotFoundError(state.artifact)
-                    except (FileNotFoundError, ValueError):
-                        state.status=StageStatus.PENDING
-                        state.progress=0
-                        state.artifact=None
-                    else:
-                        job.progress=sum(s.progress for s in job.stages.values())/len(job.stages)
-                        await self._save(c)
-                        continue
+                    self._restore_stage_artifact(stage.name, c, state)
+                    job.progress=sum(s.progress for s in job.stages.values())/len(job.stages)
+                    await self._save(c)
+                    continue
                 state.status=StageStatus.RUNNING; state.started_at=now(); state.finished_at=None; state.error=None; state.progress=0; job.current_stage=stage.name; await self._save(c); await self._event(c,"stage.started",{"stage":stage.name.value}); await self._event(c,"stage.progress",{"stage":stage.name.value,"progress":0,"message":f"{stage.name.value} processing"})
                 try: await stage.run(c); c.check_cancelled()
                 except PipelineCancelled: raise
@@ -51,3 +60,23 @@ class PipelineRunner:
                     state.started_at = None
                     state.progress = 0
             job.status=JobStatus.CANCELLED; job.cancel_requested=True; job.current_stage=None; await self._save(c); await self._event(c,"job.cancelled")
+
+    @staticmethod
+    def _restore_stage_artifact(name, context, state):
+        stage_name = name.value
+        transcript_name = {"asr": "raw", "alignment": "aligned", "translation": "translated"}.get(stage_name)
+        if transcript_name:
+            context.transcript = context.store.load_transcript(context.project.id, transcript_name)
+            return
+        if not state.artifact:
+            raise FileNotFoundError(f"missing artifact for {stage_name}")
+        artifact = (context.project_dir / state.artifact).resolve()
+        project_dir = context.project_dir.resolve()
+        if project_dir not in artifact.parents:
+            raise ValueError("stage artifact escapes project directory")
+        if not artifact.exists():
+            raise FileNotFoundError(state.artifact)
+        if stage_name == "export":
+            required = {"zh.srt", "ja-zh.srt", "zh.lrc"}
+            if not artifact.is_dir() or not all((artifact / filename).is_file() for filename in required):
+                raise FileNotFoundError("export output is incomplete")
