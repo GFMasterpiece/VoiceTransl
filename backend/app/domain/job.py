@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
+
 from pydantic import BaseModel, Field
+
 from .enums import JobStatus, PipelineStageName, StageStatus
+
 
 class StageState(BaseModel):
     status: StageStatus = StageStatus.PENDING
@@ -10,13 +13,17 @@ class StageState(BaseModel):
     artifact: str | None = None
     error: str | None = None
 
+
 class JobError(BaseModel):
     type: str
     message: str
     stage: PipelineStageName | None = None
     retryable: bool = False
 
-def default_stages() -> dict[PipelineStageName, StageState]: return {stage: StageState() for stage in PipelineStageName}
+
+def default_stages() -> dict[PipelineStageName, StageState]:
+    return {stage: StageState() for stage in PipelineStageName}
+
 
 class Job(BaseModel):
     schema_version: str = "1.0"

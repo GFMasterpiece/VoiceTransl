@@ -2,11 +2,10 @@ import asyncio
 import json
 from pathlib import Path
 
+import app.storage.project_store as project_store_module
 import pytest
-
 from app.domain import Job, JobStatus, Project, SourceAsset, default_stages
 from app.storage import FileSystemProjectStore
-import app.storage.project_store as project_store_module
 
 
 def _models(project_id: str = "prj_upload"):

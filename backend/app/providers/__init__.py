@@ -1,2 +1,2 @@
+from .mock import MockAlignerProvider, MockASRProvider, MockTranslatorProvider
 from .protocols import TranslationContext
-from .mock import MockASRProvider, MockAlignerProvider, MockTranslatorProvider

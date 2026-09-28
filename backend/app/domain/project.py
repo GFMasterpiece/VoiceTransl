@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from pydantic import BaseModel, Field
-from pydantic import field_validator
+
+from pydantic import BaseModel, Field, field_validator
+
 
 class SourceAsset(BaseModel):
     path: str
@@ -19,9 +20,15 @@ class SourceAsset(BaseModel):
         if not value or "\\" in value:
             raise ValueError("source path must be a relative POSIX path")
         parsed = PurePosixPath(value)
-        if parsed.is_absolute() or not parsed.parts or parsed.parts == (".",) or ".." in parsed.parts:
+        if (
+            parsed.is_absolute()
+            or not parsed.parts
+            or parsed.parts == (".",)
+            or ".." in parsed.parts
+        ):
             raise ValueError("source path must remain inside the project")
         return value
+
 
 class Project(BaseModel):
     schema_version: str = "1.0"

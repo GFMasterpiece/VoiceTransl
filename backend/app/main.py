@@ -1,22 +1,26 @@
-from pathlib import Path
-import os
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+from .api.routes import router
+from .application import EventBus, JobManager
 from .config import load_settings
 from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
-from .application import EventBus, JobManager
-from .api.routes import router
+
 
 def create_app(data_dir=None):
     config_path = os.getenv("VOICETRANSL_CONFIG")
     if config_path is None:
         config_path = Path(__file__).resolve().parents[2] / "config" / "app.yaml"
-    settings=load_settings(config_path)
-    if data_dir is not None: settings.data_dir=Path(data_dir)
+    settings = load_settings(config_path)
+    if data_dir is not None:
+        settings.data_dir = Path(data_dir)
     configure_logging(settings.log_level, settings.data_dir)
     store = FileSystemProjectStore(settings.data_dir)
     events = EventBus()
@@ -39,8 +43,9 @@ def create_app(data_dir=None):
         finally:
             await jobs.shutdown()
 
-    app=FastAPI(title="VoiceTransl API",version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="VoiceTransl API", version="0.1.0", lifespan=lifespan)
     logger = logging.getLogger("voicetransl.api")
+
     @app.exception_handler(HTTPException)
     async def http_error(_request: Request, exc: HTTPException):
         # Keep the documented error contract at the response root instead of
@@ -48,17 +53,28 @@ def create_app(data_dir=None):
         detail = exc.detail
         if isinstance(detail, dict) and "error" in detail:
             return JSONResponse(status_code=exc.status_code, content=detail)
-        return JSONResponse(status_code=exc.status_code, content={"error": {"code": "HTTP_ERROR", "message": str(detail), "details": None}})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": "HTTP_ERROR", "message": str(detail), "details": None}},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, exc: RequestValidationError):
         details = [
-            {"loc": list(error.get("loc", ())), "msg": error.get("msg", "输入无效"), "type": error.get("type", "value_error")}
+            {
+                "loc": list(error.get("loc", ())),
+                "msg": error.get("msg", "输入无效"),
+                "type": error.get("type", "value_error"),
+            }
             for error in exc.errors()
         ]
         return JSONResponse(
             status_code=422,
-            content={"error": {"code": "VALIDATION_ERROR", "message": "请求参数无效", "details": details}},
+            content={
+                "error": {"code": "VALIDATION_ERROR", "message": "请求参数无效", "details": details}
+            },
         )
+
     @app.exception_handler(Exception)
     async def internal_error(_request: Request, exc: Exception):
         # Keep implementation details and tracebacks in server logs.  The API
@@ -66,8 +82,17 @@ def create_app(data_dir=None):
         logger.exception("Unhandled backend exception", exc_info=exc)
         return JSONResponse(
             status_code=500,
-            content={"error": {"code": "INTERNAL_ERROR", "message": "服务器内部错误", "details": None}},
+            content={
+                "error": {"code": "INTERNAL_ERROR", "message": "服务器内部错误", "details": None}
+            },
         )
-    app.state.settings=settings; app.state.store=store; app.state.events=events; app.state.jobs=jobs; app.include_router(router); return app
+
+    app.state.settings = settings
+    app.state.store = store
+    app.state.events = events
+    app.state.jobs = jobs
+    app.include_router(router)
+    return app
+
 
 app = create_app()

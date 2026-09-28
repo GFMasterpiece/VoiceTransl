@@ -1,1 +1,1 @@
-from .providers import MockASRProvider, MockAlignerProvider, MockTranslatorProvider
+from .providers import MockAlignerProvider, MockASRProvider, MockTranslatorProvider

@@ -1,6 +1,7 @@
 import asyncio
 from collections import defaultdict
 
+
 class EventBus:
     def __init__(self, queue_size: int = 128):
         self._subs = defaultdict(set)
@@ -18,6 +19,7 @@ class EventBus:
         subscribers.discard(q)
         if not subscribers:
             self._subs.pop(project_id, None)
+
     async def publish(self, event):
         # A slow browser must never hold up a pipeline stage.  Events are
         # notifications; REST/job.json remains the source of truth, so when a

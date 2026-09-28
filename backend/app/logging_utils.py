@@ -11,12 +11,15 @@ import logging
 import re
 from pathlib import Path
 
-
-_LEVELS = {name: getattr(logging, name) for name in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")}
+_LEVELS = {
+    name: getattr(logging, name) for name in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+}
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*[:=]\s*)([^\s,;]+(?:\s+[^\s,;]+)?)"),
     re.compile(r"(?i)(bearer\s+)[^\s,;]+"),
-    re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s,;]+"),
+    re.compile(
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s,;]+"
+    ),
 )
 
 

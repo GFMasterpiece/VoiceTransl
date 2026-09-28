@@ -2,9 +2,8 @@ import asyncio
 import tempfile
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.mark.asyncio
@@ -12,17 +11,26 @@ async def test_upload_run_and_outputs():
     with tempfile.TemporaryDirectory() as data_dir:
         app = create_app(data_dir)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")})
+            response = await client.post(
+                "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            )
             assert response.status_code == 201
             project_id = response.json()["project"]["id"]
-            assert (await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})).status_code == 202
+            assert (
+                await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})
+            ).status_code == 202
             for _ in range(100):
                 job = (await client.get(f"/api/v1/projects/{project_id}/job")).json()
                 if job["status"] in {"completed", "failed", "cancelled"}:
                     break
                 await asyncio.sleep(0.05)
             assert job["status"] == "completed"
-            names = {item["name"] for item in (await client.get(f"/api/v1/projects/{project_id}/outputs")).json()["items"]}
+            names = {
+                item["name"]
+                for item in (await client.get(f"/api/v1/projects/{project_id}/outputs")).json()[
+                    "items"
+                ]
+            }
             assert names == {"zh.srt", "ja-zh.srt", "zh.lrc"}
 
 

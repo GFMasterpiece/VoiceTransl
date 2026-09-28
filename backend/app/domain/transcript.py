@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+
 from pydantic import BaseModel, Field, model_validator
+
 
 class Segment(BaseModel):
     id: str
@@ -16,8 +18,10 @@ class Segment(BaseModel):
 
     @model_validator(mode="after")
     def validate_time_range(self):
-        if self.start is not None and self.end is not None and self.end < self.start: raise ValueError("segment end must be >= start")
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("segment end must be >= start")
         return self
+
 
 class Transcript(BaseModel):
     schema_version: str = "1.0"

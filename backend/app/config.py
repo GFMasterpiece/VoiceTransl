@@ -1,10 +1,11 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 EXPECTED_STAGES = ["preprocess", "asr", "alignment", "translation", "export"]
+
 
 class PresetConfig(BaseModel):
     name: str
@@ -24,12 +25,15 @@ class PresetConfig(BaseModel):
             raise ValueError("preset mock.delay_ms must be non-negative")
         return value
 
+
 class AppSettings(BaseModel):
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
     data_dir: Path = Path("./data")
     max_upload_mb: int = Field(default=4096, ge=1)
-    allowed_extensions: list[str] = Field(default_factory=lambda: ["wav","flac","mp3","m4a","aac","ogg","opus"])
+    allowed_extensions: list[str] = Field(
+        default_factory=lambda: ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"]
+    )
     max_concurrent: int = Field(default=1, ge=1)
     mock_delay_ms: int = Field(default=500, ge=0)
     # Used internally to distinguish the code default from an explicit app
@@ -46,6 +50,7 @@ class AppSettings(BaseModel):
         if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
+
 
 def load_settings(config_path: str | Path | None = None) -> AppSettings:
     raw: dict = {}
@@ -68,7 +73,9 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     yaml_data_dir = app.get("data_dir", defaults.data_dir)
     if isinstance(yaml_data_dir, str) and not Path(yaml_data_dir).is_absolute() and config_file:
         yaml_data_dir = config_root / yaml_data_dir
-    preset_dir = app.get("preset_dir", config_file.parent / "presets" if config_file else Path("./config/presets"))
+    preset_dir = app.get(
+        "preset_dir", config_file.parent / "presets" if config_file else Path("./config/presets")
+    )
     if isinstance(preset_dir, str) and not Path(preset_dir).is_absolute() and config_file:
         preset_dir = config_root / preset_dir
     # Accept the documented top-level ``mock.delay_ms`` and the equivalent
@@ -114,6 +121,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
             if extension.strip()
         ]
     return AppSettings(**values)
+
 
 def load_preset(preset_dir: str | Path, name: str) -> PresetConfig:
     if not name or "/" in name or "\\" in name or name in {".", ".."}:

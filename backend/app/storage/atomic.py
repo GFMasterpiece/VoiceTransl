@@ -1,6 +1,8 @@
-import json, os
-from uuid import uuid4
+import json
+import os
 from pathlib import Path
+from uuid import uuid4
+
 
 def atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -11,11 +13,14 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     try:
         with temp.open("w", encoding="utf-8", newline="\n") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
-            f.flush(); os.fsync(f.fileno())
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp, path)
     except Exception:
-        if temp.exists(): temp.unlink()
+        if temp.exists():
+            temp.unlink()
         raise
+
 
 def atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -23,11 +28,14 @@ def atomic_write_bytes(path: Path, payload: bytes) -> None:
     try:
         with temp.open("wb") as stream:
             stream.write(payload)
-            stream.flush(); os.fsync(stream.fileno())
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temp, path)
     except Exception:
-        if temp.exists(): temp.unlink()
+        if temp.exists():
+            temp.unlink()
         raise
+
 
 def atomic_write_text(path: Path, payload: str) -> None:
     atomic_write_bytes(path, payload.encode("utf-8"))

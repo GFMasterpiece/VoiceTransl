@@ -2,12 +2,10 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
 from app.application.event_bus import EventBus
 from app.config import load_preset, load_settings
 from app.domain import Job, Project, SourceAsset
 from app.logging_utils import configure_logging
-from app.main import create_app
 from app.pipeline.context import PipelineContext
 from app.pipeline.runner import PipelineRunner
 from app.storage import FileSystemProjectStore
@@ -25,8 +23,7 @@ def test_mock_delay_precedence_defaults_preset_yaml_env(tmp_path: Path, monkeypa
     )
     config = config_dir / "app.yaml"
     config.write_text(
-        "app:\n  data_dir: ./data\n"
-        "mock:\n  delay_ms: 31\nlogging:\n  level: INFO\n",
+        "app:\n  data_dir: ./data\nmock:\n  delay_ms: 31\nlogging:\n  level: INFO\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("VOICETRANSL_MOCK_DELAY_MS", "41")

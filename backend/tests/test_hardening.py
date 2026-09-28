@@ -2,19 +2,27 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from fastapi.testclient import TestClient
-
 from app.application.event_bus import EventBus
-from app.domain import Job, JobStatus, PipelineStageName, Project, SourceAsset, StageStatus, Transcript, Segment
+from app.domain import (
+    Job,
+    JobStatus,
+    PipelineStageName,
+    Project,
+    Segment,
+    SourceAsset,
+    StageStatus,
+    Transcript,
+)
+from app.exporters import render_lrc, render_srt
 from app.main import create_app
 from app.pipeline.context import PipelineContext
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.stages import TranslationStage
-from app.exporters import render_srt, render_lrc
-from app.storage.atomic import atomic_write_json
 from app.storage import FileSystemProjectStore
+from app.storage.atomic import atomic_write_json
 from app.storage.project_store import TranscriptProtectedError
+from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 
 async def _create_project(client: AsyncClient) -> str:
@@ -85,7 +93,10 @@ async def test_resume_reruns_completed_stage_when_artifact_is_missing(tmp_path: 
 
     assert stage.calls == 1
     assert store.load_job(project.id).status == JobStatus.COMPLETED
-    assert store.load_job(project.id).stages[PipelineStageName.PREPROCESS].status == StageStatus.COMPLETED
+    assert (
+        store.load_job(project.id).stages[PipelineStageName.PREPROCESS].status
+        == StageStatus.COMPLETED
+    )
 
 
 @pytest.mark.asyncio
@@ -95,6 +106,7 @@ async def test_manager_marks_external_cancelled_task_interrupted(tmp_path: Path,
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         project_id = await _create_project(client)
+
     class CancelledRunner:
         def __init__(self, *_args):
             pass
@@ -168,10 +180,15 @@ def test_store_protects_edited_transcript_and_touches_project(tmp_path: Path):
         source=SourceAsset(path="source/original.wav", original_name="original.wav", size_bytes=0),
     )
     store.create_project(project)
-    value = Transcript(project_id=project.id, stage="raw", language="ja", segments=[Segment(id="1", source_text="a")])
+    value = Transcript(
+        project_id=project.id,
+        stage="raw",
+        language="ja",
+        segments=[Segment(id="1", source_text="a")],
+    )
     store.save_transcript(project.id, "raw", value)
     before = store.load_project(project.id).updated_at
-    edited = value.model_copy(update={"segments": [Segment(id="1", source_text="manual") ]})
+    edited = value.model_copy(update={"segments": [Segment(id="1", source_text="manual")]})
     with pytest.raises(TranscriptProtectedError):
         store.save_transcript(project.id, "raw", edited)
     store.save_transcript(project.id, "raw", edited, overwrite=True)
@@ -190,7 +207,11 @@ def test_store_rejects_project_directory_symlink(tmp_path: Path):
 
 def test_store_rejects_source_directory_symlink(tmp_path: Path):
     store = FileSystemProjectStore(tmp_path)
-    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project = Project(
+        id="prj_test",
+        name="test",
+        source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0),
+    )
     project_dir = store.create_project(project)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -203,7 +224,11 @@ def test_store_rejects_source_directory_symlink(tmp_path: Path):
 @pytest.mark.parametrize("subdir", ["cache", "transcript", "output", "logs"])
 def test_store_rejects_artifact_directory_symlink(tmp_path: Path, subdir: str):
     store = FileSystemProjectStore(tmp_path)
-    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project = Project(
+        id="prj_test",
+        name="test",
+        source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0),
+    )
     project_dir = store.create_project(project)
     outside = tmp_path / f"outside-{subdir}"
     outside.mkdir()
@@ -217,23 +242,37 @@ def test_store_rejects_artifact_directory_symlink(tmp_path: Path, subdir: str):
         elif subdir == "logs":
             store.append_log(project.id, "x")
         else:
-            store.save_transcript(project.id, "raw", Transcript(project_id=project.id, stage="raw", language="ja"))
+            store.save_transcript(
+                project.id, "raw", Transcript(project_id=project.id, stage="raw", language="ja")
+            )
 
 
 def test_atomic_json_failure_keeps_previous_file(tmp_path: Path, monkeypatch):
     import app.storage.atomic as atomic
+
     path = tmp_path / "state.json"
     atomic_write_json(path, {"version": 1})
-    monkeypatch.setattr(atomic.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed")))
+    monkeypatch.setattr(
+        atomic.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed"))
+    )
     with pytest.raises(OSError):
         atomic_write_json(path, {"version": 2})
     assert path.read_text(encoding="utf-8").find('"version": 1') >= 0
 
 
 def test_domain_models_round_trip_json():
-    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=1))
+    project = Project(
+        id="prj_test",
+        name="test",
+        source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=1),
+    )
     job = Job(id="job_test", project_id=project.id)
-    transcript = Transcript(project_id=project.id, stage="raw", language="ja", segments=[Segment(id="1", source_text="x")])
+    transcript = Transcript(
+        project_id=project.id,
+        stage="raw",
+        language="ja",
+        segments=[Segment(id="1", source_text="x")],
+    )
     assert Project.model_validate_json(project.model_dump_json()) == project
     assert Job.model_validate_json(job.model_dump_json()) == job
     assert Transcript.model_validate_json(transcript.model_dump_json()) == transcript
@@ -250,15 +289,35 @@ def test_formatters_use_half_up_and_carry():
 @pytest.mark.asyncio
 async def test_translation_provider_cannot_mutate_source_fields(tmp_path: Path):
     store = FileSystemProjectStore(tmp_path)
-    project = Project(id="prj_test", name="test", source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0))
+    project = Project(
+        id="prj_test",
+        name="test",
+        source=SourceAsset(path="source/original.wav", original_name="x.wav", size_bytes=0),
+    )
     project_dir = store.create_project(project)
+
     class MutatingProvider:
         async def translate(self, segments, _context):
             segments[0].source_text = "changed"
             segments[0].translated_text = "ok"
             return segments
-    transcript = Transcript(project_id=project.id, stage="aligned", language="ja", segments=[Segment(id="1", start=0, end=1, source_text="original")])
-    context = PipelineContext(project=project, project_dir=project_dir, job=Job(id="job_test", project_id=project.id), preset={}, store=store, cancel_event=asyncio.Event(), transcript=transcript, allow_transcript_overwrite=True)
+
+    transcript = Transcript(
+        project_id=project.id,
+        stage="aligned",
+        language="ja",
+        segments=[Segment(id="1", start=0, end=1, source_text="original")],
+    )
+    context = PipelineContext(
+        project=project,
+        project_dir=project_dir,
+        job=Job(id="job_test", project_id=project.id),
+        preset={},
+        store=store,
+        cancel_event=asyncio.Event(),
+        transcript=transcript,
+        allow_transcript_overwrite=True,
+    )
     with pytest.raises(ValueError, match="immutable"):
         await TranslationStage(MutatingProvider()).run(context)
     assert context.transcript.segments[0].source_text == "original"
@@ -305,6 +364,8 @@ async def test_cancel_running_job_is_persisted_and_resumable(tmp_path: Path):
         await app.state.jobs.tasks[project_id]
         cancelled = app.state.store.load_job(project_id)
         assert cancelled.status == JobStatus.CANCELLED
-        assert (await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})).status_code == 202
+        assert (
+            await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})
+        ).status_code == 202
     await app.state.jobs.tasks[project_id]
     assert app.state.store.load_job(project_id).status == JobStatus.COMPLETED
