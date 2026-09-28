@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.application.event_bus import EventBus
-from app.config import load_settings
+from app.config import load_preset, load_settings
 from app.domain import Job, Project, SourceAsset
 from app.logging_utils import configure_logging
 from app.main import create_app
@@ -14,16 +14,18 @@ from app.storage import FileSystemProjectStore
 
 
 def test_mock_delay_precedence_defaults_preset_yaml_env(tmp_path: Path, monkeypatch):
-    preset_dir = tmp_path / "presets"
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preset_dir = config_dir / "presets"
     preset_dir.mkdir()
     (preset_dir / "mock.yaml").write_text(
         "name: mock\nstages: [preprocess, asr, alignment, translation, export]\n"
         "providers: {asr: mock, aligner: mock, translator: mock}\nmock: {delay_ms: 21}\n",
         encoding="utf-8",
     )
-    config = tmp_path / "app.yaml"
+    config = config_dir / "app.yaml"
     config.write_text(
-        "app:\n  data_dir: ./data\n  preset_dir: ./presets\n"
+        "app:\n  data_dir: ./data\n"
         "mock:\n  delay_ms: 31\nlogging:\n  level: INFO\n",
         encoding="utf-8",
     )
@@ -31,6 +33,7 @@ def test_mock_delay_precedence_defaults_preset_yaml_env(tmp_path: Path, monkeypa
     settings = load_settings(config)
     assert settings.mock_delay_ms == 41
     assert settings.mock_delay_ms_explicit is True
+    assert load_preset(settings.preset_dir, "mock").mock["delay_ms"] == 21
 
     monkeypatch.delenv("VOICETRANSL_MOCK_DELAY_MS")
     settings = load_settings(config)
@@ -38,7 +41,7 @@ def test_mock_delay_precedence_defaults_preset_yaml_env(tmp_path: Path, monkeypa
     assert settings.mock_delay_ms_explicit is True
 
     config.write_text(
-        "app:\n  data_dir: ./data\n  preset_dir: ./presets\nlogging:\n  level: INFO\n",
+        "app:\n  data_dir: ./data\nlogging:\n  level: INFO\n",
         encoding="utf-8",
     )
     settings = load_settings(config)
@@ -98,4 +101,6 @@ async def test_stage_error_is_safe_for_state_and_events_and_traceback_is_logged(
     assert "stage failed" in log_text
     assert "super-secret" not in log_text
     assert "private-value" not in log_text
-
+    project_log = (project_dir / "logs" / "pipeline.log").read_text(encoding="utf-8")
+    assert "stage failed" in project_log
+    assert "super-secret" not in project_log

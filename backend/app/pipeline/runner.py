@@ -42,6 +42,8 @@ class PipelineRunner:
                         reset_from = index
                         break
             if reset_from is not None:
+                self._audit(c, f"job recovery reset_from={self.stages[reset_from].name.value}")
+                logger.info("job recovery reset project=%s job=%s stage=%s", c.project.id, job.id, self.stages[reset_from].name.value)
                 for stage in self.stages[reset_from:]:
                     state = job.stages[stage.name]
                     state.status = StageStatus.PENDING

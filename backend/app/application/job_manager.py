@@ -117,6 +117,12 @@ class JobManager:
                     job.error=JobError(type=error_type,message=error_message,retryable=True)
                     job.updated_at=datetime.now(timezone.utc)
                     self.store.save_job(job)
+                    append_log = getattr(self.store, "append_log", None)
+                    if callable(append_log):
+                        try:
+                            append_log(project_id, f"job failed job={job.id} code={error_type}")
+                        except Exception:
+                            logger.warning("unable to append project pipeline log", exc_info=True)
                     await self.event_bus.publish({
                         "schema_version":"1.0",
                         "event_id":f"evt_{uuid4().hex}",
