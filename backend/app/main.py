@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .config import load_settings
+from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
 from .application import EventBus, JobManager
 from .api.routes import router
@@ -16,9 +17,17 @@ def create_app(data_dir=None):
         config_path = Path(__file__).resolve().parents[2] / "config" / "app.yaml"
     settings=load_settings(config_path)
     if data_dir is not None: settings.data_dir=Path(data_dir)
+    configure_logging(settings.log_level, settings.data_dir)
     store = FileSystemProjectStore(settings.data_dir)
     events = EventBus()
-    jobs = JobManager(store, events, settings.mock_delay_ms, settings.max_concurrent, settings.preset_dir)
+    jobs = JobManager(
+        store,
+        events,
+        settings.mock_delay_ms,
+        settings.max_concurrent,
+        settings.preset_dir,
+        settings.mock_delay_ms_explicit,
+    )
 
     @asynccontextmanager
     async def lifespan(_app):

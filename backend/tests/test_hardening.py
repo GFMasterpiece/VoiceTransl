@@ -95,7 +95,6 @@ async def test_manager_marks_external_cancelled_task_interrupted(tmp_path: Path,
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         project_id = await _create_project(client)
-
     class CancelledRunner:
         def __init__(self, *_args):
             pass
@@ -118,6 +117,7 @@ async def test_manager_marks_external_exception_failed(tmp_path: Path, monkeypat
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         project_id = await _create_project(client)
+    queue = app.state.events.subscribe(project_id)
 
     class FailingRunner:
         def __init__(self, *_args):
@@ -132,7 +132,16 @@ async def test_manager_marks_external_exception_failed(tmp_path: Path, monkeypat
     job = app.state.store.load_job(project_id)
     assert job.status == JobStatus.FAILED
     assert job.error is not None
-    assert job.error.message == "unexpected runner failure"
+    assert job.error.type == "JOB_FAILED"
+    assert job.error.message == "任务执行失败"
+    assert "unexpected runner failure" not in job.error.message
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    failed = [event for event in events if event["type"] == "job.failed"]
+    assert failed
+    assert failed[-1]["data"]["message"] == "任务执行失败"
+    assert "unexpected runner failure" not in str(failed[-1])
 
 
 def test_store_rejects_output_and_transcript_path_traversal(tmp_path: Path):

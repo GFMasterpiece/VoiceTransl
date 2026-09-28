@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 EXPECTED_STAGES = ["preprocess", "asr", "alignment", "translation", "export"]
 
@@ -32,8 +32,20 @@ class AppSettings(BaseModel):
     allowed_extensions: list[str] = Field(default_factory=lambda: ["wav","flac","mp3","m4a","aac","ogg","opus"])
     max_concurrent: int = Field(default=1, ge=1)
     mock_delay_ms: int = Field(default=500, ge=0)
+    # Used internally to distinguish the code default from an explicit app
+    # setting.  This lets a preset provide the delay when app.yaml is silent,
+    # while an explicit YAML or environment value still wins over the preset.
+    mock_delay_ms_explicit: bool = False
     log_level: str = "INFO"
     preset_dir: Path = Path("./config/presets")
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = str(value).upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
 
 def load_settings(config_path: str | Path | None = None) -> AppSettings:
     raw: dict = {}
@@ -59,6 +71,11 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     preset_dir = app.get("preset_dir", config_file.parent / "presets" if config_file else Path("./config/presets"))
     if isinstance(preset_dir, str) and not Path(preset_dir).is_absolute() and config_file:
         preset_dir = config_root / preset_dir
+    # Accept the documented top-level ``mock.delay_ms`` and the equivalent
+    # app setting form used by deployments that keep operational knobs under
+    # ``app``.
+    yaml_mock_delay = mock.get("delay_ms", app.get("mock_delay_ms", defaults.mock_delay_ms))
+    mock_delay_explicit = "delay_ms" in mock or "mock_delay_ms" in app
     values = {
         "host": app.get("host", defaults.host),
         "port": app.get("port", defaults.port),
@@ -66,7 +83,8 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "max_upload_mb": app.get("max_upload_mb", defaults.max_upload_mb),
         "allowed_extensions": app.get("allowed_extensions", defaults.allowed_extensions),
         "max_concurrent": jobs.get("max_concurrent", defaults.max_concurrent),
-        "mock_delay_ms": mock.get("delay_ms", defaults.mock_delay_ms),
+        "mock_delay_ms": yaml_mock_delay,
+        "mock_delay_ms_explicit": mock_delay_explicit,
         "log_level": logging.get("level", defaults.log_level),
         "preset_dir": preset_dir,
     }
@@ -87,6 +105,8 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     for field, (variable, converter) in env_overrides.items():
         if os.getenv(variable) is not None:
             values[field] = converter(os.environ[variable])
+            if field == "mock_delay_ms":
+                values["mock_delay_ms_explicit"] = True
     if os.getenv("VOICETRANSL_ALLOWED_EXTENSIONS") is not None:
         values["allowed_extensions"] = [
             extension.strip().lower().lstrip(".")
