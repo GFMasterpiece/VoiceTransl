@@ -221,6 +221,11 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
       job.value.current_stage = null
     }
     if (type === 'job.cancelled') {
+      const cancelledStage = job.value.current_stage
+      if (cancelledStage && job.value.stages[cancelledStage]) {
+        job.value.stages[cancelledStage].status = 'pending'
+        job.value.stages[cancelledStage].progress = 0
+      }
       job.value.status = 'cancelled'
       job.value.cancel_requested = true
       job.value.current_stage = null
@@ -228,6 +233,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     if (type === 'job.failed') {
       job.value.status = 'failed'
       job.value.current_stage = stage || job.value.current_stage
+      if (stage && job.value.stages[stage]) job.value.stages[stage].status = 'failed'
       job.value.error = {
         type: String(data.code || 'JOB_FAILED'),
         message: String(data.message || '任务失败'),
