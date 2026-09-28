@@ -131,8 +131,19 @@ async def events(ws:WebSocket,pid:str):
         # A send can fail when the peer has already disconnected.
         pass
     finally:
-        for task in (receive_task, event_task):
+        # Removing the queue is synchronous and must happen before any
+        # await: Starlette's TestClient may cancel this endpoint while it is
+        # closing the websocket.
+        state.events.unsubscribe(pid,q)
+        child_tasks = tuple(task for task in (receive_task, event_task) if task is not None)
+        for task in child_tasks:
             if task is not None and not task.done():
                 task.cancel()
-        await asyncio.gather(*(task for task in (receive_task, event_task) if task is not None), return_exceptions=True)
-        state.events.unsubscribe(pid,q)
+        if child_tasks:
+            cleanup = asyncio.gather(*child_tasks, return_exceptions=True)
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # A second cancellation can interrupt shield itself; wait for
+                # the already-cancelled children before returning.
+                await cleanup

@@ -139,3 +139,19 @@ async def test_send_failure_still_cleans_up_subscription(tmp_path: Path):
     )
     await asyncio.wait_for(route_task, timeout=1)
     assert project_id not in app.state.events._subs
+
+
+@pytest.mark.asyncio
+async def test_endpoint_cancellation_cleans_up_before_awaiting_children(tmp_path: Path):
+    app = create_app(tmp_path)
+    project_id = await _project(app)
+    harness = WebSocketHarness(app, project_id)
+    route_task = asyncio.create_task(harness.run())
+
+    for _ in range(100):
+        if len(harness.sent) >= 2:
+            break
+        await asyncio.sleep(0)
+    route_task.cancel()
+    await asyncio.wait_for(route_task, timeout=1)
+    assert project_id not in app.state.events._subs
