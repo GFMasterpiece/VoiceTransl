@@ -15,6 +15,9 @@ def deps(request): return request.app.state
 def get_project(state,pid):
     try: return state.store.load_project(pid)
     except (ProjectNotFound,ValueError): raise HTTPException(404,detail={"error":{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}})
+def get_job(state,pid):
+    try: return state.store.load_job(pid)
+    except (ProjectNotFound,ValueError): raise HTTPException(404,detail={"error":{"code":"PROJECT_NOT_FOUND","message":"项目不存在"}})
 class RunRequest(BaseModel): resume: bool=True
 
 @router.get("/health")
@@ -76,7 +79,8 @@ async def cancel(pid:str,request:Request):
     if not state.jobs.cancel(pid): raise HTTPException(409,detail={"error":{"code":"JOB_NOT_RUNNING","message":"任务未运行"}})
     return {"status":"cancelling"}
 @router.get("/projects/{pid}/job")
-async def job(pid:str,request:Request): get_project(deps(request),pid); return deps(request).store.load_job(pid)
+async def job(pid:str,request:Request):
+    state=deps(request); get_project(state,pid); return get_job(state,pid)
 @router.get("/projects/{pid}/transcript")
 async def transcript(pid:str,request:Request):
     state=deps(request); get_project(state,pid)
@@ -101,7 +105,11 @@ async def events(ws:WebSocket,pid:str):
     except Exception: await ws.close(code=4404); return
     await ws.accept(); q=state.events.subscribe(pid)
     try:
-        job = state.store.load_job(pid)
+        try:
+            job = state.store.load_job(pid)
+        except (ProjectNotFound, ValueError):
+            await ws.close(code=4404)
+            return
         await ws.send_json({"schema_version":"1.0","event_id":f"evt_{uuid4().hex}","type":"job.snapshot","project_id":pid,"job_id":job.id,"timestamp":datetime.now(timezone.utc).isoformat(),"data":job.model_dump(mode="json")})
         while True: await ws.send_json(await q.get())
     except (WebSocketDisconnect,asyncio.CancelledError): pass

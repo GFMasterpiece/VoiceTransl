@@ -15,11 +15,27 @@ class PipelineRunner:
             for stage in self.stages:
                 c.check_cancelled(); state=job.stages[stage.name]
                 if resume and state.status==StageStatus.COMPLETED:
-                    n={"asr":"raw","alignment":"aligned","translation":"translated"}.get(stage.name.value)
-                    if n: c.transcript=c.store.load_transcript(c.project.id,n)
-                    job.progress=sum(s.progress for s in job.stages.values())/len(job.stages)
-                    await self._save(c)
-                    continue
+                    # A state file can be durable while its artifact was
+                    # deleted manually or by a partial restore.  Re-run that
+                    # stage instead of allowing recovery to fail outside the
+                    # normal stage error path.
+                    try:
+                        n={"asr":"raw","alignment":"aligned","translation":"translated"}.get(stage.name.value)
+                        if n:
+                            c.transcript=c.store.load_transcript(c.project.id,n)
+                        elif state.artifact:
+                            artifact=(c.project_dir / state.artifact).resolve()
+                            if c.project_dir.resolve() not in artifact.parents:
+                                raise ValueError("stage artifact escapes project directory")
+                            if not artifact.exists(): raise FileNotFoundError(state.artifact)
+                    except (FileNotFoundError, ValueError):
+                        state.status=StageStatus.PENDING
+                        state.progress=0
+                        state.artifact=None
+                    else:
+                        job.progress=sum(s.progress for s in job.stages.values())/len(job.stages)
+                        await self._save(c)
+                        continue
                 state.status=StageStatus.RUNNING; state.started_at=now(); state.finished_at=None; state.error=None; state.progress=0; job.current_stage=stage.name; await self._save(c); await self._event(c,"stage.started",{"stage":stage.name.value}); await self._event(c,"stage.progress",{"stage":stage.name.value,"progress":0,"message":f"{stage.name.value} processing"})
                 try: await stage.run(c); c.check_cancelled()
                 except PipelineCancelled: raise

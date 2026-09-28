@@ -1,6 +1,7 @@
 import asyncio
+from datetime import datetime, timezone
 from uuid import uuid4
-from ..domain import Job, JobStatus
+from ..domain import Job, JobError, JobStatus
 from ..pipeline import PipelineContext, PipelineRunner, PreprocessStage, ASRStage, AlignmentStage, TranslationStage, ExportStage
 from ..providers import MockASRProvider, MockAlignerProvider, MockTranslatorProvider
 
@@ -27,6 +28,11 @@ class JobManager:
                 raise RuntimeError("JOB_ALREADY_RUNNING")
             project=self.store.load_project(project_id)
             previous=self.store.load_job(project_id)
+            # The in-memory task map is intentionally not the source of truth:
+            # a task can disappear after a process restart or an unexpected
+            # scheduler failure while job.json still says it is running.
+            if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
+                raise RuntimeError("JOB_ALREADY_RUNNING")
             if previous.status == JobStatus.COMPLETED and resume:
                 raise RuntimeError("JOB_ALREADY_RUNNING")
 
@@ -55,6 +61,34 @@ class JobManager:
                         stages=[PreprocessStage(),ASRStage(MockASRProvider(self.delay_ms)),AlignmentStage(MockAlignerProvider(self.delay_ms)),TranslationStage(MockTranslatorProvider(self.delay_ms)),ExportStage()]
                         c=PipelineContext(project=project,project_dir=self.store.project_dir(project_id),job=job,preset={"name":"mock"},store=self.store,cancel_event=ev)
                         await PipelineRunner(stages,self.event_bus).run(c,resume=resume)
+                except asyncio.CancelledError:
+                    # The public cancel API uses cooperative cancellation and
+                    # never calls Task.cancel().  If shutdown does cancel the
+                    # task, still leave a recoverable state on disk.
+                    if job.status in {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.CANCELLING}:
+                        job.status=JobStatus.INTERRUPTED
+                        job.current_stage=None
+                        job.updated_at=datetime.now(timezone.utc)
+                        self.store.save_job(job)
+                    raise
+                except Exception as exc:
+                    # Runner handles stage failures.  This guard covers
+                    # storage/configuration failures outside a stage so a job
+                    # never remains permanently stuck in running state.
+                    job.status=JobStatus.FAILED
+                    job.current_stage=None
+                    job.error=JobError(type=type(exc).__name__,message=str(exc),retryable=True)
+                    job.updated_at=datetime.now(timezone.utc)
+                    self.store.save_job(job)
+                    await self.event_bus.publish({
+                        "schema_version":"1.0",
+                        "event_id":f"evt_{uuid4().hex}",
+                        "type":"job.failed",
+                        "project_id":project_id,
+                        "job_id":job.id,
+                        "timestamp":datetime.now(timezone.utc).isoformat(),
+                        "data":{"message":str(exc)},
+                    })
                 finally:
                     # A completed task must never remove a newer task that
                     # has already been registered for the same project.

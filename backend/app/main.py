@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ def create_app(data_dir=None):
     settings=load_settings(config_path)
     if data_dir is not None: settings.data_dir=Path(data_dir)
     app=FastAPI(title="VoiceTransl API",version="0.1.0"); store=FileSystemProjectStore(settings.data_dir); store.mark_interrupted(); events=EventBus()
+    logger = logging.getLogger("voicetransl.api")
     @app.exception_handler(HTTPException)
     async def http_error(_request: Request, exc: HTTPException):
         # Keep the documented error contract at the response root instead of
@@ -33,6 +35,15 @@ def create_app(data_dir=None):
         return JSONResponse(
             status_code=422,
             content={"error": {"code": "VALIDATION_ERROR", "message": "请求参数无效", "details": details}},
+        )
+    @app.exception_handler(Exception)
+    async def internal_error(_request: Request, exc: Exception):
+        # Keep implementation details and tracebacks in server logs.  The API
+        # contract always exposes a stable, user-facing error object.
+        logger.exception("Unhandled backend exception", exc_info=exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "服务器内部错误", "details": None}},
         )
     app.state.settings=settings; app.state.store=store; app.state.events=events; app.state.jobs=JobManager(store,events,settings.mock_delay_ms,settings.max_concurrent); app.include_router(router); return app
 try:
