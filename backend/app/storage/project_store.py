@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import os
 from uuid import uuid4
@@ -90,9 +91,11 @@ class FileSystemProjectStore:
             project.source.size_bytes = total
             atomic_write_json(temp_dir / "project.json", project.model_dump(mode="json"))
             atomic_write_json(temp_dir / "job.json", job.model_dump(mode="json"))
+            if final_dir.exists():
+                raise FileExistsError(project.id)
             os.replace(temp_dir, final_dir)
             return project, job
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
 
@@ -107,13 +110,24 @@ class FileSystemProjectStore:
             shutil.rmtree(directory)
     def list_projects(self) -> list[Project]:
         items=[]
-        for p in self.projects_dir.iterdir():
-            if p.is_symlink():
-                continue
-            if p.is_dir() and (p / "project.json").is_file():
-                try: items.append(Project.model_validate_json((p / "project.json").read_text(encoding="utf-8")))
-                except Exception: continue
+        for _, project in self._published_projects():
+            items.append(project)
         return sorted(items, key=lambda x: x.updated_at, reverse=True)[:200]
+
+    def _published_projects(self):
+        """Yield only complete, named project directories after a restart."""
+        for p in self.projects_dir.iterdir():
+            if p.name.startswith(".") or p.is_symlink() or not p.is_dir():
+                continue
+            metadata = p / "project.json"
+            if metadata.is_symlink() or not metadata.is_file():
+                continue
+            try:
+                project = Project.model_validate_json(metadata.read_text(encoding="utf-8"))
+                if project.id == p.name:
+                    yield p, project
+            except Exception:
+                continue
     def load_project(self, project_id: str) -> Project:
         path=self.project_dir(project_id)/"project.json"
         if not path.exists(): raise ProjectNotFound(project_id)
@@ -172,7 +186,7 @@ class FileSystemProjectStore:
                     stream.write(chunk)
                 stream.flush(); os.fsync(stream.fileno())
             os.replace(temp, target)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             temp.unlink(missing_ok=True)
             raise
         self._touch_project(project_id)
@@ -203,11 +217,12 @@ class FileSystemProjectStore:
         if path.parent != d: raise ValueError("invalid output filename")
         return path
     def mark_interrupted(self) -> None:
-        for p in self.projects_dir.iterdir() if self.projects_dir.exists() else []:
+        for p, project in self._published_projects():
             path=p/"job.json"
-            if not path.exists(): continue
+            if path.is_symlink() or not path.is_file(): continue
             try:
                 job=Job.model_validate_json(path.read_text(encoding="utf-8"))
+                if job.project_id != project.id: continue
                 if job.status.value in ("running","cancelling"):
                     job.status=JobStatus.INTERRUPTED; job.updated_at=datetime.now(timezone.utc); self.save_job(job)
             except Exception: continue
