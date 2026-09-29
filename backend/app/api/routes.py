@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..config import load_preset
-from ..domain import Job, Project, SourceAsset, default_stages
+from ..domain import Job, JobStatus, PipelineConfig, Project, SourceAsset, default_stages
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
 router = APIRouter(prefix="/api/v1")
@@ -65,6 +65,16 @@ class CreateProjectResponse(BaseModel):
 class RunResponse(BaseModel):
     job_id: str
     status: str
+
+
+def config_editable(state, project_id: str, job: Job) -> bool:
+    if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING, JobStatus.COMPLETED}:
+        return False
+    # A queued task is persisted as pending until it acquires the semaphore.
+    # Its snapshot is already fixed, so it must be treated as read-only too.
+    if state.jobs.running(project_id):
+        return False
+    return not (job.status == JobStatus.PENDING and job.config_snapshot is not None)
 
 
 class TranscriptResponse(BaseModel):
@@ -149,6 +159,54 @@ async def project(pid: str, request: Request):
     return get_project(deps(request), pid)
 
 
+@router.get("/projects/{pid}/config", response_model=PipelineConfig)
+async def pipeline_config(pid: str, request: Request):
+    state = deps(request)
+    get_project(state, pid)
+    try:
+        return state.store.load_pipeline_config(pid)
+    except (ProjectNotFound, ValueError):
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "INVALID_PIPELINE_CONFIG",
+                    "message": "项目配置无效，请重新配置",
+                }
+            },
+        )
+
+
+@router.put("/projects/{pid}/config", response_model=PipelineConfig)
+async def update_pipeline_config(pid: str, value: PipelineConfig, request: Request):
+    state = deps(request)
+    get_project(state, pid)
+    current = get_job(state, pid)
+    if not config_editable(state, pid, current):
+        raise HTTPException(
+            409,
+            detail={
+                "error": {
+                    "code": "CONFIG_READ_ONLY",
+                    "message": "任务运行中或已完成，配置不可修改",
+                }
+            },
+        )
+    project = get_project(state, pid)
+    if value.source_language != project.source.language:
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "SOURCE_LANGUAGE_MISMATCH",
+                    "message": "配置源语言必须与项目源语言一致",
+                }
+            },
+        )
+    state.store.save_pipeline_config(pid, value)
+    return value
+
+
 @router.post("/projects/{pid}/run", status_code=202, response_model=RunResponse)
 async def run(pid: str, body: RunRequest, request: Request):
     state = deps(request)
@@ -167,6 +225,17 @@ async def run(pid: str, body: RunRequest, request: Request):
             500,
             detail={
                 "error": {"code": "INTERNAL_ERROR", "message": "任务启动失败", "details": None}
+            },
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "INVALID_PIPELINE_CONFIG",
+                    "message": "项目配置无效，无法开始处理",
+                    "details": str(error),
+                }
             },
         ) from error
     return {"job_id": job.id, "status": job.status}

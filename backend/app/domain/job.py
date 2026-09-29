@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from .enums import JobStatus, PipelineStageName, StageStatus
+from .pipeline_config import PipelineConfig
 
 
 class StageState(BaseModel):
@@ -37,3 +38,6 @@ class Job(BaseModel):
     stages: dict[PipelineStageName, StageState] = Field(default_factory=default_stages)
     cancel_requested: bool = False
     error: JobError | None = None
+    # The exact non-secret configuration used for this run.  Older jobs do
+    # not have this field and remain valid when loaded by Pydantic.
+    config_snapshot: PipelineConfig | None = None

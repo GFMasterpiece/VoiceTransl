@@ -145,6 +145,67 @@ describe('projects store', () => {
 })
 
 describe('project detail store', () => {
+  it('loads, validates, and saves the pipeline configuration', async () => {
+    setActivePinia(createPinia())
+    const config = {
+      source_language: 'en',
+      target_language: 'zh-CN',
+      preprocess: { sample_rate: 16000, channels: 1, preserve_original: true },
+      asr: { provider: 'mock', model: 'mock', language: 'en', vad_enabled: true, chunk_seconds: 30 },
+      alignment: { enabled: true, provider: 'mock', model: 'mock', fallback: 'keep_asr_timestamps' },
+      translation: { provider: 'mock', model: 'mock', target_language: 'zh-CN', batch_size: 8, temperature: 0.2, glossary: {}, instructions: null },
+      export: { formats: ['srt', 'lrc'], bilingual: true, naming: 'language' },
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/config') && init?.method === 'PUT') return Promise.resolve(jsonResponse(config))
+      if (path.endsWith('/config')) return Promise.resolve(jsonResponse(config))
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(makeJob({ status: 'pending', current_stage: null })))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+
+    await store.load(project.id)
+    expect(store.configValid).toBe(true)
+    expect(store.config?.asr.language).toBe('en')
+    store.config!.target_language = 'en'
+    store.markConfigDirty()
+    expect(store.configValid).toBe(false)
+    expect(store.configErrors[0]).toContain('不能相同')
+
+    store.config!.target_language = 'zh-CN'
+    store.config!.translation.target_language = 'zh-CN'
+    store.markConfigDirty()
+    await store.saveConfig()
+    expect(store.configDirty).toBe(false)
+    const saveCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/config') && init?.method === 'PUT')
+    expect(saveCall).toBeDefined()
+  })
+
+  it('keeps configuration read-only for completed jobs', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/config')) return Promise.resolve(jsonResponse({ source_language: 'en', target_language: 'zh-CN' }))
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(makeJob({ status: 'completed', progress: 1, current_stage: null })))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'translated', transcript: { project_id: project.id, stage: 'translated', language: 'zh-CN', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+    await store.load(project.id)
+    expect(store.configLocked).toBe(true)
+    await expect(store.saveConfig()).rejects.toThrow('只读')
+  })
+
   it('fetches all project resources and normalizes missing job stages', async () => {
     setActivePinia(createPinia())
     const incompleteJob = {

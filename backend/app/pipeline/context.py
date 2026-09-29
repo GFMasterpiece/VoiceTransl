@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..domain import Job, Project, Transcript
+from ..domain import Job, PipelineConfig, Project, Transcript
 
 
 class PipelineCancelled(Exception):
@@ -20,6 +20,7 @@ class PipelineContext:
     transcript: Transcript | None = None
     artifacts: dict[str, Path] = field(default_factory=dict)
     allow_transcript_overwrite: bool = False
+    config: PipelineConfig | None = None
 
     def check_cancelled(self):
         if self.cancel_event.is_set():

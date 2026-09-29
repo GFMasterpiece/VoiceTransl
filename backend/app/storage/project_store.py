@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from ..domain import Job, JobStatus, Project, Transcript
+from ..domain import Job, JobStatus, PipelineConfig, Project, Transcript, default_pipeline_config
 from .atomic import atomic_write_bytes, atomic_write_json, atomic_write_text
 
 
@@ -179,6 +179,21 @@ class FileSystemProjectStore:
             self.project_dir(job.project_id) / "job.json", job.model_dump(mode="json")
         )
         self._touch_project(job.project_id)
+
+    def load_pipeline_config(self, project_id: str) -> PipelineConfig:
+        """Load a project's editable config, providing a legacy-safe default."""
+
+        path = self.project_dir(project_id) / "config.json"
+        if not path.exists():
+            project = self.load_project(project_id)
+            return default_pipeline_config(project.source.language)
+        return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def save_pipeline_config(self, project_id: str, value: PipelineConfig) -> None:
+        atomic_write_json(
+            self.project_dir(project_id) / "config.json", value.model_dump(mode="json")
+        )
+        self._touch_project(project_id)
 
     def load_transcript(self, project_id: str, stage: str) -> Transcript:
         if stage not in {"raw", "aligned", "translated"}:

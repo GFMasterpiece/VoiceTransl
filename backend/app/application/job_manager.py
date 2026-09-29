@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from ..config import load_preset
-from ..domain import Job, JobError, JobStatus
+from ..domain import Job, JobError, JobStatus, PipelineConfig
 from ..logging_utils import stable_job_error
 from ..pipeline import (
     AlignmentStage,
@@ -82,10 +82,20 @@ class JobManager:
                 from ..domain import default_stages
 
                 job.stages = default_stages()
+            # Legacy projects have no config.json or snapshot.  Resolve their
+            # safe mock defaults at run time and persist the exact copy used
+            # by this job before the asynchronous pipeline starts.
+            current_config = self.store.load_pipeline_config(project_id)
+            snapshot: PipelineConfig = (
+                previous.config_snapshot.model_copy(deep=True)
+                if resume and previous.config_snapshot is not None
+                else current_config.model_copy(deep=True)
+            )
             job.status = JobStatus.PENDING
             job.cancel_requested = False
             job.error = None
             job.current_stage = None
+            job.config_snapshot = snapshot
             self.store.save_job(job)
             ev = asyncio.Event()
             self.cancel_events[project_id] = ev
@@ -147,6 +157,7 @@ class JobManager:
                             store=self.store,
                             cancel_event=ev,
                             allow_transcript_overwrite=not resume,
+                            config=snapshot,
                         )
                         logger.info("job started project=%s job=%s", project_id, job.id)
                         await PipelineRunner(stages, self.event_bus).run(c, resume=resume)
