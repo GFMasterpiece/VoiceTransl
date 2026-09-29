@@ -263,6 +263,18 @@ class JobManager:
             logger.info("job queued project=%s job=%s resume=%s", project_id, job.id, resume)
             return job
 
+    async def delete_project(self, project_id: str) -> None:
+        """Delete a project while serializing against start requests."""
+        async with self._lock(project_id):
+            if self.running(project_id):
+                raise RuntimeError("PROJECT_BUSY")
+            job = self.store.load_job(project_id)
+            if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
+                job.status == JobStatus.PENDING and job.config_snapshot is not None
+            ):
+                raise RuntimeError("PROJECT_BUSY")
+            self.store.delete_project(project_id)
+
     def cancel(self, project_id):
         if not self.running(project_id):
             return False

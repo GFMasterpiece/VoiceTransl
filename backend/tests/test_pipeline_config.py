@@ -119,6 +119,16 @@ async def test_completed_project_can_be_deleted(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pending_project_can_be_deleted_before_start(tmp_path):
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        project_id = await create_project(client)
+        response = await client.delete(f"/api/v1/projects/{project_id}")
+    assert response.status_code == 204
+    assert not (tmp_path / "projects" / project_id).exists()
+
+
+@pytest.mark.asyncio
 async def test_running_project_cannot_be_deleted(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

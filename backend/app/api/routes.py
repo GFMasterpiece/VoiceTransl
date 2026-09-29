@@ -163,18 +163,17 @@ async def project(pid: str, request: Request):
 async def delete_project(pid: str, request: Request):
     state = deps(request)
     get_project(state, pid)
-    current = get_job(state, pid)
-    if state.jobs.running(pid) or current.status in {
-        JobStatus.PENDING,
-        JobStatus.RUNNING,
-        JobStatus.CANCELLING,
-    }:
-        raise HTTPException(
-            409,
-            detail={"error": {"code": "PROJECT_BUSY", "message": "任务正在运行，请先取消任务"}},
-        )
     try:
-        state.store.delete_project(pid)
+        await state.jobs.delete_project(pid)
+    except RuntimeError as error:
+        if str(error) == "PROJECT_BUSY":
+            raise HTTPException(
+                409,
+                detail={
+                    "error": {"code": "PROJECT_BUSY", "message": "任务正在运行或排队，请先取消任务"}
+                },
+            )
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             404, detail={"error": {"code": "PROJECT_NOT_FOUND", "message": "项目不存在"}}
@@ -210,7 +209,7 @@ async def update_pipeline_config(pid: str, value: PipelineConfig, request: Reque
             detail={
                 "error": {
                     "code": "CONFIG_READ_ONLY",
-                    "message": "任务运行中或已完成，配置不可修改",
+                    "message": "任务运行中或排队中，配置不可修改",
                 }
             },
         )
@@ -236,21 +235,11 @@ async def run(pid: str, body: RunRequest, request: Request):
     try:
         job = await state.jobs.start(pid, body.resume)
     except RuntimeError as error:
-        if str(error) == "JOB_ALREADY_COMPLETED":
-            raise HTTPException(
-                409,
-                detail={
-                    "error": {
-                        "code": "JOB_ALREADY_COMPLETED",
-                        "message": "任务已完成，不能重新处理",
-                    }
-                },
-            )
         if str(error) == "JOB_ALREADY_RUNNING":
             raise HTTPException(
                 409,
                 detail={
-                    "error": {"code": "JOB_ALREADY_RUNNING", "message": "任务正在运行或已完成"}
+                    "error": {"code": "JOB_ALREADY_RUNNING", "message": "任务正在运行或排队中"}
                 },
             )
         raise HTTPException(
