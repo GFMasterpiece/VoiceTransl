@@ -177,12 +177,22 @@ function toggleExportFormat(format: string) {
 async function runJob() {
   try {
     await detail.saveConfig()
-    await detail.run(true)
+    await detail.run(detail.job?.status !== 'completed')
   } catch { /* The store keeps the translated API error. */ }
 }
 
 async function cancelJob() {
   try { await detail.cancel() } catch { /* The store keeps the translated API error. */ }
+}
+
+async function deleteProject(id: string, name: string) {
+  if (!window.confirm(`确定删除项目“${name}”吗？这会移除源音频、字幕和输出文件。`)) return
+  try {
+    await store.deleteProject(id)
+    if (detail.project?.id === id) showList()
+  } catch (reason) {
+    store.error = reason instanceof Error ? reason.message : '项目删除失败'
+  }
 }
 
 onMounted(() => void store.fetchProjects())
@@ -205,7 +215,7 @@ onUnmounted(() => detail.stop())
         <div class="list-toolbar"><div><span class="section-kicker">PROJECTS</span><h2>项目列表</h2></div><button class="text-button" type="button" :disabled="store.loading" @click="store.fetchProjects()"><span :class="{ spinning: store.loading }" aria-hidden="true">↻</span> 刷新</button></div>
         <div v-if="store.loading && !store.projects.length" class="empty-state skeleton-state"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
         <div v-else-if="!store.projects.length" class="empty-state"><div class="empty-icon" aria-hidden="true">◌</div><h3>还没有项目</h3><p>上传音频后，项目会显示在这里。</p><button class="secondary-button" type="button" @click="view = 'create'">创建第一个项目</button></div>
-        <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ formatSize(project.source.size_bytes) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
+        <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><button class="project-delete" type="button" aria-label="删除项目" @click.stop="deleteProject(project.id, project.name)">删除</button><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ formatSize(project.source.size_bytes) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
       </section>
 
       <section v-else-if="view === 'create'" class="create-layout">
@@ -214,7 +224,7 @@ onUnmounted(() => detail.stop())
       </section>
 
       <section v-else class="workspace">
-        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><span v-if="detail.job?.status === 'completed'" class="completed-lock" role="status">已完成，不可重新处理</span><button v-if="!detail.isRunning && detail.job?.status !== 'completed'" class="primary-button" type="button" :disabled="detail.actionLoading || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'pending' ? '开始处理' : '继续处理' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消任务' }}</button></div></div>
+        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><button class="secondary-button danger-button" type="button" :disabled="detail.isRunning || detail.actionLoading" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.actionLoading || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理' : detail.job?.status === 'pending' ? '开始处理' : '继续处理' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消任务' }}</button></div></div>
         <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         <template v-else-if="detail.project">
           <section class="config-panel" aria-labelledby="config-title">

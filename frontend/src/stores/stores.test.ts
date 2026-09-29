@@ -187,7 +187,7 @@ describe('project detail store', () => {
     expect(saveCall).toBeDefined()
   })
 
-  it('keeps configuration read-only for completed jobs', async () => {
+  it('allows configuration edits for completed jobs', async () => {
     setActivePinia(createPinia())
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname
@@ -202,8 +202,8 @@ describe('project detail store', () => {
     const store = useProjectDetailStore()
     detailStores.push(store)
     await store.load(project.id)
-    expect(store.configLocked).toBe(true)
-    await expect(store.saveConfig()).rejects.toThrow('只读')
+    expect(store.configLocked).toBe(false)
+    await expect(store.saveConfig()).resolves.toBeDefined()
   })
 
   it('fetches all project resources and normalizes missing job stages', async () => {

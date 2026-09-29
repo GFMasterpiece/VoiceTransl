@@ -75,14 +75,18 @@ async def test_config_round_trip_and_snapshot_is_persisted(tmp_path):
         assert job.config_snapshot.translation.model == "translator-v2"
         assert job.config_snapshot.asr.chunk_seconds == 45
 
-        locked = await client.put(f"/api/v1/projects/{project_id}/config", json=config_payload())
-        assert locked.status_code == 409
-        assert locked.json()["error"]["code"] == "CONFIG_READ_ONLY"
+        editable = config_payload()
+        editable["translation"]["model"] = "rerun-model"
+        updated_after_completion = await client.put(
+            f"/api/v1/projects/{project_id}/config", json=editable
+        )
+        assert updated_after_completion.status_code == 200
+        assert updated_after_completion.json()["translation"]["model"] == "rerun-model"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resume", [False, True])
-async def test_completed_project_cannot_be_started_again(tmp_path, resume):
+async def test_completed_project_can_be_started_again_with_new_job(tmp_path, resume):
     app = create_app(tmp_path)
     app.state.jobs.delay_ms = 0
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -92,25 +96,39 @@ async def test_completed_project_cannot_be_started_again(tmp_path, resume):
         ).status_code == 202
         await app.state.jobs.tasks[project_id]
 
+        previous_job_id = app.state.store.load_job(project_id).id
         response = await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": resume})
+        assert response.status_code == 202
+        assert response.json()["job_id"] != previous_job_id
+        await app.state.jobs.tasks[project_id]
 
-    assert response.status_code == 409
-    assert response.json()["error"] == {
-        "code": "JOB_ALREADY_COMPLETED",
-        "message": "任务已完成，不能重新处理",
-    }
+    assert app.state.store.load_job(project_id).status == JobStatus.COMPLETED
 
 
 @pytest.mark.asyncio
-async def test_projects_have_no_delete_endpoint(tmp_path):
+async def test_completed_project_can_be_deleted(tmp_path):
     app = create_app(tmp_path)
-    delete_routes = [
-        route
-        for route in app.routes
-        if "DELETE" in getattr(route, "methods", set())
-        and getattr(route, "path", "").startswith("/api/v1/projects")
-    ]
-    assert delete_routes == []
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        project_id = await create_project(client)
+        job = app.state.store.load_job(project_id)
+        job.status = JobStatus.COMPLETED
+        app.state.store.save_job(job)
+        response = await client.delete(f"/api/v1/projects/{project_id}")
+    assert response.status_code == 204
+    assert not (tmp_path / "projects" / project_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_running_project_cannot_be_deleted(tmp_path):
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        project_id = await create_project(client)
+        job = app.state.store.load_job(project_id)
+        job.status = JobStatus.RUNNING
+        app.state.store.save_job(job)
+        response = await client.delete(f"/api/v1/projects/{project_id}")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PROJECT_BUSY"
 
 
 @pytest.mark.asyncio

@@ -76,5 +76,12 @@ export const useProjectsStore = defineStore('projects', () => {
     }
   }
 
-  return { projects, loading, creating, error, fetchProjects, createProject }
+  async function deleteProject(id: string) {
+    error.value = ''
+    const response = await fetch(`${API_BASE_URL}/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (!response.ok) throw await parseError(response)
+    projects.value = projects.value.filter((project) => project.id !== id)
+  }
+
+  return { projects, loading, creating, error, fetchProjects, createProject, deleteProject }
 })

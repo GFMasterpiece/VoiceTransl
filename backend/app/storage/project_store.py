@@ -129,6 +129,15 @@ class FileSystemProjectStore:
         if directory.exists():
             shutil.rmtree(directory)
 
+    def delete_project(self, project_id: str) -> None:
+        """Delete a published project after validating its managed directory."""
+        directory = self.project_dir(project_id)
+        if not directory.is_dir() or not (directory / "project.json").is_file():
+            raise ProjectNotFound(project_id)
+        if (directory / "project.json").is_symlink():
+            raise ValueError("project metadata must not be a symlink")
+        shutil.rmtree(directory)
+
     def list_projects(self) -> list[Project]:
         items = []
         for _, project in self._published_projects():

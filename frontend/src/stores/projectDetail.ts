@@ -226,7 +226,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
 
   const progressPercent = computed(() => Math.round((job.value?.progress || 0) * 100))
   const isRunning = computed(() => job.value?.status === 'running' || job.value?.status === 'cancelling')
-  const configLocked = computed(() => isRunning.value || job.value?.status === 'completed')
+  const configLocked = computed(() => isRunning.value)
   const configValid = computed(() => configErrors.value.length === 0 && !!config.value)
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {

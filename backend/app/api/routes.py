@@ -68,7 +68,7 @@ class RunResponse(BaseModel):
 
 
 def config_editable(state, project_id: str, job: Job) -> bool:
-    if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING, JobStatus.COMPLETED}:
+    if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
         return False
     # A queued task is persisted as pending until it acquires the semaphore.
     # Its snapshot is already fixed, so it must be treated as read-only too.
@@ -157,6 +157,28 @@ async def list_projects(request: Request):
 @router.get("/projects/{pid}", response_model=Project)
 async def project(pid: str, request: Request):
     return get_project(deps(request), pid)
+
+
+@router.delete("/projects/{pid}", status_code=204)
+async def delete_project(pid: str, request: Request):
+    state = deps(request)
+    get_project(state, pid)
+    current = get_job(state, pid)
+    if state.jobs.running(pid) or current.status in {
+        JobStatus.PENDING,
+        JobStatus.RUNNING,
+        JobStatus.CANCELLING,
+    }:
+        raise HTTPException(
+            409,
+            detail={"error": {"code": "PROJECT_BUSY", "message": "任务正在运行，请先取消任务"}},
+        )
+    try:
+        state.store.delete_project(pid)
+    except (ProjectNotFound, ValueError):
+        raise HTTPException(
+            404, detail={"error": {"code": "PROJECT_NOT_FOUND", "message": "项目不存在"}}
+        )
 
 
 @router.get("/projects/{pid}/config", response_model=PipelineConfig)

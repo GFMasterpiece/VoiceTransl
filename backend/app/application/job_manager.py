@@ -83,8 +83,11 @@ class JobManager:
             # scheduler failure while job.json still says it is running.
             if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
                 raise RuntimeError("JOB_ALREADY_RUNNING")
+            pipeline_resume = resume
             if previous.status == JobStatus.COMPLETED:
-                raise RuntimeError("JOB_ALREADY_COMPLETED")
+                # A completed job always starts a fresh pipeline run with a
+                # new identity and the current editable configuration.
+                pipeline_resume = False
 
             if resume and previous.status in {
                 JobStatus.FAILED,
@@ -107,7 +110,7 @@ class JobManager:
             current_config = self.store.load_pipeline_config(project_id)
             snapshot: PipelineConfig = (
                 previous.config_snapshot.model_copy(deep=True)
-                if resume and previous.config_snapshot is not None
+                if pipeline_resume and previous.config_snapshot is not None
                 else current_config.model_copy(deep=True)
             )
             job.status = JobStatus.PENDING
@@ -199,11 +202,11 @@ class JobManager:
                             preset=preset.model_dump(mode="json") if preset else {"name": "mock"},
                             store=self.store,
                             cancel_event=ev,
-                            allow_transcript_overwrite=not resume,
+                            allow_transcript_overwrite=not pipeline_resume,
                             config=snapshot,
                         )
                         logger.info("job started project=%s job=%s", project_id, job.id)
-                        await PipelineRunner(stages, self.event_bus).run(c, resume=resume)
+                        await PipelineRunner(stages, self.event_bus).run(c, resume=pipeline_resume)
                         logger.info(
                             "job finished project=%s job=%s status=%s",
                             project_id,
