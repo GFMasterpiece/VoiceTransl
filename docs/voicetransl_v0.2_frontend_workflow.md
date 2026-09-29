@@ -106,10 +106,15 @@ Pipeline 配置
 
 #### 预处理
 
-- FFmpeg 处理配置
+- Provider：`mock`（默认演示）或 `ffmpeg`（真实音频）
 - 目标采样率
 - 声道数
 - 是否保留原始音频
+
+选择 `ffmpeg` 时，后端使用参数列表调用 FFmpeg，将源文件转换到项目内的
+`cache/preprocessed.wav`，并写入 `cache/preprocess.json`。原始上传文件始终保留，
+`preserve_original` 会记录在预处理元数据和任务配置快照中，不允许预处理阶段覆盖源文件。
+FFmpeg 不可用、转换失败或没有生成输出文件时，任务会以稳定的预处理错误码失败。
 
 #### 语音识别
 

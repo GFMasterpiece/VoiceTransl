@@ -2,8 +2,23 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ...domain import Project, Segment, Transcript
+from ...domain import PreprocessConfig, Project, Segment, Transcript
 from ..protocols import TranslationContext
+
+
+class MockPreprocessProvider:
+    async def preprocess(
+        self, audio: Path, output: Path, config: PreprocessConfig
+    ) -> dict[str, object]:
+        return {
+            "status": "mock",
+            "provider": "mock",
+            "source_path": audio.name,
+            "output_path": audio.name,
+            "sample_rate": config.sample_rate,
+            "channels": config.channels,
+            "preserve_original": config.preserve_original,
+        }
 
 
 class MockASRProvider:

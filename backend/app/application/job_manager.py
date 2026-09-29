@@ -15,7 +15,13 @@ from ..pipeline import (
     PreprocessStage,
     TranslationStage,
 )
-from ..providers import MockAlignerProvider, MockASRProvider, MockTranslatorProvider
+from ..providers import (
+    FFmpegPreprocessProvider,
+    MockAlignerProvider,
+    MockASRProvider,
+    MockPreprocessProvider,
+    MockTranslatorProvider,
+)
 
 logger = logging.getLogger("voicetransl.jobs")
 
@@ -29,6 +35,8 @@ class JobManager:
         max_concurrent=1,
         preset_dir=None,
         delay_explicit=False,
+        ffmpeg_path="ffmpeg",
+        preprocess_runner=None,
     ):
         self.store = store
         self.event_bus = event_bus
@@ -36,6 +44,8 @@ class JobManager:
         self._initial_delay_ms = delay_ms
         self.delay_explicit = delay_explicit
         self.preset_dir = preset_dir
+        self.ffmpeg_path = ffmpeg_path
+        self.preprocess_runner = preprocess_runner
         self.tasks: dict[str, asyncio.Task] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
         self.locks: dict[str, asyncio.Lock] = {}
@@ -142,8 +152,19 @@ class JobManager:
                         )
                         if self.delay_explicit or self.delay_ms != self._initial_delay_ms:
                             delay_ms = self.delay_ms
+                        preprocess_config = snapshot.preprocess
+                        if preprocess_config.provider == "ffmpeg":
+                            preprocess_provider = FFmpegPreprocessProvider(
+                                self.ffmpeg_path, runner=self.preprocess_runner
+                            )
+                        elif preprocess_config.provider == "mock":
+                            preprocess_provider = MockPreprocessProvider()
+                        else:
+                            raise ValueError(
+                                f"unsupported preprocess provider: {preprocess_config.provider}"
+                            )
                         stages = [
-                            PreprocessStage(),
+                            PreprocessStage(preprocess_provider),
                             ASRStage(MockASRProvider(delay_ms)),
                             AlignmentStage(MockAlignerProvider(delay_ms)),
                             TranslationStage(MockTranslatorProvider(delay_ms)),

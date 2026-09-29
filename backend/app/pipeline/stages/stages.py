@@ -1,8 +1,8 @@
 from copy import deepcopy
 
-from ...domain import PipelineStageName, Transcript
+from ...domain import PipelineConfig, PipelineStageName, Transcript
 from ...exporters import render_lrc, render_srt
-from ...providers import TranslationContext
+from ...providers import PreprocessProvider, TranslationContext
 
 
 class BaseStage:
@@ -11,14 +11,34 @@ class BaseStage:
 
 
 class PreprocessStage(BaseStage):
-    def __init__(self):
+    def __init__(self, provider: PreprocessProvider | None = None):
         super().__init__(PipelineStageName.PREPROCESS)
+        if provider is None:
+            from ...providers import MockPreprocessProvider
+
+            provider = MockPreprocessProvider()
+        self.provider = provider
 
     async def run(self, c):
         c.check_cancelled()
-        p = c.store.save_cache_json(
-            c.project.id, "preprocess.json", {"schema_version": "1.0", "status": "mock"}
-        )
+        source = c.store.source_path(c.project.id, c.project.source.path)
+        output = c.store.resolve_project_path(c.project.id, "cache/preprocessed.wav")
+        config = c.config or PipelineConfig()
+        metadata = await self.provider.preprocess(source, output, config.preprocess)
+        if metadata.get("provider") == "ffmpeg":
+            c.audio_path = output
+            metadata["source_path"] = source.relative_to(c.project_dir).as_posix()
+            metadata["output_path"] = output.relative_to(c.project_dir).as_posix()
+        else:
+            c.audio_path = source
+            metadata["source_path"] = source.relative_to(c.project_dir).as_posix()
+            metadata["output_path"] = source.relative_to(c.project_dir).as_posix()
+        metadata["schema_version"] = "1.0"
+        # The source upload is immutable in every mode. ``preserve_original``
+        # records the requested policy for future providers without allowing a
+        # preprocessing stage to overwrite or delete user data.
+        metadata["preserve_original"] = config.preprocess.preserve_original
+        p = c.store.save_cache_json(c.project.id, "preprocess.json", metadata)
         c.artifacts[self.name.value] = p
 
 
@@ -28,9 +48,7 @@ class ASRStage(BaseStage):
         self.provider = provider
 
     async def run(self, c):
-        c.transcript = await self.provider.transcribe(
-            c.store.source_path(c.project.id, c.project.source.path), c.project
-        )
+        c.transcript = await self.provider.transcribe(c.input_audio_path(), c.project)
         p = c.store.save_transcript(
             c.project.id, "raw", c.transcript, overwrite=c.allow_transcript_overwrite
         )
@@ -43,9 +61,7 @@ class AlignmentStage(BaseStage):
         self.provider = provider
 
     async def run(self, c):
-        c.transcript = await self.provider.align(
-            c.store.source_path(c.project.id, c.project.source.path), c.transcript
-        )
+        c.transcript = await self.provider.align(c.input_audio_path(), c.transcript)
         p = c.store.save_transcript(
             c.project.id, "aligned", c.transcript, overwrite=c.allow_transcript_overwrite
         )

@@ -31,6 +31,7 @@ def create_app(data_dir=None):
         settings.max_concurrent,
         settings.preset_dir,
         settings.mock_delay_ms_explicit,
+        settings.ffmpeg_path,
     )
 
     @asynccontextmanager

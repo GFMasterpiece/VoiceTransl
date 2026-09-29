@@ -11,6 +11,7 @@ export interface PipelineConfig {
   source_language: string
   target_language: string
   preprocess: {
+    provider: string
     sample_rate: number
     channels: number
     preserve_original: boolean
@@ -122,7 +123,7 @@ function defaultConfig(sourceLanguage = 'ja'): PipelineConfig {
     schema_version: '1.0',
     source_language: sourceLanguage,
     target_language: targetLanguage,
-    preprocess: { sample_rate: 16000, channels: 1, preserve_original: true },
+    preprocess: { provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true },
     asr: { provider: 'mock', model: 'mock', language: sourceLanguage, vad_enabled: true, chunk_seconds: 30 },
     alignment: { enabled: true, provider: 'mock', model: 'mock', fallback: 'keep_asr_timestamps' },
     translation: { provider: 'mock', model: 'mock', target_language: targetLanguage, batch_size: 8, temperature: 0.2, glossary: {}, instructions: null },
@@ -152,6 +153,7 @@ function validateConfig(value: PipelineConfig | null): string[] {
   if (value.source_language.toLowerCase() === value.target_language.toLowerCase()) errors.push('源语言和目标语言不能相同')
   if (value.asr.language !== value.source_language) errors.push('识别语言必须与源语言一致')
   if (value.translation.target_language !== value.target_language) errors.push('翻译目标语言必须与目标语言一致')
+  if (!['mock', 'ffmpeg'].includes(value.preprocess.provider)) errors.push('预处理 Provider 只支持 mock 或 ffmpeg')
   if (!value.asr.provider.trim() || !value.asr.model.trim()) errors.push('请设置语音识别 Provider 和模型')
   if (!value.translation.provider.trim() || !value.translation.model.trim()) errors.push('请设置翻译 Provider 和模型')
   if (!value.export.formats.length) errors.push('至少选择一种导出格式')

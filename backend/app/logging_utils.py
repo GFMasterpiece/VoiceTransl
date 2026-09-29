@@ -94,6 +94,9 @@ def configure_logging(level: str, data_dir: str | Path | None = None) -> logging
 def stable_stage_error(exc: BaseException) -> tuple[str, str]:
     """Map an internal exception to the stable stage error contract."""
 
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code, str(exc)
     return "STAGE_FAILED", "阶段处理失败"
 
 

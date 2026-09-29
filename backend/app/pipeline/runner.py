@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -228,3 +229,14 @@ class PipelineRunner:
                 (artifact / filename).is_file() for filename in required
             ):
                 raise FileNotFoundError("export output is incomplete")
+        elif stage_name == "preprocess":
+            try:
+                metadata = json.loads(artifact.read_text(encoding="utf-8"))
+                output_path = context.store.resolve_project_path(
+                    context.project.id, metadata["output_path"]
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("invalid preprocess metadata") from exc
+            if not output_path.is_file():
+                raise FileNotFoundError("preprocessed audio is missing")
+            context.audio_path = output_path

@@ -42,6 +42,7 @@ class AppSettings(BaseModel):
     mock_delay_ms_explicit: bool = False
     log_level: str = "INFO"
     preset_dir: Path = Path("./config/presets")
+    ffmpeg_path: str = "ffmpeg"
 
     @field_validator("log_level")
     @classmethod
@@ -94,6 +95,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "mock_delay_ms_explicit": mock_delay_explicit,
         "log_level": logging.get("level", defaults.log_level),
         "preset_dir": preset_dir,
+        "ffmpeg_path": app.get("ffmpeg_path", defaults.ffmpeg_path),
     }
     # Environment variables are useful for container and test deployments and
     # intentionally cover only operational settings, never secrets.
@@ -108,6 +110,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "mock_delay_ms": ("VOICETRANSL_MOCK_DELAY_MS", int),
         "log_level": ("VOICETRANSL_LOG_LEVEL", str),
         "preset_dir": ("VOICETRANSL_PRESET_DIR", str),
+        "ffmpeg_path": ("VOICETRANSL_FFMPEG_PATH", str),
     }
     for field, (variable, converter) in env_overrides.items():
         if os.getenv(variable) is not None:

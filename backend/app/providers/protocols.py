@@ -3,7 +3,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-from ..domain import Project, Segment, Transcript
+from ..domain import PreprocessConfig, Project, Segment, Transcript
 
 
 class TranslationContext(BaseModel):
@@ -13,6 +13,12 @@ class TranslationContext(BaseModel):
     character: str | None = None
     glossary: dict[str, str] = Field(default_factory=dict)
     instructions: str | None = None
+
+
+class PreprocessProvider(Protocol):
+    async def preprocess(
+        self, audio: Path, output: Path, config: PreprocessConfig
+    ) -> dict[str, object]: ...
 
 
 class ASRProvider(Protocol):

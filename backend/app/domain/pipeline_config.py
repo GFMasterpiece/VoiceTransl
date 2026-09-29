@@ -8,6 +8,7 @@ class _ConfigModel(BaseModel):
 
 
 class PreprocessConfig(_ConfigModel):
+    provider: str = Field(default="mock", min_length=1, max_length=64)
     sample_rate: int = Field(default=16_000, ge=8_000, le=192_000)
     channels: int = Field(default=1, ge=1, le=2)
     preserve_original: bool = True
@@ -68,6 +69,8 @@ class PipelineConfig(_ConfigModel):
 
     @model_validator(mode="after")
     def validate_languages(self) -> Self:
+        if self.preprocess.provider not in {"mock", "ffmpeg"}:
+            raise ValueError("unsupported preprocess provider")
         if self.source_language.casefold() == self.target_language.casefold():
             raise ValueError("source and target languages must differ")
         if self.asr.language != self.source_language:

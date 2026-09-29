@@ -17,6 +17,7 @@ class PipelineContext:
     preset: dict
     store: object
     cancel_event: asyncio.Event
+    audio_path: Path | None = None
     transcript: Transcript | None = None
     artifacts: dict[str, Path] = field(default_factory=dict)
     allow_transcript_overwrite: bool = False
@@ -25,3 +26,6 @@ class PipelineContext:
     def check_cancelled(self):
         if self.cancel_event.is_set():
             raise PipelineCancelled()
+
+    def input_audio_path(self) -> Path:
+        return self.audio_path or self.store.source_path(self.project.id, self.project.source.path)
