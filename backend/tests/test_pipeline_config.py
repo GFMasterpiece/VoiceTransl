@@ -81,6 +81,39 @@ async def test_config_round_trip_and_snapshot_is_persisted(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_completed_project_cannot_be_started_again(tmp_path, resume):
+    app = create_app(tmp_path)
+    app.state.jobs.delay_ms = 0
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        project_id = await create_project(client)
+        assert (
+            await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})
+        ).status_code == 202
+        await app.state.jobs.tasks[project_id]
+
+        response = await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": resume})
+
+    assert response.status_code == 409
+    assert response.json()["error"] == {
+        "code": "JOB_ALREADY_COMPLETED",
+        "message": "任务已完成，不能重新处理",
+    }
+
+
+@pytest.mark.asyncio
+async def test_projects_have_no_delete_endpoint(tmp_path):
+    app = create_app(tmp_path)
+    delete_routes = [
+        route
+        for route in app.routes
+        if "DELETE" in getattr(route, "methods", set())
+        and getattr(route, "path", "").startswith("/api/v1/projects")
+    ]
+    assert delete_routes == []
+
+
+@pytest.mark.asyncio
 async def test_config_rejects_source_language_mismatch_and_active_jobs(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

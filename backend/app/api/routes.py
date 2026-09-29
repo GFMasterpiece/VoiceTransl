@@ -214,6 +214,16 @@ async def run(pid: str, body: RunRequest, request: Request):
     try:
         job = await state.jobs.start(pid, body.resume)
     except RuntimeError as error:
+        if str(error) == "JOB_ALREADY_COMPLETED":
+            raise HTTPException(
+                409,
+                detail={
+                    "error": {
+                        "code": "JOB_ALREADY_COMPLETED",
+                        "message": "任务已完成，不能重新处理",
+                    }
+                },
+            )
         if str(error) == "JOB_ALREADY_RUNNING":
             raise HTTPException(
                 409,

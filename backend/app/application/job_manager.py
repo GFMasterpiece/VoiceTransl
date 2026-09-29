@@ -83,8 +83,8 @@ class JobManager:
             # scheduler failure while job.json still says it is running.
             if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
                 raise RuntimeError("JOB_ALREADY_RUNNING")
-            if previous.status == JobStatus.COMPLETED and resume:
-                raise RuntimeError("JOB_ALREADY_RUNNING")
+            if previous.status == JobStatus.COMPLETED:
+                raise RuntimeError("JOB_ALREADY_COMPLETED")
 
             if resume and previous.status in {
                 JobStatus.FAILED,
