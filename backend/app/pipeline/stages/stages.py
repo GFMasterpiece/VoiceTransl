@@ -48,7 +48,14 @@ class ASRStage(BaseStage):
         self.provider = provider
 
     async def run(self, c):
-        c.transcript = await self.provider.transcribe(c.input_audio_path(), c.project)
+        try:
+            c.transcript = await self.provider.transcribe(c.input_audio_path(), c.project)
+        except Exception as exc:
+            # A cancellable external provider reports its stable cancellation
+            # code; convert it into the runner's cooperative cancellation path.
+            if getattr(exc, "code", None) == "ASR_CANCELLED":
+                c.check_cancelled()
+            raise
         p = c.store.save_transcript(
             c.project.id, "raw", c.transcript, overwrite=c.allow_transcript_overwrite
         )

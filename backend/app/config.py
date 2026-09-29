@@ -43,6 +43,9 @@ class AppSettings(BaseModel):
     log_level: str = "INFO"
     preset_dir: Path = Path("./config/presets")
     ffmpeg_path: str = "ffmpeg"
+    crispasr_executable: Path = Path("./crispasr/crispasr")
+    crispasr_model_dir: Path = Path("./crispasr")
+    crispasr_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
 
     @field_validator("log_level")
     @classmethod
@@ -77,6 +80,17 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     preset_dir = app.get(
         "preset_dir", config_file.parent / "presets" if config_file else Path("./config/presets")
     )
+    crispasr_executable = app.get("crispasr_executable", defaults.crispasr_executable)
+    crispasr_model_dir = app.get("crispasr_model_dir", defaults.crispasr_model_dir)
+    for key, value in (
+        ("crispasr_executable", crispasr_executable),
+        ("crispasr_model_dir", crispasr_model_dir),
+    ):
+        if not Path(value).is_absolute() and config_file:
+            if key == "crispasr_executable":
+                crispasr_executable = config_root / value
+            else:
+                crispasr_model_dir = config_root / value
     if isinstance(preset_dir, str) and not Path(preset_dir).is_absolute() and config_file:
         preset_dir = config_root / preset_dir
     # Accept the documented top-level ``mock.delay_ms`` and the equivalent
@@ -96,6 +110,11 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "log_level": logging.get("level", defaults.log_level),
         "preset_dir": preset_dir,
         "ffmpeg_path": app.get("ffmpeg_path", defaults.ffmpeg_path),
+        "crispasr_executable": crispasr_executable,
+        "crispasr_model_dir": crispasr_model_dir,
+        "crispasr_timeout_seconds": app.get(
+            "crispasr_timeout_seconds", defaults.crispasr_timeout_seconds
+        ),
     }
     # Environment variables are useful for container and test deployments and
     # intentionally cover only operational settings, never secrets.
@@ -111,6 +130,9 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "log_level": ("VOICETRANSL_LOG_LEVEL", str),
         "preset_dir": ("VOICETRANSL_PRESET_DIR", str),
         "ffmpeg_path": ("VOICETRANSL_FFMPEG_PATH", str),
+        "crispasr_executable": ("VOICETRANSL_CRISPASR_EXECUTABLE", str),
+        "crispasr_model_dir": ("VOICETRANSL_CRISPASR_MODEL_DIR", str),
+        "crispasr_timeout_seconds": ("VOICETRANSL_CRISPASR_TIMEOUT_SECONDS", int),
     }
     for field, (variable, converter) in env_overrides.items():
         if os.getenv(variable) is not None:

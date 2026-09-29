@@ -16,6 +16,7 @@ from ..pipeline import (
     TranslationStage,
 )
 from ..providers import (
+    CrispASRProvider,
     FFmpegPreprocessProvider,
     MockAlignerProvider,
     MockASRProvider,
@@ -37,6 +38,10 @@ class JobManager:
         delay_explicit=False,
         ffmpeg_path="ffmpeg",
         preprocess_runner=None,
+        crispasr_executable="crispasr/crispasr",
+        crispasr_model_dir="crispasr",
+        crispasr_timeout_seconds=300,
+        crispasr_process_factory=None,
     ):
         self.store = store
         self.event_bus = event_bus
@@ -46,6 +51,10 @@ class JobManager:
         self.preset_dir = preset_dir
         self.ffmpeg_path = ffmpeg_path
         self.preprocess_runner = preprocess_runner
+        self.crispasr_executable = crispasr_executable
+        self.crispasr_model_dir = crispasr_model_dir
+        self.crispasr_timeout_seconds = crispasr_timeout_seconds
+        self.crispasr_process_factory = crispasr_process_factory
         self.tasks: dict[str, asyncio.Task] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
         self.locks: dict[str, asyncio.Lock] = {}
@@ -163,9 +172,22 @@ class JobManager:
                             raise ValueError(
                                 f"unsupported preprocess provider: {preprocess_config.provider}"
                             )
+                        if snapshot.asr.provider == "mock":
+                            asr_provider = MockASRProvider(delay_ms)
+                        elif snapshot.asr.provider == "crispasr":
+                            asr_provider = CrispASRProvider(
+                                self.crispasr_executable,
+                                self.crispasr_model_dir,
+                                snapshot.asr,
+                                timeout_seconds=self.crispasr_timeout_seconds,
+                                cancel_event=ev,
+                                process_factory=self.crispasr_process_factory,
+                            )
+                        else:
+                            raise ValueError(f"unsupported asr provider: {snapshot.asr.provider}")
                         stages = [
                             PreprocessStage(preprocess_provider),
-                            ASRStage(MockASRProvider(delay_ms)),
+                            ASRStage(asr_provider),
                             AlignmentStage(MockAlignerProvider(delay_ms)),
                             TranslationStage(MockTranslatorProvider(delay_ms)),
                             ExportStage(),

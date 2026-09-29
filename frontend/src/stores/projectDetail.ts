@@ -18,6 +18,7 @@ export interface PipelineConfig {
   }
   asr: {
     provider: string
+    backend: string
     model: string
     language: string
     vad_enabled: boolean
@@ -124,7 +125,7 @@ function defaultConfig(sourceLanguage = 'ja'): PipelineConfig {
     source_language: sourceLanguage,
     target_language: targetLanguage,
     preprocess: { provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true },
-    asr: { provider: 'mock', model: 'mock', language: sourceLanguage, vad_enabled: true, chunk_seconds: 30 },
+    asr: { provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: sourceLanguage, vad_enabled: true, chunk_seconds: 30 },
     alignment: { enabled: true, provider: 'mock', model: 'mock', fallback: 'keep_asr_timestamps' },
     translation: { provider: 'mock', model: 'mock', target_language: targetLanguage, batch_size: 8, temperature: 0.2, glossary: {}, instructions: null },
     export: { formats: ['srt', 'lrc'], bilingual: true, naming: 'language' },
@@ -154,7 +155,10 @@ function validateConfig(value: PipelineConfig | null): string[] {
   if (value.asr.language !== value.source_language) errors.push('识别语言必须与源语言一致')
   if (value.translation.target_language !== value.target_language) errors.push('翻译目标语言必须与目标语言一致')
   if (!['mock', 'ffmpeg'].includes(value.preprocess.provider)) errors.push('预处理 Provider 只支持 mock 或 ffmpeg')
+  if (value.asr.provider === 'crispasr' && value.preprocess.provider !== 'ffmpeg') errors.push('CrispASR 需要启用 FFmpeg 预处理以生成标准 WAV')
   if (!value.asr.provider.trim() || !value.asr.model.trim()) errors.push('请设置语音识别 Provider 和模型')
+  if (!value.asr.backend.trim()) errors.push('请设置语音识别后端')
+  if (value.asr.chunk_seconds < 1 || value.asr.chunk_seconds > 600) errors.push('分段时长必须在 1–600 秒之间')
   if (!value.translation.provider.trim() || !value.translation.model.trim()) errors.push('请设置翻译 Provider 和模型')
   if (!value.export.formats.length) errors.push('至少选择一种导出格式')
   return errors

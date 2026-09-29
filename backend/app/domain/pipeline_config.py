@@ -16,6 +16,9 @@ class PreprocessConfig(_ConfigModel):
 
 class ASRConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
+    # CrispASR backend is a safe identifier selected from the server's
+    # supported capability list. It is never interpreted as a command or path.
+    backend: str = Field(default="qwen3-1.7b", min_length=1, max_length=64)
     model: str = Field(default="mock", min_length=1, max_length=128)
     language: str = Field(default="ja", min_length=1, max_length=32)
     vad_enabled: bool = True
@@ -71,6 +74,10 @@ class PipelineConfig(_ConfigModel):
     def validate_languages(self) -> Self:
         if self.preprocess.provider not in {"mock", "ffmpeg"}:
             raise ValueError("unsupported preprocess provider")
+        if self.asr.provider not in {"mock", "crispasr"}:
+            raise ValueError("unsupported asr provider")
+        if self.asr.provider == "crispasr" and self.preprocess.provider != "ffmpeg":
+            raise ValueError("crispasr ASR requires ffmpeg preprocessing for normalized WAV input")
         if self.source_language.casefold() == self.target_language.casefold():
             raise ValueError("source and target languages must differ")
         if self.asr.language != self.source_language:
