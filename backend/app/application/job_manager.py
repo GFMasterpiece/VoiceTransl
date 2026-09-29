@@ -38,8 +38,8 @@ class JobManager:
         delay_explicit=False,
         ffmpeg_path="ffmpeg",
         preprocess_runner=None,
-        crispasr_executable="crispasr/crispasr",
-        crispasr_model_dir="crispasr",
+        crispasr_executable=("crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr"),
+        crispasr_model_dir="crispasr/models",
         crispasr_timeout_seconds=300,
         crispasr_process_factory=None,
     ):

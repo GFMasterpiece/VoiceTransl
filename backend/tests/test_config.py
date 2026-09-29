@@ -50,6 +50,24 @@ def test_missing_or_invalid_config_is_explicit(tmp_path):
         load_settings(broken)
 
 
+def test_crispasr_nested_executable_path_is_resolved_from_repository_root(tmp_path):
+    config = tmp_path / "config" / "app.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "app:\n"
+        "  crispasr_executable: ./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr\n"
+        "  crispasr_model_dir: ./crispasr/models\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.crispasr_executable == (
+        tmp_path / "crispasr" / "linux-v0.8.38" / "crispasr-linux-x86_64-cuda13" / "crispasr"
+    )
+    assert settings.crispasr_model_dir == tmp_path / "crispasr" / "models"
+
+
 def test_preset_is_loaded_and_validated(tmp_path):
     presets = tmp_path / "presets"
     presets.mkdir()

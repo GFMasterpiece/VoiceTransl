@@ -43,8 +43,10 @@ class AppSettings(BaseModel):
     log_level: str = "INFO"
     preset_dir: Path = Path("./config/presets")
     ffmpeg_path: str = "ffmpeg"
-    crispasr_executable: Path = Path("./crispasr/crispasr")
-    crispasr_model_dir: Path = Path("./crispasr")
+    crispasr_executable: Path = Path(
+        "./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr"
+    )
+    crispasr_model_dir: Path = Path("./crispasr/models")
     crispasr_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
 
     @field_validator("log_level")

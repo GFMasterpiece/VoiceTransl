@@ -5,17 +5,17 @@ tested CrispASR CLI and place the GGUF model in a server owned directory. No
 model is downloaded by VoiceTransl.
 
 Version support is capability based rather than pinned to a bundled release:
-use a CrispASR release whose CLI exposes the flags listed below. The repository
-does not ship a native binary; the command shape follows `crispasr/param.txt`
-and the existing local workflow.
+use a CrispASR release whose CLI exposes the flags listed below. The local
+runtime package is kept outside Git; the command shape follows
+`crispasr/param.txt` and the existing local workflow.
 
 Configure the server in `config/app.yaml` (paths are resolved relative to the
 repository root) or with the equivalent environment variables:
 
 ```yaml
 app:
-  crispasr_executable: ./crispasr/crispasr
-  crispasr_model_dir: ./crispasr
+  crispasr_executable: ./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr
+  crispasr_model_dir: ./crispasr/models
   crispasr_timeout_seconds: 300
 ```
 
@@ -34,8 +34,8 @@ unique per attempt and removed after parsing. Missing executable/model, process
 failure, timeout, cancellation, missing output, and malformed output produce
 stable job error codes.
 
-Optional smoke test: install the CrispASR version and model documented by its
-upstream release, configure the paths above, upload a short normalized WAV,
-select `crispasr`, and run the project. The repository does not include the
-native binary or large model, so unit tests use fake subprocesses and a real
-smoke test is unavailable until those files are installed by the operator.
+The local v0.8.38 package is expected at the paths above. Optional smoke test:
+upload a short normalized WAV, select `crispasr`, and run the project. If the
+executable or model is missing, the job reports a stable diagnostic instead of
+silently falling back to Mock. Unit tests use fake subprocesses and do not
+require the runtime package or model.

@@ -4,6 +4,9 @@ app:
   data_dir: ./data
   max_upload_mb: 4096
   allowed_extensions: [wav, flac, mp3, m4a, aac, ogg, opus]
+  crispasr_executable: ./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr
+  crispasr_model_dir: ./crispasr/models
+  crispasr_timeout_seconds: 300
 jobs:
   max_concurrent: 1
 logging:
