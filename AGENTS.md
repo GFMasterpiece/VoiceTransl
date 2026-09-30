@@ -5,8 +5,10 @@
 This repository contains:
 
 - The existing desktop translation application in `app.py`, `GalTransl/`, and related scripts.
-- The VoiceTransl v0.1 backend in `backend/`.
-- Backend design and acceptance requirements in `docs/voicetransl_v0.1_minimum_implementation.md`.
+- The VoiceTransl backend in `backend/`.
+- The Vue 3 frontend in `frontend/`.
+- Runtime configuration and provider presets in `config/`.
+- Backend and workflow contracts in `docs/`.
 
 Confirm which area a task targets before editing. Do not refactor the legacy desktop application while working on the backend unless explicitly requested.
 
@@ -20,11 +22,16 @@ Confirm which area a task targets before editing. Do not refactor the legacy des
 - Do not use destructive Git commands unless explicitly requested.
 - Do not modify frontend files unless the task explicitly includes frontend work.
 
-## Backend source of truth
+## VoiceTransl source of truth
 
-For backend work, follow `docs/voicetransl_v0.1_minimum_implementation.md`.
+For the filesystem, API, pipeline, and persistence contract, follow
+`docs/voicetransl_v0.1_minimum_implementation.md`. For the current
+configuration-first frontend workflow, follow
+`docs/voicetransl_v0.2_frontend_workflow.md`. Provider-specific behavior is
+documented in `docs/crispasr_provider.md` and
+`docs/translation_providers.md`.
 
-The backend keeps these architecture decisions:
+The VoiceTransl architecture keeps these decisions:
 
 - The filesystem is the only persistent data source.
 - One project maps to one independent project directory.
@@ -32,7 +39,30 @@ The backend keeps these architecture decisions:
 - The pipeline consists of `preprocess`, `asr`, `alignment`, `translation`, and `export`.
 - Stage results and job state are persisted after each stage.
 - WebSocket events notify clients; REST and files remain the source of truth.
-- v0.1 uses Mock providers and does not require real ASR, alignment, or external translation.
+- New projects default to Mock providers, while real providers are available when
+  the server is configured:
+  - preprocessing: `mock` or local `ffmpeg`;
+  - ASR: `mock` or local `crispasr`;
+  - alignment: currently Mock/fallback behavior;
+  - translation: `mock`, OpenAI-compatible Chat Completions
+    (`openai_chat`), OpenAI Responses (`openai_responses`), or Anthropic
+    Messages (`anthropic_messages`);
+  - export: SRT, VTT, and LRC.
+- CrispASR executables and models are local runtime dependencies, not downloaded
+  or committed by the repository.
+- HTTP translation API keys are read only from environment variables named by
+  `translation.api_key_env`; never store key values in project configuration.
+
+### Current frontend scope
+
+- The frontend already provides project listing, project detail/workspace,
+  pipeline progress and stage inspection, configuration validation, deletion,
+  cancellation, and completed-project reprocessing.
+- A project is still created from one audio file at a time. The multiple-audio
+  upload behavior is designed in the v0.2 document but is not yet implemented.
+- The configuration panel does not yet expose HTTP translation `base_url` or
+  `api_key_env`; configure those through the backend API/configuration until a
+  frontend task adds the fields.
 
 ## Backend invariants
 
@@ -44,18 +74,39 @@ The backend keeps these architecture decisions:
 - Source files and manually edited transcript files are not silently overwritten.
 - Interrupted jobs remain visible and resumable from the first incomplete stage.
 - The same project cannot run two jobs concurrently.
+- Deleting a running or queued project is rejected as `PROJECT_BUSY`; completed,
+  failed, cancelled, and interrupted projects may be deleted with their stored
+  artifacts.
+- Reprocessing a completed project creates a new Job ID and configuration
+  snapshot; it must not mutate or resume the old completed job.
+- A running job uses its immutable configuration snapshot even if the editable
+  project configuration changes later.
 
 ## Development and validation
 
 - Use the `asmr` environment for backend development.
 - Backend code requires Python 3.12 or newer.
 - Run backend commands from `backend/`.
-- Run the relevant existing tests when changing the legacy application.
+- For a local full-stack smoke run, keep the personal convenience script
+  `scripts/start-dev.sh` untracked and run it after `mamba activate asmr` and
+  installing frontend dependencies. It starts one backend worker on port 8000
+  and Vite on port 5173; do not add this personal script to commits unless the
+  user explicitly asks.
+- Run the relevant existing tests when changing the legacy application or
+  frontend.
 - Run the backend test suite before reporting backend work as complete:
 
 ```bash
 cd backend
 PYTHONPATH=. python -m pytest -q
+```
+
+For backend linting/format verification, run `ruff check app tests` and
+`ruff format --check app tests`. For frontend changes, run from `frontend/`:
+
+```bash
+npm test -- --run
+npm run build
 ```
 
 A change is complete only when affected tests pass, the API behavior matches the documented contract, persistent files remain recoverable after restart, and the final report names the validation command and result.
@@ -81,6 +132,11 @@ A change is complete only when affected tests pass, the API behavior matches the
 ## Documentation
 
 - Treat `docs/voicetransl_v0.1_minimum_implementation.md` as the backend design source of truth.
+- Treat `docs/voicetransl_v0.2_frontend_workflow.md` as the source of truth for
+  configuration-before-run, project lifecycle, and planned multi-file upload
+  behavior.
+- Keep CrispASR setup and HTTP translation protocol details in their dedicated
+  provider documents instead of duplicating them here.
 - Update relevant documentation when changing a frozen architecture decision, file format, or API contract.
 - Keep detailed implementation information in code or dedicated documentation instead of expanding this file unnecessarily.
 
