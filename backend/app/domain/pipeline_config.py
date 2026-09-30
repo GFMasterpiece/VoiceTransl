@@ -1,3 +1,4 @@
+import re
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -34,12 +35,15 @@ class AlignmentConfig(_ConfigModel):
 
 class TranslationConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
+    base_url: str | None = Field(default=None, max_length=2_048)
+    api_key_env: str | None = Field(default=None, min_length=1, max_length=128)
     model: str = Field(default="mock", min_length=1, max_length=128)
     target_language: str = Field(default="zh-CN", min_length=1, max_length=32)
     batch_size: int = Field(default=8, ge=1, le=128)
     temperature: float = Field(default=0.2, ge=0, le=2)
     glossary: dict[str, str] = Field(default_factory=dict)
     instructions: str | None = Field(default=None, max_length=4_000)
+    timeout_seconds: int = Field(default=120, ge=1, le=3_600)
 
 
 class ExportConfig(_ConfigModel):
@@ -84,6 +88,17 @@ class PipelineConfig(_ConfigModel):
             raise ValueError("asr language must match source language")
         if self.translation.target_language != self.target_language:
             raise ValueError("translation target language must match target language")
+        if self.translation.provider not in {
+            "mock",
+            "openai_chat",
+            "openai_responses",
+            "anthropic_messages",
+        }:
+            raise ValueError("unsupported translation provider")
+        if self.translation.api_key_env and not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", self.translation.api_key_env
+        ):
+            raise ValueError("translation api_key_env must be an environment variable name")
         return self
 
 

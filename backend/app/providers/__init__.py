@@ -7,6 +7,7 @@ from .mock import (
     MockTranslatorProvider,
 )
 from .protocols import PreprocessProvider, TranslationContext
+from .translation import HTTPTranslationProvider, TranslationProviderError
 
 __all__ = [
     "FFmpegPreprocessProvider",
@@ -20,4 +21,6 @@ __all__ = [
     "PreprocessError",
     "PreprocessProvider",
     "TranslationContext",
+    "HTTPTranslationProvider",
+    "TranslationProviderError",
 ]

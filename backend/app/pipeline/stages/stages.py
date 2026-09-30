@@ -84,15 +84,22 @@ class TranslationStage(BaseStage):
         original = deepcopy(c.transcript.segments)
         provider_input = deepcopy(original)
         config = c.config
-        result = await self.provider.translate(
-            provider_input,
-            TranslationContext(
-                source_language=config.source_language if config else c.project.source.language,
-                target_language=config.target_language if config else "zh-CN",
-                glossary=config.translation.glossary if config else {},
-                instructions=config.translation.instructions if config else None,
-            ),
-        )
+        try:
+            result = await self.provider.translate(
+                provider_input,
+                TranslationContext(
+                    source_language=config.source_language if config else c.project.source.language,
+                    target_language=config.target_language if config else "zh-CN",
+                    glossary=config.translation.glossary if config else {},
+                    instructions=config.translation.instructions if config else None,
+                    batch_size=config.translation.batch_size if config else 8,
+                    temperature=config.translation.temperature if config else 0.2,
+                ),
+            )
+        except Exception as exc:
+            if getattr(exc, "code", None) == "TRANSLATION_CANCELLED":
+                c.check_cancelled()
+            raise
         if len(result) != len(original) or [s.id for s in result] != [s.id for s in original]:
             raise ValueError("translator changed segment count or ids")
         for a, b in zip(original, result):

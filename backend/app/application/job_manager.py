@@ -18,6 +18,7 @@ from ..pipeline import (
 from ..providers import (
     CrispASRProvider,
     FFmpegPreprocessProvider,
+    HTTPTranslationProvider,
     MockAlignerProvider,
     MockASRProvider,
     MockPreprocessProvider,
@@ -188,11 +189,25 @@ class JobManager:
                             )
                         else:
                             raise ValueError(f"unsupported asr provider: {snapshot.asr.provider}")
+                        if snapshot.translation.provider == "mock":
+                            translation_provider = MockTranslatorProvider(delay_ms)
+                        elif snapshot.translation.provider in {
+                            "openai_chat",
+                            "openai_responses",
+                            "anthropic_messages",
+                        }:
+                            translation_provider = HTTPTranslationProvider(
+                                snapshot.translation, cancel_event=ev
+                            )
+                        else:
+                            raise ValueError(
+                                f"unsupported translation provider: {snapshot.translation.provider}"
+                            )
                         stages = [
                             PreprocessStage(preprocess_provider),
                             ASRStage(asr_provider),
                             AlignmentStage(MockAlignerProvider(delay_ms)),
-                            TranslationStage(MockTranslatorProvider(delay_ms)),
+                            TranslationStage(translation_provider),
                             ExportStage(),
                         ]
                         c = PipelineContext(

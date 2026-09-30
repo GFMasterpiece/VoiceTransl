@@ -65,3 +65,7 @@ The detailed backend design, state transitions, storage invariants, event
 semantics, and frozen v0.1 decisions are documented in
 [`docs/voicetransl_v0.1_minimum_implementation.md`](../docs/voicetransl_v0.1_minimum_implementation.md),
 especially section 23.
+
+Optional HTTP translation providers and their environment-only API key
+configuration are documented in
+[`docs/translation_providers.md`](../docs/translation_providers.md).
