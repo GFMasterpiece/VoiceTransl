@@ -122,7 +122,12 @@ class _AnthropicAdapter(_ProtocolAdapter):
     ) -> dict:
         system = next((item["content"] for item in messages if item["role"] == "system"), None)
         user_messages = [item for item in messages if item["role"] != "system"]
-        payload = {"model": model, "max_tokens": 4_096, "messages": user_messages}
+        payload = {
+            "model": model,
+            "max_tokens": 4_096,
+            "temperature": context.temperature,
+            "messages": user_messages,
+        }
         if system:
             payload["system"] = system
         return payload

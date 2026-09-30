@@ -65,6 +65,7 @@ async def test_protocol_adapters_build_requests_and_extract_official_responses(
     if provider == "anthropic_messages":
         assert calls[0][1]["x-api-key"] == "secret"
         assert "system" in calls[0][2]
+        assert calls[0][2]["temperature"] == 0.2
         assert calls[0][2]["messages"][0]["role"] == "user"
     else:
         assert calls[0][1]["authorization"] == "Bearer secret"
@@ -156,7 +157,10 @@ def test_translation_requires_api_key_from_configured_environment(monkeypatch):
             "TRANSLATION_PROVIDER_NOT_CONFIGURED",
         ),
         (
-            {"base_url": "https://translation.example/v1", "api_key_env": "MISSING_TRANSLATION_KEY"},
+            {
+                "base_url": "https://translation.example/v1",
+                "api_key_env": "MISSING_TRANSLATION_KEY",
+            },
             "TRANSLATION_API_KEY_MISSING",
         ),
     ],
@@ -175,7 +179,9 @@ async def test_manager_persists_translation_initialization_error(
         translation = config.translation.model_copy(
             update={"provider": "openai_chat", "model": "test-model", **translation_overrides}
         )
-        app.state.store.save_pipeline_config(project_id, config.model_copy(update={"translation": translation}))
+        app.state.store.save_pipeline_config(
+            project_id, config.model_copy(update={"translation": translation})
+        )
 
         await app.state.jobs.start(project_id)
         await app.state.jobs.tasks[project_id]
