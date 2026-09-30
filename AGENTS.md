@@ -60,9 +60,9 @@ The VoiceTransl architecture keeps these decisions:
   cancellation, and completed-project reprocessing.
 - A project is still created from one audio file at a time. The multiple-audio
   upload behavior is designed in the v0.2 document but is not yet implemented.
-- The configuration panel does not yet expose HTTP translation `base_url` or
-  `api_key_env`; configure those through the backend API/configuration until a
-  frontend task adds the fields.
+- The node configuration modal exposes HTTP translation `base_url` and
+  `api_key_env`; the real API key remains backend-only and is read from the
+  named environment variable.
 
 ## Backend invariants
 

@@ -50,6 +50,76 @@ const selectedStageLog = computed(() => {
   return `等待${selectedStageMeta.value.label}开始。`
 })
 
+const configModalOpen = ref(false)
+const configModalStage = ref<StageName>('preprocess')
+const configModalSnapshot = ref<ReturnType<typeof cloneConfig> | null>(null)
+const configModalInitialSerialized = ref('')
+const configModalWasDirty = ref(false)
+const configModalStageMeta = computed(() => stageList.find((item) => item.key === configModalStage.value) || stageList[0])
+const configModalStatus = computed(() => stageVisualStatus(configModalStage.value))
+
+function cloneConfig() {
+  return detail.config ? JSON.parse(JSON.stringify(detail.config)) as NonNullable<typeof detail.config> : null
+}
+
+function serializeConfig() {
+  return JSON.stringify(detail.config)
+}
+
+function stageConfigSummary(key: StageName) {
+  const config = detail.config
+  if (!config) return '配置加载中'
+  if (key === 'preprocess') return `${config.preprocess.provider.toUpperCase()} · ${config.preprocess.sample_rate / 1000} kHz`
+  if (key === 'asr') return `${config.asr.provider.toUpperCase()} · ${config.asr.model || config.asr.backend}`
+  if (key === 'alignment') return config.alignment.enabled ? `${config.alignment.provider.toUpperCase()} · ${config.alignment.model}` : '已关闭，沿用识别时间轴'
+  if (key === 'translation') return `${config.translation.provider.toUpperCase()} · ${config.translation.model}`
+  return `${config.export.formats.map((format) => format.toUpperCase()).join(' / ')} · ${config.export.bilingual ? '双语' : '单语'}`
+}
+
+function openStageConfig(key: StageName) {
+  if (!detail.config || detail.configLoading) return
+  selectedStage.value = key
+  configModalStage.value = key
+  configModalSnapshot.value = cloneConfig()
+  configModalInitialSerialized.value = serializeConfig()
+  configModalWasDirty.value = detail.configDirty
+  configModalOpen.value = true
+}
+
+function hasModalChanges() {
+  return configModalOpen.value && configModalInitialSerialized.value !== serializeConfig()
+}
+
+function restoreModalSnapshot() {
+  if (configModalSnapshot.value) detail.config = configModalSnapshot.value
+  detail.configDirty = configModalWasDirty.value
+  detail.validateCurrentConfig()
+}
+
+function closeStageConfig(force = false) {
+  if (!configModalOpen.value) return true
+  if (!force && hasModalChanges() && !window.confirm('当前节点有未保存修改，确定关闭吗？')) return false
+  if (!force) restoreModalSnapshot()
+  configModalOpen.value = false
+  configModalSnapshot.value = null
+  return true
+}
+
+async function saveStageConfig() {
+  try {
+    await detail.saveConfig()
+    closeStageConfig(true)
+  } catch {
+    // The store exposes the concrete validation or server error in the alert.
+  }
+}
+
+function syncTranslationTarget() {
+  if (!detail.config) return
+  detail.config.translation.target_language = detail.config.target_language
+  detail.markConfigDirty()
+}
+
 function chooseFile() {
   fileInput.value?.click()
 }
@@ -142,6 +212,7 @@ function cancelCreate() {
 }
 
 async function openProject(id: string) {
+  closeStageConfig(true)
   view.value = 'detail'
   selectedStage.value = 'preprocess'
   try {
@@ -155,6 +226,7 @@ async function openProject(id: string) {
 }
 
 function showList() {
+  if (configModalOpen.value && !closeStageConfig()) return
   detail.stop()
   view.value = 'list'
   detail.error = ''
@@ -227,33 +299,40 @@ onUnmounted(() => detail.stop())
         <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><button class="secondary-button danger-button" type="button" :disabled="detail.isRunning || detail.actionLoading" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.actionLoading || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理' : detail.job?.status === 'pending' ? '开始处理' : '继续处理' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消任务' }}</button></div></div>
         <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         <template v-else-if="detail.project">
-          <section class="config-panel" aria-labelledby="config-title">
-            <div class="panel-heading"><div><span class="section-kicker">CONFIGURATION</span><h3 id="config-title">处理配置</h3></div><span class="config-state" :class="{ 'is-valid': detail.configValid, 'is-locked': detail.configLocked }">{{ detail.configLocked ? '运行配置只读' : detail.configValid ? '配置有效' : '需要修正' }}</span></div>
+          <section class="config-overview" aria-labelledby="config-title">
+            <div class="panel-heading config-overview-heading"><div><span class="section-kicker">CONFIGURATION MAP</span><h3 id="config-title">节点配置</h3><p class="config-overview-note">每个阶段只显示自己的设置。点击节点卡片编辑详细参数。</p></div><div class="config-overview-actions"><span class="config-state" :class="{ 'is-valid': detail.configValid, 'is-locked': detail.configLocked }">{{ detail.configLocked ? '运行中只读' : detail.configValid ? '配置有效' : '需要修正' }}</span><button class="secondary-button compact-button" type="button" :disabled="detail.configLocked || !detail.configDirty || detail.configSaving" @click="detail.saveConfig">{{ detail.configSaving ? '保存中…' : '保存全部配置' }}</button></div></div>
             <div v-if="detail.configLoading" class="config-loading">正在加载项目配置…</div>
             <template v-else-if="detail.config">
-              <div class="config-grid">
-                <label class="config-field"><span>源语言</span><select v-model="detail.config.source_language" disabled><option value="ja">日语</option><option value="en">英语</option><option value="zh">中文</option><option value="ko">韩语</option></select></label>
-                <label class="config-field"><span>目标语言</span><select v-model="detail.config.target_language" :disabled="detail.configLocked" @change="detail.config.translation.target_language = detail.config.target_language; detail.markConfigDirty()"><option value="zh-CN">中文（简体）</option><option value="en">英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label>
-                <label class="config-field"><span>识别 Provider</span><select v-model="detail.config.asr.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="crispasr">CrispASR（本机）</option></select></label>
-                <label class="config-field"><span>识别后端</span><select v-model="detail.config.asr.backend" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="qwen3-1.7b">Qwen3 ASR 1.7B</option><option value="whisper">Whisper</option><option value="mega-asr">Mega ASR</option><option value="voxtral">Voxtral</option></select></label>
-                <label class="config-field"><span>识别模型</span><input v-model="detail.config.asr.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label>
-                <label class="config-field"><span>翻译 Provider</span><input v-model="detail.config.translation.provider" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label>
-                <label class="config-field"><span>翻译模型</span><input v-model="detail.config.translation.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label>
-                <label class="config-field"><span>翻译批量大小</span><input v-model.number="detail.config.translation.batch_size" type="number" min="1" max="128" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label>
-                <label class="config-field"><span>预处理 Provider</span><select v-model="detail.config.preprocess.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="ffmpeg">FFmpeg（真实音频）</option></select></label>
-                <label class="config-field"><span>采样率</span><select v-model.number="detail.config.preprocess.sample_rate" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="8000">8 kHz</option><option :value="16000">16 kHz</option><option :value="44100">44.1 kHz</option><option :value="48000">48 kHz</option></select></label>
-                <label class="config-field"><span>声道数</span><select v-model.number="detail.config.preprocess.channels" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="1">单声道</option><option :value="2">双声道</option></select></label>
+              <div class="config-map">
+                <article v-for="stage in stageList" :key="stage.key" class="config-tile" :class="{ 'is-invalid': !detail.configValid, 'is-locked': detail.configLocked }">
+                  <div class="config-tile-head"><span class="config-tile-index">{{ String(stageList.findIndex((item) => item.key === stage.key) + 1).padStart(2, '0') }}</span><span class="config-tile-status" :class="`is-${stageVisualStatus(stage.key)}`">{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</span></div>
+                  <h4>{{ stage.label }}</h4><p>{{ stageConfigSummary(stage.key) }}</p>
+                  <button class="config-tile-edit" type="button" :disabled="detail.configLocked" @click="openStageConfig(stage.key)">编辑配置 <span aria-hidden="true">↗</span></button>
+                </article>
               </div>
-              <div class="config-options"><label class="check-option"><input v-model="detail.config.preprocess.preserve_original" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>保留原始音频</span></label><label class="check-option"><input v-model="detail.config.alignment.enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用时间轴对齐</span></label><label class="check-option"><input v-model="detail.config.asr.vad_enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用语音活动检测</span></label><label class="config-field compact-field"><span>分段时长（秒）</span><input v-model.number="detail.config.asr.chunk_seconds" type="number" min="1" max="600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><span class="config-label">导出格式</span><label v-for="format in ['srt', 'vtt', 'lrc']" :key="format" class="format-option"><input type="checkbox" :checked="detail.config.export.formats.includes(format)" :disabled="detail.configLocked" @change="toggleExportFormat(format)" /><span>{{ format.toUpperCase() }}</span></label></div>
-              <p class="config-note">翻译 Provider 当前为模拟实现，识别可选择 Mock 或服务器已配置的 CrispASR。</p>
               <ul v-if="detail.configErrors.length" class="config-errors"><li v-for="message in detail.configErrors" :key="message">{{ message }}</li></ul>
-              <div class="config-footer"><span>{{ detail.configDirty ? '有未保存的修改' : '配置会在开始处理前固定为任务快照' }}</span><button class="secondary-button" type="button" :disabled="detail.configLocked || !detail.configDirty || detail.configSaving" @click="detail.saveConfig">{{ detail.configSaving ? '保存中…' : '保存配置' }}</button></div>
+              <p class="config-footer-note">{{ detail.configDirty ? '有未保存的修改，保存后才能开始处理。' : '配置会在开始处理前固定为任务快照。' }}</p>
             </template>
           </section>
           <section class="workspace-title"><div><span class="section-kicker">{{ detail.project.source.language.toUpperCase() }} · {{ detail.project.preset }}</span><h2>{{ detail.project.name }}</h2><p>{{ detail.project.source.original_name }} · {{ formatSize(detail.project.source.size_bytes) }}</p></div><div class="total-progress"><span>总进度</span><strong>{{ detail.progressPercent }}%</strong><div class="progress-track"><span :style="{ width: `${detail.progressPercent}%` }"></span></div><small>{{ statusLabel(detail.job?.status) }}</small></div></section>
-          <section class="pipeline-panel" aria-labelledby="pipeline-title"><div class="panel-heading"><div><span class="section-kicker">PIPELINE</span><h3 id="pipeline-title">处理进度</h3></div><span class="live-badge"><i></i>{{ detail.isRunning ? '实时同步' : '状态已保存' }}</span></div><div class="pipeline-scroll"><ol class="pipeline-list"><li v-for="(stage, index) in stageList" :key="stage.key" class="pipeline-step" :class="{ 'is-last': index === stageList.length - 1 }"><button class="pipeline-node" :class="[`is-${stageVisualStatus(stage.key)}`, { 'is-selected': selectedStage === stage.key }]" type="button" :aria-label="`查看${stage.label}详情`" :aria-pressed="selectedStage === stage.key" @click="selectStage(stage.key)"><span class="node-icon">{{ stageIcon(stage.key) }}</span><span class="node-copy"><strong>{{ stage.label }}</strong><small>{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</small></span><span class="node-percent">{{ Math.round(stageState(stage.key).progress * 100) }}%</span></button><span v-if="index < stageList.length - 1" class="pipeline-connector" :class="{ 'is-complete': stageVisualStatus(stage.key) === 'completed' }" aria-hidden="true"></span></li></ol></div></section>
+          <section class="pipeline-panel" aria-labelledby="pipeline-title"><div class="panel-heading"><div><span class="section-kicker">PIPELINE</span><h3 id="pipeline-title">处理进度</h3><p class="pipeline-hint">选择节点打开配置</p></div><span class="live-badge"><i></i>{{ detail.isRunning ? '实时同步' : '状态已保存' }}</span></div><div class="pipeline-scroll"><ol class="pipeline-list"><li v-for="(stage, index) in stageList" :key="stage.key" class="pipeline-step" :class="{ 'is-last': index === stageList.length - 1 }"><button class="pipeline-node" :class="[`is-${stageVisualStatus(stage.key)}`, { 'is-selected': selectedStage === stage.key }]" type="button" :aria-label="`打开${stage.label}配置`" :aria-pressed="selectedStage === stage.key" @click="openStageConfig(stage.key)"><span class="node-icon">{{ stageIcon(stage.key) }}</span><span class="node-copy"><strong>{{ stage.label }}</strong><small>{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</small></span><span class="node-percent">{{ Math.round(stageState(stage.key).progress * 100) }}%</span></button><span v-if="index < stageList.length - 1" class="pipeline-connector" :class="{ 'is-complete': stageVisualStatus(stage.key) === 'completed' }" aria-hidden="true"></span></li></ol></div></section>
           <section class="inspector-grid"><article class="inspector-panel"><div class="inspector-heading"><div><span class="section-kicker">STAGE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3>{{ selectedStageMeta.label }}</h3><p>{{ selectedStageMeta.description }}</p></div><span class="stage-badge" :class="`is-${stageVisualStatus(selectedStage)}`">{{ stageStatusLabel(stageVisualStatus(selectedStage)) }}</span></div><div class="metric-row"><div><span>阶段进度</span><strong>{{ selectedStagePercent }}%</strong></div><div><span>阶段结果</span><strong>{{ stageMetric(selectedStage) }}</strong></div><div><span>更新时间</span><strong>{{ detail.job?.updated_at ? formatDate(detail.job.updated_at) : '—' }}</strong></div></div><div class="timeline-block"><div class="timeline-heading"><span>音频时间轴</span><small>{{ detail.transcript?.duration ? formatTime(detail.transcript.duration) : '等待时间轴数据' }}</small></div><div class="waveform" :class="{ muted: stageVisualStatus(selectedStage) === 'pending' }"><span v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}%` }"></span></div><div class="timeline-scale"><span>00:00</span><span>01:00</span><span>02:00</span><span>03:00</span></div></div><div class="log-block"><div class="log-heading"><span>处理日志</span><small>{{ detail.job?.updated_at ? new Date(detail.job.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '—' }}</small></div><p :class="{ 'is-error': !!selectedStageValue.error }"><i :class="`log-dot is-${stageVisualStatus(selectedStage)}`"></i>{{ selectedStageLog }}</p></div></article><aside class="transcript-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE PREVIEW</span><h3>字幕预览</h3></div><span v-if="detail.transcript" class="count-label">{{ detail.transcript.segments.length }} 条</span></div><div v-if="!detail.transcript" class="preview-empty"><span class="empty-wave" aria-hidden="true">∿</span><h4>字幕还在路上</h4><p>语音识别完成后，片段会显示在这里。</p></div><div v-else class="subtitle-list"><div v-for="segment in detail.transcript.segments.slice(0, 6)" :key="segment.id" class="subtitle-row"><div class="subtitle-time">{{ formatTime(segment.start) }}<br /><span>{{ formatTime(segment.end) }}</span></div><div><p>{{ segment.source_text }}</p><p class="translated-line">{{ segment.translated_text || '等待翻译' }}</p></div></div><div v-if="detail.transcript.segments.length > 6" class="more-hint">还有 {{ detail.transcript.segments.length - 6 }} 条字幕…</div></div></aside></section>
           <section class="outputs-rail"><div class="panel-heading"><div><span class="section-kicker">DELIVERABLES</span><h3>输出文件</h3></div><span class="count-label">{{ detail.outputs.length }} 个文件</span></div><div v-if="!detail.outputs.length" class="outputs-empty">导出完成后，SRT、VTT 或媒体文件会出现在这里。</div><div v-else class="output-list"><a v-for="output in detail.outputs" :key="output.name" class="output-item" :href="output.download_url" download><span class="output-icon">↓</span><span><strong>{{ output.name }}</strong><small>{{ formatOutputSize(output.size_bytes) }}</small></span><span class="download-label">下载</span></a></div></section>
+          <div v-if="configModalOpen" class="modal-backdrop" role="presentation" @click.self="closeStageConfig()">
+            <section class="config-modal" role="dialog" aria-modal="true" :aria-labelledby="`config-modal-${configModalStage}`">
+              <div class="config-modal-header"><div><span class="section-kicker">NODE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3 :id="`config-modal-${configModalStage}`">{{ configModalStageMeta.label }}配置</h3><p>{{ configModalStageMeta.description }}</p></div><button class="modal-close" type="button" aria-label="关闭节点配置" @click="closeStageConfig()">×</button></div>
+              <div v-if="detail.configLocked" class="modal-lock-note"><span aria-hidden="true">▣</span>任务运行或取消中，配置已锁定。完成后可以重新处理并修改。</div>
+              <form v-if="detail.config" class="config-modal-form" @submit.prevent="saveStageConfig">
+                <template v-if="configModalStage === 'preprocess'"><div class="modal-field-grid"><label class="config-field"><span>处理 Provider</span><select v-model="detail.config.preprocess.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="ffmpeg">FFmpeg（真实音频）</option></select></label><label class="config-field"><span>采样率</span><select v-model.number="detail.config.preprocess.sample_rate" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="8000">8 kHz</option><option :value="16000">16 kHz</option><option :value="44100">44.1 kHz</option><option :value="48000">48 kHz</option></select></label><label class="config-field"><span>声道数</span><select v-model.number="detail.config.preprocess.channels" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="1">单声道</option><option :value="2">双声道</option></select></label></div><label class="check-option modal-check"><input v-model="detail.config.preprocess.preserve_original" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>保留原始音频，便于后续重新处理</span></label></template>
+                <template v-else-if="configModalStage === 'asr'"><div class="modal-field-grid"><label class="config-field"><span>识别 Provider</span><select v-model="detail.config.asr.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="crispasr">CrispASR（本机）</option></select></label><label class="config-field"><span>识别后端</span><select v-model="detail.config.asr.backend" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="qwen3-1.7b">Qwen3 ASR 1.7B</option><option value="whisper">Whisper</option><option value="mega-asr">Mega ASR</option><option value="voxtral">Voxtral</option></select></label><label class="config-field"><span>识别模型</span><input v-model="detail.config.asr.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>识别语言</span><input v-model="detail.config.asr.language" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>分段时长（秒）</span><input v-model.number="detail.config.asr.chunk_seconds" type="number" min="1" max="600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label></div><label class="check-option modal-check"><input v-model="detail.config.asr.vad_enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用语音活动检测（VAD）</span></label></template>
+                <template v-else-if="configModalStage === 'alignment'"><label class="check-option modal-check"><input v-model="detail.config.alignment.enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用时间轴对齐</span></label><div class="modal-field-grid"><label class="config-field"><span>对齐 Provider</span><input v-model="detail.config.alignment.provider" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>对齐模型</span><input v-model="detail.config.alignment.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>失败回退策略</span><select v-model="detail.config.alignment.fallback" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="keep_asr_timestamps">保留识别时间轴</option><option value="fail_job">让任务失败</option></select></label></div></template>
+                <template v-else-if="configModalStage === 'translation'"><div class="modal-field-grid"><label class="config-field"><span>协议 Provider</span><select v-model="detail.config.translation.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="openai_chat">OpenAI-compatible Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label><label class="config-field"><span>模型</span><input v-model="detail.config.translation.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>目标语言</span><select v-model="detail.config.target_language" :disabled="detail.configLocked" @change="syncTranslationTarget"><option value="zh-CN">中文（简体）</option><option value="en">英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label><label class="config-field"><span>批量大小</span><input v-model.number="detail.config.translation.batch_size" type="number" min="1" max="128" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>温度</span><input v-model.number="detail.config.translation.temperature" type="number" min="0" max="2" step="0.1" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>请求超时（秒）</span><input v-model.number="detail.config.translation.timeout_seconds" type="number" min="1" max="3600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label></div><label class="config-field modal-wide-field"><span>接口地址（可选）</span><input v-model="detail.config.translation.base_url" type="url" placeholder="例如：https://api.openai.com/v1" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>API Key 环境变量名</span><input v-model="detail.config.translation.api_key_env" placeholder="例如：OPENAI_API_KEY（不会保存密钥值）" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>翻译指令（可选）</span><textarea v-model="detail.config.translation.instructions" rows="4" placeholder="告诉模型术语、语气或格式要求" :disabled="detail.configLocked" @input="detail.markConfigDirty"></textarea></label></template>
+                <template v-else><div class="modal-field-grid"><label class="config-field modal-wide-field"><span>文件命名方式</span><select v-model="detail.config.export.naming" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="language">按语言命名</option><option value="original">沿用源文件名</option></select></label></div><div class="format-picker"><span>导出格式</span><label v-for="format in ['srt', 'vtt', 'lrc']" :key="format" class="format-option"><input type="checkbox" :checked="detail.config.export.formats.includes(format)" :disabled="detail.configLocked" @change="toggleExportFormat(format)" /><span>{{ format.toUpperCase() }}</span></label></div><label class="check-option modal-check"><input v-model="detail.config.export.bilingual" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>导出双语字幕</span></label></template>
+                <ul v-if="detail.configErrors.length" class="config-errors modal-errors"><li v-for="message in detail.configErrors" :key="message">{{ message }}</li></ul>
+                <div class="config-modal-footer"><span>{{ hasModalChanges() ? '有未保存修改' : '当前节点配置已保存' }}</span><div><button class="secondary-button" type="button" @click="closeStageConfig()">取消</button><button class="primary-button" type="submit" :disabled="detail.configLocked || !hasModalChanges() || detail.configSaving">{{ detail.configSaving ? '保存中…' : '保存节点配置' }}</button></div></div>
+              </form>
+            </section>
+          </div>
         </template>
       </section>
     </main>

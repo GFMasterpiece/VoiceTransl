@@ -206,6 +206,52 @@ describe('project detail store', () => {
     await expect(store.saveConfig()).resolves.toBeDefined()
   })
 
+  it('normalizes protocol-specific translation settings for the node modal', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/config')) {
+        return Promise.resolve(jsonResponse({
+          source_language: 'en',
+          target_language: 'zh-CN',
+          asr: { language: 'en' },
+          translation: {
+            provider: 'openai_responses',
+            model: 'gpt-4.1-mini',
+            target_language: 'zh-CN',
+            base_url: 'https://api.openai.com/v1',
+            api_key_env: 'OPENAI_API_KEY',
+            batch_size: 12,
+            temperature: 0.3,
+            timeout_seconds: 180,
+            instructions: '保留专有名词',
+          },
+        }))
+      }
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(makeJob({ status: 'pending', current_stage: null })))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+
+    await store.load(project.id)
+
+    expect(store.config?.translation).toMatchObject({
+      provider: 'openai_responses',
+      model: 'gpt-4.1-mini',
+      base_url: 'https://api.openai.com/v1',
+      api_key_env: 'OPENAI_API_KEY',
+      batch_size: 12,
+      temperature: 0.3,
+      timeout_seconds: 180,
+      instructions: '保留专有名词',
+    })
+  })
+
   it('fetches all project resources and normalizes missing job stages', async () => {
     setActivePinia(createPinia())
     const incompleteJob = {
