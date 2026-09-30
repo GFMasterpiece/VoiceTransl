@@ -86,7 +86,7 @@ A change is complete only when affected tests pass, the API behavior matches the
 
 ## Agent workflow
 
-- When implementation work is requested, delegate code changes to a sub-agent using the `gpt-6-sol` model.
+- When implementation work is requested, delegate code changes to a sub-agent using the `gpt-6.1-sol` model.
 - The coordinating agent owns task decomposition, design decisions, integration, code review, and validation.
 - The coordinating agent should not directly write implementation code when a suitable sub-agent is available.
 - Choose the sub-agent reasoning effort according to task complexity.
