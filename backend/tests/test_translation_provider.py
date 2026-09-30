@@ -4,9 +4,11 @@ import time
 from urllib.error import URLError
 
 import pytest
-from app.domain import Segment, TranslationConfig
+from app.domain import JobStatus, Segment, TranslationConfig
+from app.main import create_app
 from app.providers.protocols import TranslationContext
 from app.providers.translation import HTTPTranslationProvider, TranslationProviderError
+from httpx import ASGITransport, AsyncClient
 
 
 def make_segments(count: int = 3) -> list[Segment]:
@@ -143,6 +145,45 @@ def test_translation_requires_api_key_from_configured_environment(monkeypatch):
     with pytest.raises(TranslationProviderError) as error:
         HTTPTranslationProvider(make_config("openai_chat"), http_call=lambda *_args: {})
     assert error.value.code == "TRANSLATION_API_KEY_MISSING"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("translation_overrides", "expected_code"),
+    [
+        (
+            {"base_url": None, "api_key_env": "MISSING_TRANSLATION_KEY"},
+            "TRANSLATION_PROVIDER_NOT_CONFIGURED",
+        ),
+        (
+            {"base_url": "https://translation.example/v1", "api_key_env": "MISSING_TRANSLATION_KEY"},
+            "TRANSLATION_API_KEY_MISSING",
+        ),
+    ],
+)
+async def test_manager_persists_translation_initialization_error(
+    tmp_path, monkeypatch, translation_overrides, expected_code
+):
+    monkeypatch.delenv("MISSING_TRANSLATION_KEY", raising=False)
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+        )
+        project_id = response.json()["project"]["id"]
+        config = app.state.store.load_pipeline_config(project_id)
+        translation = config.translation.model_copy(
+            update={"provider": "openai_chat", "model": "test-model", **translation_overrides}
+        )
+        app.state.store.save_pipeline_config(project_id, config.model_copy(update={"translation": translation}))
+
+        await app.state.jobs.start(project_id)
+        await app.state.jobs.tasks[project_id]
+
+    job = app.state.store.load_job(project_id)
+    assert job.status == JobStatus.FAILED
+    assert job.error is not None
+    assert job.error.type == expected_code
 
 
 @pytest.mark.asyncio

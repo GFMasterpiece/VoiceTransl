@@ -103,4 +103,7 @@ def stable_stage_error(exc: BaseException) -> tuple[str, str]:
 def stable_job_error(exc: BaseException) -> tuple[str, str]:
     """Map an internal exception to the stable job error contract."""
 
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code, str(exc)
     return "JOB_FAILED", "任务执行失败"
