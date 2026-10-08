@@ -270,6 +270,70 @@ describe('stage workspace navigation and configuration', () => {
   })
 })
 
+describe('ASR model discovery modal integration', () => {
+  const modelCatalog = {
+    provider: 'crispasr', executable: { ok: true, version: '0.8.38', message: 'CrispASR 可用' }, model_dir: './crispasr/models', restart_required: false,
+    backends: ['qwen3', 'qwen3-1.7b'], truncated: false, warnings: [],
+    items: [{ model: 'Qwen3-ASR-0.6B.gguf', backend: 'qwen3', size_bytes: 1024, architecture: 'qwen3asr', selectable: true, reason: null }],
+  }
+  async function openAsrModal() {
+    await chooseStage(1)
+    root!.querySelector<HTMLButtonElement>('.stage-config-button')!.click()
+    await settle()
+  }
+  async function selectDiscoveredModel() {
+    const picker = root!.querySelector<HTMLSelectElement>('#asr-discovered-model')!
+    picker.value = 'Qwen3-ASR-0.6B.gguf'
+    picker.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+  }
+
+  it('does not dirty a catalog-loaded draft, and cancellation restores model/backend plus previous dirty state', async () => {
+    const { fetch } = await mountWorkspace((path) => path.endsWith('/settings/local-asr/models') ? Promise.resolve(response(modelCatalog)) : undefined)
+    store.config!.asr.provider = 'crispasr'
+    store.configDirty = true
+    await openAsrModal()
+    expect(store.config!.asr.model).toBe('draft-asr')
+    expect(store.config!.asr.backend).toBe('qwen3-1.7b')
+    expect(root!.querySelector('.config-modal-footer')!.textContent).not.toContain('有未保存修改')
+    await selectDiscoveredModel()
+    expect(store.config!.asr.backend).toBe('qwen3')
+    expect(store.config!.asr.model).toBe('Qwen3-ASR-0.6B.gguf')
+    expect(store.config!.asr.language).toBe('ja')
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
+    expect(root!.textContent).toContain('有未保存修改')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    root!.querySelector<HTMLButtonElement>('.modal-close')!.click(); await settle()
+    expect(store.config!.asr.model).toBe('draft-asr')
+    expect(store.config!.asr.backend).toBe('qwen3-1.7b')
+    expect(store.configDirty).toBe(true)
+  })
+
+  it('persists a discovered qwen3 model only when explicitly saving the node configuration', async () => {
+    const { fetch } = await mountWorkspace((path) => path.endsWith('/settings/local-asr/models') ? Promise.resolve(response(modelCatalog)) : undefined)
+    store.config!.asr.provider = 'crispasr'
+    await openAsrModal()
+    expect(store.configDirty).toBe(false)
+    await selectDiscoveredModel()
+    expect(store.configDirty).toBe(true)
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
+    root!.querySelector('form.config-modal-form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'PUT')![1]!.body))
+    expect(saved.asr).toEqual({ ...config.asr, provider: 'crispasr', backend: 'qwen3', model: 'Qwen3-ASR-0.6B.gguf' })
+    expect(saved.translation).toEqual(config.translation)
+    expect(saved.export).toEqual(config.export)
+    expect(store.job!.config_snapshot!.asr.model).toBe('actual-asr')
+  })
+
+  it('keeps Mock modal configuration independent from a missing catalog route', async () => {
+    const { fetch } = await mountWorkspace((path) => path.endsWith('/settings/local-asr/models') ? Promise.resolve(response({ error: { message: '模型服务不可用' } }, 503)) : undefined)
+    await openAsrModal()
+    expect(fetch.mock.calls.some(([path]) => String(path).endsWith('/settings/local-asr/models'))).toBe(false)
+    expect(root!.querySelector('.asr-model-catalog')).toBeNull()
+    expect(store.configDirty).toBe(false)
+    expect(store.config!.asr.model).toBe('draft-asr')
+  })
+})
+
 describe('stage request isolation and event refresh', () => {
   it('ignores delayed responses from a previous stage and previous audio', async () => {
     const delayed: { resolve: (response: Response) => void; payload: StageDetail }[] = []

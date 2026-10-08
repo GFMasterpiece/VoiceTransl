@@ -182,6 +182,21 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
   .global-settings-modal .config-modal-footer > div { flex-wrap: wrap; }
 }
 @media (max-width: 360px) { .topbar-status { font-size: 10px; gap: 6px; } .topbar-settings { gap: 4px; } }
+
+.asr-model-catalog { margin-top: 24px; padding: 20px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.asr-catalog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.asr-catalog-heading h4 { margin: 0; color: var(--ink); font-size: 14px; }
+.asr-catalog-heading button { flex-shrink: 0; }
+.asr-model-catalog code { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asr-catalog-picker { margin-top: 16px; }
+.asr-catalog-picker select { min-width: 0; max-width: 100%; }
+.asr-catalog-loading, .asr-catalog-empty, .asr-catalog-warnings { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.asr-catalog-loading .settings-skeleton { margin-top: 12px; }
+.asr-catalog-empty { margin: 16px 0 0; }
+.asr-catalog-warnings { margin: 12px 0 0; padding-left: 20px; }
+.asr-parameter-grid { margin-top: 16px; }
+.asr-config-fields > .modal-check { margin-top: 20px; }
+@media (max-width: 360px) { .asr-catalog-heading { align-items: flex-start; flex-direction: column; gap: 8px; } }
 @media (max-width: 640px) { .stage-workspace { padding: 24px 16px; }.stage-workspace-heading { align-items: flex-start; flex-direction: column; }.stage-workspace-actions { width: 100%; flex-wrap: wrap; }.stage-metrics { grid-template-columns: 1fr; }.stage-config-summary, .stage-metadata { grid-template-columns: 1fr; gap: 16px; } }
 .upload-queue { margin-top: 24px; }
 .upload-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

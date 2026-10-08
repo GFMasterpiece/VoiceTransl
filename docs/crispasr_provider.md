@@ -32,9 +32,9 @@ Settings responses use config-relative paths or authorized-root aliases such as
 `@root/1/models` to keep private absolute directories on the backend. These
 representations preserve the actual runtime paths and their allowed-root limits.
 
-This phase does not discover or list models, add an ASR model dropdown, or detect
-language automatically. Language remains manual. The directory check only tests
-path validity/readability; it does not run model inference or prove ASR readiness.
+Local model discovery is available in the ASR configuration modal. Language
+remains manual. The global directory check only tests path validity/readability;
+neither that check nor model discovery runs inference or proves ASR readiness.
 
 Set a project's ASR provider to `crispasr`, choose a model filename already in
 that directory, and select a supported backend. The provider invokes the CLI
@@ -43,6 +43,60 @@ without a shell using the verified flags `--backend`, `--model`, `--language`,
 `--vad --vad-max-speech-duration-s`. The chunk duration maps to the latter VAD
 flag. Client values are identifiers only; executable and model paths remain
 server configuration.
+
+## Local model discovery
+
+`GET /api/v1/settings/local-asr/models` uses the same local-only access rules as
+global settings and takes no user-supplied path. Any query parameters are rejected
+with `422 MODEL_DISCOVERY_ARGUMENTS_NOT_ALLOWED`. It scans the **active runtime**
+model directory, not a newly saved directory awaiting backend restart. Paths in
+the response use config-relative or authorized-root alias representations.
+
+The response contains:
+
+| Field | Meaning |
+| --- | --- |
+| `provider` | Always `crispasr` |
+| `executable` | CLI probe result: `ok`, nullable `version`, and `message` |
+| `model_dir` | Active directory in privacy-preserving form |
+| `restart_required` | Whether saved settings differ from the active runtime |
+| `backends` | Intersection of VoiceTransl-supported and CLI-compiled backends |
+| `items` | `model`, nullable `backend`, `size_bytes`, nullable `architecture`, `selectable`, and nullable `reason` for each discovered file |
+| `truncated`, `warnings` | Scan limits or diagnostics; do not assume the list is exhaustive when truncated |
+
+Discovery reads shallow `.gguf` metadata to identify a compatible backend. It
+does not recurse, load weights, access the GPU, run inference, download models,
+or detect language. Unknown, damaged, or incompatible files remain visible but
+disabled with a reason. `selectable` indicates metadata and CLI compatibility,
+not successful model loading or GPU/inference readiness.
+
+The initial metadata mapping is `general.architecture = qwen3asr` → `qwen3`.
+Other architectures remain disabled when their mapping cannot be confirmed;
+this does not remove existing manually configured backend support. The CLI is
+probed only with fixed `--version` and `--list-backends-json` commands, not once
+per model. Discovery excludes symlinks, non-regular files and unsafe filenames.
+The directory scan is bounded to 4,096 entries, 128 model files and five seconds;
+each GGUF parse is limited to two seconds and 16 MiB of metadata/descriptors.
+Additional parser bounds cap metadata entries, tensors, arrays, strings and
+nesting. These are scan budgets; CLI probes have their own time and output limits.
+Cancelled scans receive a stop signal and are joined before another scan starts.
+Limits produce diagnostics instead of unbounded reads. Tensor offsets are checked
+against file size without reading weights; this is not full model integrity validation.
+
+The CrispASR ASR modal fetches once when opened and offers an explicit refresh.
+Explicitly choosing a
+selectable file sets its model filename and matching backend in the draft. It
+never selects the first result automatically, saves the configuration
+automatically, or changes language. Existing and manually entered model values
+remain available; a refreshed list does not replace them. Manual model input
+must remain a single trusted filename. Running or queued audio allows viewing
+and refreshing discovery while model fields and selection remain read-only.
+Directory, CLI, timeout, malformed-response and network failures have separate
+diagnostics and point users to global settings; pending-restart notices show
+the active directory in privacy-preserving form.
+
+The supported backend set includes `qwen3` for the general 0.6B family. Existing
+`qwen3-1.7b` parameters remain supported rather than being rewritten to `qwen3`.
 
 The executable must write an SRT (or JSON transcript) to the requested output
 base. SRT cues and JSON segments are validated for non-empty text, finite
