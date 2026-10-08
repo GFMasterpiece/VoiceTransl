@@ -53,6 +53,11 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class UploadPolicyResponse(BaseModel):
+    allowed_extensions: list[str]
+    max_upload_bytes: int
+
+
 class ProjectListResponse(BaseModel):
     items: list[Project]
 
@@ -95,6 +100,15 @@ class OutputsResponse(BaseModel):
 @router.get("/health", response_model=HealthResponse)
 async def health():
     return {"status": "ok"}
+
+
+@router.get("/upload-policy", response_model=UploadPolicyResponse)
+async def upload_policy(request: Request):
+    settings = deps(request).settings
+    return UploadPolicyResponse(
+        allowed_extensions=settings.allowed_extensions,
+        max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
+    )
 
 
 @router.post("/projects", status_code=201, response_model=CreateProjectResponse)
