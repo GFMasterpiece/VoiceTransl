@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import App from './App.vue'
+import stylesheet from './style.css?raw'
 import { useProjectDetailStore, type Job, type PipelineConfig, type StageDetail, type StageName } from './stores/projectDetail'
 
 const names: StageName[] = ['preprocess', 'asr', 'alignment', 'translation', 'export']
@@ -86,6 +87,57 @@ async function chooseStage(index: number) {
 afterEach(() => { app?.unmount(); app = undefined; store?.stop(); root?.remove(); root = undefined; FakeSocket.instances.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('stage workspace navigation and configuration', () => {
+  it('keeps the locked stage label typography while scoping larger type to the plus icon', async () => {
+    await mountWorkspace()
+    store.job!.status = 'pending'
+    await nextTick()
+    const style = document.createElement('style')
+    style.textContent = stylesheet
+    document.head.append(style)
+    try {
+      const button = root!.querySelector<HTMLButtonElement>('.stage-config-button')!
+      const suffix = button.querySelector('span')!
+      const icon = root!.querySelector<HTMLElement>('button[aria-label="新建项目"] > span')!
+      expect(button.textContent).toBe('配置此阶段 · 只读')
+      expect(button.disabled).toBe(false)
+
+      // jsdom does not reliably resolve inherited font properties. Check the real CSS rules
+      // to ensure neither the text suffix nor loader overrides button typography.
+      const rules = Array.from(style.sheet!.cssRules).filter(
+        (rule): rule is CSSStyleRule => rule.type === CSSRule.STYLE_RULE,
+      )
+      const buttonRule = rules.find((rule) => rule.selectorText === '.primary-button')!
+      expect(button.matches(buttonRule.selectorText)).toBe(true)
+      expect(buttonRule.style.getPropertyValue('font-size')).toBe('13px')
+      expect(buttonRule.style.getPropertyValue('font-weight')).toBe('700')
+      const iconRule = rules.find((rule) => rule.style.getPropertyValue('font-size') === '19px' && icon.matches(rule.selectorText))!
+      expect(icon.getAttribute('aria-hidden')).toBe('true')
+      expect(iconRule.style.getPropertyValue('font-weight')).toBe('400')
+      expect(iconRule.style.getPropertyValue('line-height')).toBe('1')
+      expect(suffix.matches(iconRule.selectorText)).toBe(false)
+
+      const hasNoTypographyOverride = (element: Element) => {
+        const matching = rules.filter((rule) => element.matches(rule.selectorText))
+        for (const property of ['font', 'font-family', 'font-size', 'font-weight', 'line-height']) {
+          expect(matching.every((rule) => !rule.style.getPropertyValue(property))).toBe(true)
+        }
+      }
+      hasNoTypographyOverride(suffix)
+      store.job!.status = 'completed'
+      store.actionLoading = true
+      await nextTick()
+      const loader = root!.querySelector<HTMLElement>('.workspace-actions .button-loader')!
+      hasNoTypographyOverride(loader)
+      expect(loader.matches(iconRule.selectorText)).toBe(false)
+      const loaderRule = rules.find((rule) => rule.selectorText === '.button-loader')!
+      expect(loader.matches(loaderRule.selectorText)).toBe(true)
+      expect(loaderRule.style.getPropertyValue('width')).toBe('14px')
+      expect(loaderRule.style.getPropertyValue('height')).toBe('14px')
+    } finally {
+      style.remove()
+    }
+  })
+
   it('has one navigation and one workspace; every stage selects its own real content without opening a modal', async () => {
     await mountWorkspace()
     expect(root!.querySelector('.config-overview')).toBeNull()
