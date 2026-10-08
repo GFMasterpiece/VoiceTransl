@@ -3,12 +3,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useProjectsStore, type Project } from './stores/projects'
 import { useProjectDetailStore, type Stage, type StageName } from './stores/projectDetail'
 import { useUploadQueue, type UploadPolicy, type UploadStatus } from './composables/useUploadQueue'
+import GlobalSettingsModal from './components/GlobalSettingsModal.vue'
 
 type View = 'list' | 'create' | 'detail'
 
 const store = useProjectsStore()
 const detail = useProjectDetailStore()
 const view = ref<View>('list')
+const globalSettingsOpen = ref(false)
 const projectName = ref('')
 const sourceLanguage = ref('ja')
 const upload = useUploadQueue((file, name, language) => store.createProject(file, name, language), (id, file, language) => store.addAudio(id, file, language))
@@ -129,6 +131,7 @@ function stageConfigSummary(key: StageName) {
 }
 
 function openStageConfig(key: StageName) {
+  if (globalSettingsOpen.value) return
   if (!detail.config || detail.loading || detail.configLoading || detail.actionLoading || detail.configSaving) return
   selectedStage.value = key
   configModalStage.value = key
@@ -399,12 +402,13 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
-    <header class="topbar">
+    <header class="topbar" :inert="globalSettingsOpen">
       <a class="brand" href="#" aria-label="VoiceTransl 首页" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">语音翻译工作台</span><div class="topbar-status"><span class="status-dot"></span>服务已连接</div>
+      <button class="topbar-settings" type="button" aria-label="全局设置" :disabled="configModalOpen" :title="configModalOpen ? '关闭节点配置后可打开全局设置' : '全局设置'" @click="globalSettingsOpen = true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9.5 3-.5 2-2 .9-1.9-.6-2 3.4L4.6 10v2L3 13.4l2 3.5 2-.6 2 .9.5 2h4l.5-2 2-.9 2 .6 2-3.5-1.6-1.4v-2L20 8.7l-2-3.4-2 .6-2-.9-.5-2Z"/><circle cx="11.5" cy="11.1" r="3"/></svg><span>设置</span></button>
     </header>
 
-    <main class="main-content">
+    <main class="main-content" :inert="globalSettingsOpen">
       <section class="page-heading"><div><p class="eyebrow">VOICE / TRANSLATE</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div v-if="view !== 'create'" class="heading-actions"><button class="primary-button" type="button" aria-label="新建项目" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span> 新建项目</button><button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button" type="button" aria-label="返回上传队列" @click="returnUploadQueue">返回上传队列</button></div></section>
 
       <div v-if="currentError" class="alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" aria-label="关闭提示" @click="view === 'detail' ? (detail.error = '') : (store.error = '')">×</button></div>
@@ -512,5 +516,6 @@ onUnmounted(() => {
         </template>
       </section>
     </main>
+    <GlobalSettingsModal v-if="globalSettingsOpen" @close="globalSettingsOpen = false" />
   </div>
 </template>

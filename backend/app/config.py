@@ -47,6 +47,7 @@ class AppSettings(BaseModel):
         "./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr"
     )
     crispasr_model_dir: Path = Path("./crispasr/models")
+    crispasr_allowed_roots: list[Path] = Field(default_factory=lambda: [Path("./crispasr")])
     crispasr_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
 
     @field_validator("log_level")
@@ -84,6 +85,9 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
     )
     crispasr_executable = app.get("crispasr_executable", defaults.crispasr_executable)
     crispasr_model_dir = app.get("crispasr_model_dir", defaults.crispasr_model_dir)
+    crispasr_allowed_roots = app.get("crispasr_allowed_roots", defaults.crispasr_allowed_roots)
+    if not isinstance(crispasr_allowed_roots, list):
+        raise ValueError("app.crispasr_allowed_roots must be a list of local directories")
     for key, value in (
         ("crispasr_executable", crispasr_executable),
         ("crispasr_model_dir", crispasr_model_dir),
@@ -114,6 +118,10 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "ffmpeg_path": app.get("ffmpeg_path", defaults.ffmpeg_path),
         "crispasr_executable": crispasr_executable,
         "crispasr_model_dir": crispasr_model_dir,
+        "crispasr_allowed_roots": [
+            config_root / root if not Path(root).is_absolute() else Path(root)
+            for root in crispasr_allowed_roots
+        ],
         "crispasr_timeout_seconds": app.get(
             "crispasr_timeout_seconds", defaults.crispasr_timeout_seconds
         ),
@@ -147,6 +155,11 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
             for extension in os.environ["VOICETRANSL_ALLOWED_EXTENSIONS"].split(",")
             if extension.strip()
         ]
+    # Environment paths share the YAML repository-relative interpretation.
+    for field in ("crispasr_executable", "crispasr_model_dir"):
+        path = Path(values[field])
+        if config_file and not path.is_absolute():
+            values[field] = config_root / path
     return AppSettings(**values)
 
 
