@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SourceAsset(BaseModel):
@@ -30,6 +30,22 @@ class SourceAsset(BaseModel):
         return value
 
 
+PRIMARY_AUDIO_ID = "aud_primary"
+
+
+class AudioAsset(BaseModel):
+    id: str
+    source: SourceAsset
+    name: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if not value or value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("invalid audio id")
+        return value
+
+
 class Project(BaseModel):
     schema_version: str = "1.0"
     id: str
@@ -39,3 +55,14 @@ class Project(BaseModel):
     source: SourceAsset
     preset: str = "mock"
     metadata: dict[str, object] = Field(default_factory=dict)
+    audios: list[AudioAsset] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_audios(self):
+        # Old project files gain a virtual primary resource without moving files.
+        primary = AudioAsset(id=PRIMARY_AUDIO_ID, source=self.source)
+        extras = [audio for audio in self.audios if audio.id != PRIMARY_AUDIO_ID]
+        if len({audio.id for audio in extras}) != len(extras):
+            raise ValueError("duplicate audio id")
+        self.audios = [primary, *extras]
+        return self

@@ -6,13 +6,14 @@ from app.main import create_app
 
 
 class WebSocketHarness:
-    def __init__(self, app, project_id: str, fail_send_after: int | None = None):
+    def __init__(self, app, project_id: str, fail_send_after: int | None = None, audio_id=None):
         self.app = app
         self.project_id = project_id
         self.incoming = asyncio.Queue()
         self.sent = []
         self._connected = False
         self.fail_send_after = fail_send_after
+        self.audio_id = audio_id
 
     async def receive(self):
         if not self._connected:
@@ -26,13 +27,15 @@ class WebSocketHarness:
         self.sent.append(message)
 
     async def run(self):
+        resource = f"/audios/{self.audio_id}" if self.audio_id else ""
+        path = f"/api/v1/projects/{self.project_id}{resource}/events"
         scope = {
             "type": "websocket",
             "asgi": {"version": "3.0", "spec_version": "2.3"},
             "http_version": "1.1",
             "scheme": "ws",
-            "path": f"/api/v1/projects/{self.project_id}/events",
-            "raw_path": f"/api/v1/projects/{self.project_id}/events".encode(),
+            "path": path,
+            "raw_path": path.encode(),
             "query_string": b"",
             "headers": [],
             "client": ("testclient", 50000),

@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import (
@@ -14,10 +16,11 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from ..config import load_preset
 from ..domain import Job, JobStatus, PipelineConfig, Project, SourceAsset, default_stages
+from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
 router = APIRouter(prefix="/api/v1")
@@ -47,6 +50,35 @@ def get_job(state, pid):
 
 class RunRequest(BaseModel):
     resume: bool = True
+
+
+class AudioRunRequest(RunRequest):
+    audio_ids: list[str] = Field(min_length=1)
+
+    @field_validator("audio_ids")
+    @classmethod
+    def unique_ids(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("audio_ids must be unique")
+        return value
+
+
+def audio_request(request, pid, aid):
+    state = deps(request)
+    get_project(state, pid)
+    try:
+        store = state.store.scope(pid, aid)
+    except (ProjectNotFound, ValueError):
+        raise HTTPException(
+            404, detail={"error": {"code": "AUDIO_NOT_FOUND", "message": "音频不存在"}}
+        )
+    jobs = SimpleNamespace(
+        running=partial(state.jobs.running, audio_id=aid),
+        start=partial(state.jobs.start, audio_id=aid),
+        cancel=partial(state.jobs.cancel, audio_id=aid),
+        _lock=partial(state.jobs._lock, audio_id=aid),
+    )
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(store=store, jobs=jobs)))
 
 
 class HealthResponse(BaseModel):
@@ -214,6 +246,11 @@ async def pipeline_config(pid: str, request: Request):
 
 @router.put("/projects/{pid}/config", response_model=PipelineConfig)
 async def update_pipeline_config(pid: str, value: PipelineConfig, request: Request):
+    async with deps(request).jobs._lock(pid):
+        return _update_pipeline_config(pid, value, request)
+
+
+def _update_pipeline_config(pid, value, request):
     state = deps(request)
     get_project(state, pid)
     current = get_job(state, pid)
@@ -360,10 +397,11 @@ async def output(pid: str, filename: str, request: Request):
 
 
 @router.websocket("/projects/{pid}/events")
-async def events(ws: WebSocket, pid: str):
+async def events(ws: WebSocket, pid: str, audio_id: str | None = None):
     state = ws.app.state
     try:
         state.store.load_project(pid)
+        store = state.store.scope(pid, audio_id or PRIMARY_AUDIO_ID)
     except Exception:
         await ws.close(code=4404)
         return
@@ -373,7 +411,7 @@ async def events(ws: WebSocket, pid: str):
     event_task = None
     try:
         try:
-            job = state.store.load_job(pid)
+            job = store.load_job(pid)
         except (ProjectNotFound, ValueError):
             await ws.close(code=4404)
             return
@@ -383,6 +421,7 @@ async def events(ws: WebSocket, pid: str):
                 "event_id": f"evt_{uuid4().hex}",
                 "type": "job.snapshot",
                 "project_id": pid,
+                "audio_id": job.audio_id,
                 "job_id": job.id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "data": job.model_dump(mode="json"),
@@ -400,7 +439,9 @@ async def events(ws: WebSocket, pid: str):
                     break
                 receive_task = asyncio.create_task(ws.receive())
             if event_task in done:
-                await ws.send_json(event_task.result())
+                event = event_task.result()
+                if audio_id is None or event.get("audio_id", PRIMARY_AUDIO_ID) == audio_id:
+                    await ws.send_json(event)
                 event_task = asyncio.create_task(q.get())
     except (WebSocketDisconnect, asyncio.CancelledError, OSError, RuntimeError):
         # A send can fail when the peer has already disconnected.
@@ -422,3 +463,123 @@ async def events(ws: WebSocket, pid: str):
                 # A second cancellation can interrupt shield itself; wait for
                 # the already-cancelled children before returning.
                 await cleanup
+
+
+@router.get("/projects/{pid}/audios")
+async def audios(pid: str, request: Request):
+    state = deps(request)
+    project = get_project(state, pid)
+    return {
+        "items": [
+            {**audio.model_dump(mode="json"), "job": state.jobs.job(pid, audio.id)}
+            for audio in project.audios
+        ]
+    }
+
+
+@router.post("/projects/{pid}/audios", status_code=201)
+async def append_audio(
+    pid: str,
+    request: Request,
+    file: UploadFile = File(...),
+    source_language: str = Form("ja"),
+    name: str | None = Form(None),
+):
+    state = deps(request)
+    get_project(state, pid)
+    suffix = Path(file.filename or "").suffix.lower().lstrip(".")
+    if suffix not in state.settings.allowed_extensions:
+        raise HTTPException(
+            415, detail={"error": {"code": "UNSUPPORTED_MEDIA_TYPE", "message": "不支持的音频格式"}}
+        )
+    aid = "aud_" + uuid4().hex
+    audio = AudioAsset(
+        id=aid,
+        name=name,
+        source=SourceAsset(
+            path=f"audios/{aid}/source/original.{suffix}",
+            original_name=file.filename or f"original.{suffix}",
+            media_type=file.content_type,
+            size_bytes=0,
+            language=source_language,
+        ),
+    )
+    job = Job(id="job_" + uuid4().hex, project_id=pid, audio_id=aid)
+    try:
+        audio, job = await state.store.append_audio(
+            pid, audio, job, file, state.settings.max_upload_mb * 1024 * 1024
+        )
+    except SourceUploadTooLarge:
+        raise HTTPException(
+            413, detail={"error": {"code": "FILE_TOO_LARGE", "message": "文件过大"}}
+        )
+    except ProjectNotFound:
+        get_project(state, pid)
+        raise
+    return {"audio": audio, "job": job}
+
+
+@router.post("/projects/{pid}/audios/run", status_code=202)
+async def run_audios(pid: str, body: AudioRunRequest, request: Request):
+    state = deps(request)
+    project = get_project(state, pid)
+    if not set(body.audio_ids).issubset({audio.id for audio in project.audios}):
+        raise HTTPException(
+            404, detail={"error": {"code": "AUDIO_NOT_FOUND", "message": "选择的音频不存在"}}
+        )
+    items = []
+    for aid in body.audio_ids:
+        try:
+            result = await run_audio(pid, aid, RunRequest(resume=body.resume), request)
+            items.append({"audio_id": aid, **result})
+        except HTTPException as error:
+            items.append({"audio_id": aid, "error": error.detail["error"]})
+    return {"items": items}
+
+
+@router.get("/projects/{pid}/audios/{aid}/config", response_model=PipelineConfig)
+async def audio_config(pid: str, aid: str, request: Request):
+    return await pipeline_config(pid, audio_request(request, pid, aid))
+
+
+@router.put("/projects/{pid}/audios/{aid}/config", response_model=PipelineConfig)
+async def update_audio_config(pid: str, aid: str, value: PipelineConfig, request: Request):
+    return await update_pipeline_config(pid, value, audio_request(request, pid, aid))
+
+
+@router.post("/projects/{pid}/audios/{aid}/run", status_code=202, response_model=RunResponse)
+async def run_audio(pid: str, aid: str, body: RunRequest, request: Request):
+    return await run(pid, body, audio_request(request, pid, aid))
+
+
+@router.post("/projects/{pid}/audios/{aid}/cancel")
+async def cancel_audio(pid: str, aid: str, request: Request):
+    return await cancel(pid, audio_request(request, pid, aid))
+
+
+@router.get("/projects/{pid}/audios/{aid}/job", response_model=Job)
+async def audio_job(pid: str, aid: str, request: Request):
+    return await job(pid, audio_request(request, pid, aid))
+
+
+@router.get("/projects/{pid}/audios/{aid}/transcript", response_model=TranscriptResponse)
+async def audio_transcript(pid: str, aid: str, request: Request):
+    return await transcript(pid, audio_request(request, pid, aid))
+
+
+@router.get("/projects/{pid}/audios/{aid}/outputs", response_model=OutputsResponse)
+async def audio_outputs(pid: str, aid: str, request: Request):
+    result = await outputs(pid, audio_request(request, pid, aid))
+    for item in result["items"]:
+        item["download_url"] = f"/api/v1/projects/{pid}/audios/{aid}/outputs/{item['name']}"
+    return result
+
+
+@router.get("/projects/{pid}/audios/{aid}/outputs/{filename}")
+async def audio_output(pid: str, aid: str, filename: str, request: Request):
+    return await output(pid, filename, audio_request(request, pid, aid))
+
+
+@router.websocket("/projects/{pid}/audios/{aid}/events")
+async def audio_events(ws: WebSocket, pid: str, aid: str):
+    await events(ws, pid, audio_id=aid)

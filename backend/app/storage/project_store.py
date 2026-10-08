@@ -3,9 +3,11 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from uuid import uuid4
 
 from ..domain import Job, JobStatus, PipelineConfig, Project, Transcript, default_pipeline_config
+from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
 from .atomic import atomic_write_bytes, atomic_write_json, atomic_write_text
 
 
@@ -28,6 +30,65 @@ class FileSystemProjectStore:
         if self.projects_dir.exists() and self.projects_dir.is_symlink():
             raise ValueError("projects directory must not be a symlink")
         self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self._metadata_lock = RLock()
+        self._mutation_locks: dict[str, asyncio.Lock] = {}
+
+    def mutation_lock(self, project_id: str) -> asyncio.Lock:
+        return self._mutation_locks.setdefault(project_id, asyncio.Lock())
+
+    def audio(self, project_id: str, audio_id: str) -> AudioAsset:
+        for audio in self.load_project(project_id).audios:
+            if audio.id == audio_id:
+                return audio
+        raise ProjectNotFound(audio_id)
+
+    def scope(self, project_id: str, audio_id: str = PRIMARY_AUDIO_ID):
+        self.audio(project_id, audio_id)
+        if audio_id == PRIMARY_AUDIO_ID:
+            return PrimaryAudioProjectStore(self, project_id)
+        return AudioProjectStore(self, project_id, audio_id)
+
+    async def append_audio(self, project_id, audio, job, upload, max_bytes):
+        # Stage a complete resource before publishing its metadata membership.
+        async with self.mutation_lock(project_id):
+            self.load_project(project_id)
+            root = self._project_subdir(project_id, "audios")
+            target = root / audio.id
+            temporary = root / f".{audio.id}.tmp_{uuid4().hex}"
+            total = 0
+            try:
+                temporary.mkdir()
+                for name in ("source", "cache", "transcript", "output", "logs"):
+                    (temporary / name).mkdir()
+                source = temporary / "source" / Path(audio.source.path).name
+                with source.open("wb") as stream:
+                    while chunk := await upload.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise SourceUploadTooLarge
+                        stream.write(chunk)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                audio.source.size_bytes = total
+                audio.source.path = f"audios/{audio.id}/source/{source.name}"
+                atomic_write_json(temporary / "job.json", job.model_dump(mode="json"))
+                if target.exists():
+                    raise FileExistsError(audio.id)
+                os.replace(temporary, target)
+                with self._metadata_lock:
+                    project = self.load_project(project_id)
+                    project.audios.append(audio)
+                    project.updated_at = datetime.now(timezone.utc)
+                    self.save_project(project)
+                return audio, job
+            except (Exception, asyncio.CancelledError):
+                shutil.rmtree(temporary, ignore_errors=True)
+                # Only unpublished upload artifacts can be removed here.
+                if target.exists() and all(
+                    existing.id != audio.id for existing in self.load_project(project_id).audios
+                ):
+                    shutil.rmtree(target)
+                raise
 
     def project_dir(self, project_id: str) -> Path:
         if not project_id or project_id in (".", "..") or "/" in project_id or "\\" in project_id:
@@ -57,6 +118,13 @@ class FileSystemProjectStore:
         if root not in candidate.parents:
             raise ValueError("project path escapes project directory")
         return candidate
+
+    def resolve_artifact_path(self, project_id: str, relative_path: str) -> Path:
+        resolved = self.resolve_project_path(project_id, relative_path)
+        canonical = resolved.relative_to(self.project_dir(project_id))
+        if canonical.parts[0] == "audios":
+            raise ValueError("artifact belongs to another audio")
+        return resolved
 
     def source_path(self, project_id: str, relative_path: str) -> Path:
         path = self.resolve_project_path(project_id, relative_path)
@@ -161,7 +229,7 @@ class FileSystemProjectStore:
 
     def load_project(self, project_id: str) -> Project:
         path = self.project_dir(project_id) / "project.json"
-        if not path.exists():
+        if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(project_id)
         return Project.model_validate_json(path.read_text(encoding="utf-8"))
 
@@ -172,18 +240,22 @@ class FileSystemProjectStore:
 
     def load_job(self, project_id: str) -> Job:
         path = self.project_dir(project_id) / "job.json"
-        if not path.exists():
+        if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(project_id)
-        return Job.model_validate_json(path.read_text(encoding="utf-8"))
+        job = Job.model_validate_json(path.read_text(encoding="utf-8"))
+        if job.project_id != project_id or job.audio_id != PRIMARY_AUDIO_ID:
+            raise ValueError("invalid primary job ownership")
+        return job
 
     def _touch_project(self, project_id: str) -> None:
-        project = self.load_project(project_id)
-        project.updated_at = datetime.now(timezone.utc)
-        atomic_write_json(
-            self.project_dir(project_id) / "project.json", project.model_dump(mode="json")
-        )
+        with self._metadata_lock:
+            project = self.load_project(project_id)
+            project.updated_at = datetime.now(timezone.utc)
+            self.save_project(project)
 
     def save_job(self, job: Job) -> None:
+        if job.audio_id != PRIMARY_AUDIO_ID:
+            raise ValueError("additional audio jobs require a scoped store")
         atomic_write_json(
             self.project_dir(job.project_id) / "job.json", job.model_dump(mode="json")
         )
@@ -193,6 +265,8 @@ class FileSystemProjectStore:
         """Load a project's editable config, providing a legacy-safe default."""
 
         path = self.project_dir(project_id) / "config.json"
+        if path.is_symlink():
+            raise ValueError("config must not be a symlink")
         if not path.exists():
             project = self.load_project(project_id)
             return default_pipeline_config(project.source.language)
@@ -298,6 +372,13 @@ class FileSystemProjectStore:
             else []
         )
 
+    def prune_generated_outputs(self, project_id: str, keep: set[str]) -> None:
+        generated = {"zh.srt", "ja-zh.srt", "zh.vtt", "ja-zh.vtt", "zh.lrc"}
+        for name in generated - keep:
+            path = self._project_subdir(project_id, "output") / name
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+
     def resolve_output(self, project_id: str, filename: str) -> Path:
         if not filename or "/" in filename or "\\" in filename or ".." in filename:
             raise ValueError("invalid output filename")
@@ -309,16 +390,134 @@ class FileSystemProjectStore:
 
     def mark_interrupted(self) -> None:
         for p, project in self._published_projects():
-            path = p / "job.json"
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                job = Job.model_validate_json(path.read_text(encoding="utf-8"))
-                if job.project_id != project.id:
+            for audio in project.audios:
+                try:
+                    scope = self.scope(project.id, audio.id)
+                    job = scope.load_job(project.id)
+                    if job.project_id != project.id or job.audio_id != audio.id:
+                        continue
+                    if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
+                        job.status == JobStatus.PENDING and job.config_snapshot is not None
+                    ):
+                        job.status = JobStatus.INTERRUPTED
+                        job.updated_at = datetime.now(timezone.utc)
+                        scope.save_job(job)
+                except Exception:
                     continue
-                if job.status.value in ("running", "cancelling"):
-                    job.status = JobStatus.INTERRUPTED
-                    job.updated_at = datetime.now(timezone.utc)
-                    self.save_job(job)
-            except Exception:
-                continue
+
+
+class PrimaryAudioProjectStore:
+    """Keep legacy root artifacts while isolating the primary config override."""
+
+    def __init__(self, parent, project_id):
+        self.parent = parent
+        self.project_id = project_id
+
+    def __getattr__(self, name):
+        return getattr(self.parent, name)
+
+    def _config_path(self, project_id):
+        if project_id != self.project_id:
+            raise ValueError("wrong audio project")
+        return self.parent.project_dir(project_id) / "primary-config.json"
+
+    def load_pipeline_config(self, project_id):
+        path = self._config_path(project_id)
+        if path.is_symlink():
+            raise ValueError("config must not be a symlink")
+        if path.exists():
+            return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+        return self.parent.load_pipeline_config(project_id)
+
+    def save_pipeline_config(self, project_id, value):
+        atomic_write_json(self._config_path(project_id), value.model_dump(mode="json"))
+        self.parent._touch_project(project_id)
+
+
+class AudioProjectStore(FileSystemProjectStore):
+    """A pipeline store view retaining parent IDs and project-relative artifacts."""
+
+    def __init__(self, parent, project_id, audio_id):
+        self.parent = parent
+        self.project_id = project_id
+        self.audio_id = audio_id
+
+    def project_dir(self, project_id):
+        if project_id != self.project_id:
+            raise ValueError("wrong audio project")
+        return self.parent.project_dir(project_id)
+
+    def audio_dir(self):
+        self.parent.audio(self.project_id, self.audio_id)
+        root = self.parent._project_subdir(self.project_id, "audios")
+        candidate = root / self.audio_id
+        resolved = candidate.resolve()
+        if candidate.is_symlink() or root.resolve() not in resolved.parents:
+            raise ValueError("invalid audio directory")
+        if not candidate.is_dir():
+            raise ProjectNotFound(self.audio_id)
+        return candidate
+
+    def _project_subdir(self, project_id, name):
+        self.project_dir(project_id)
+        root = self.audio_dir()
+        child = root / name
+        if child.is_symlink() or root.resolve() not in child.resolve().parents:
+            raise ValueError("invalid audio subdirectory")
+        child.mkdir(exist_ok=True)
+        return child
+
+    def resolve_project_path(self, project_id, relative_path):
+        prefix = f"audios/{self.audio_id}/"
+        relative = relative_path if relative_path.startswith(prefix) else prefix + relative_path
+        path = self.parent.resolve_project_path(project_id, relative)
+        if self.audio_dir().resolve() not in path.parents:
+            raise ValueError("path escapes audio directory")
+        return path
+
+    def resolve_artifact_path(self, project_id, relative_path):
+        if not relative_path.startswith(f"audios/{self.audio_id}/"):
+            raise ValueError("artifact belongs to another audio")
+        return self.resolve_project_path(project_id, relative_path)
+
+    def load_project(self, project_id):
+        project = self.parent.load_project(project_id).model_copy(deep=True)
+        project.source = self.parent.audio(project_id, self.audio_id).source
+        return project
+
+    def _touch_project(self, project_id):
+        self.parent._touch_project(project_id)
+
+    def load_job(self, project_id):
+        self.project_dir(project_id)
+        path = self.audio_dir() / "job.json"
+        if path.is_symlink() or not path.is_file():
+            raise ProjectNotFound(self.audio_id)
+        job = Job.model_validate_json(path.read_text(encoding="utf-8"))
+        if job.project_id != project_id or job.audio_id != self.audio_id:
+            raise ValueError("invalid audio job ownership")
+        return job
+
+    def save_job(self, job):
+        if job.project_id != self.project_id or job.audio_id != self.audio_id:
+            raise ValueError("invalid audio job ownership")
+        atomic_write_json(self.audio_dir() / "job.json", job.model_dump(mode="json"))
+        self._touch_project(job.project_id)
+
+    def load_pipeline_config(self, project_id):
+        self.project_dir(project_id)
+        path = self.audio_dir() / "config.json"
+        if path.is_symlink():
+            raise ValueError("config must not be a symlink")
+        if path.exists():
+            return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+        payload = self.parent.load_pipeline_config(project_id).model_dump(mode="json")
+        language = self.parent.audio(project_id, self.audio_id).source.language
+        payload["source_language"] = language
+        payload["asr"]["language"] = language
+        return PipelineConfig.model_validate(payload)
+
+    def save_pipeline_config(self, project_id, value):
+        self.project_dir(project_id)
+        atomic_write_json(self.audio_dir() / "config.json", value.model_dump(mode="json"))
+        self._touch_project(project_id)

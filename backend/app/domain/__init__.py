@@ -9,7 +9,7 @@ from .pipeline_config import (
     TranslationConfig,
     default_pipeline_config,
 )
-from .project import Project, SourceAsset
+from .project import AudioAsset, Project, SourceAsset
 from .transcript import Segment, Transcript
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "StageState",
     "default_stages",
     "Project",
+    "AudioAsset",
     "SourceAsset",
     "Segment",
     "Transcript",

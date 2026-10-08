@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from .enums import JobStatus, PipelineStageName, StageStatus
 from .pipeline_config import PipelineConfig
+from .project import PRIMARY_AUDIO_ID
 
 
 class StageState(BaseModel):
@@ -30,6 +31,7 @@ class Job(BaseModel):
     schema_version: str = "1.0"
     id: str
     project_id: str
+    audio_id: str = PRIMARY_AUDIO_ID
     status: JobStatus = JobStatus.PENDING
     current_stage: PipelineStageName | None = None
     progress: float = Field(default=0, ge=0, le=1)

@@ -3,7 +3,8 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ..domain import JobError, JobStatus, StageStatus
+from ..domain import JobError, JobStatus, PipelineConfig, StageStatus
+from ..exporters import output_names
 from ..logging_utils import redact_secrets, stable_stage_error
 from .context import PipelineCancelled
 
@@ -30,6 +31,7 @@ class PipelineRunner:
                 "event_id": f"evt_{uuid4().hex}",
                 "type": kind,
                 "project_id": c.project.id,
+                "audio_id": c.job.audio_id,
                 "job_id": c.job.id,
                 "timestamp": now().isoformat(),
                 "data": data or {},
@@ -217,14 +219,14 @@ class PipelineRunner:
             return
         if not state.artifact:
             raise FileNotFoundError(f"missing artifact for {stage_name}")
-        artifact = (context.project_dir / state.artifact).resolve()
+        artifact = context.store.resolve_artifact_path(context.project.id, state.artifact)
         project_dir = context.project_dir.resolve()
         if project_dir not in artifact.parents:
             raise ValueError("stage artifact escapes project directory")
         if not artifact.exists():
             raise FileNotFoundError(state.artifact)
         if stage_name == "export":
-            required = {"zh.srt", "ja-zh.srt", "zh.lrc"}
+            required = output_names(context.config or PipelineConfig())
             if not artifact.is_dir() or not all(
                 (artifact / filename).is_file() for filename in required
             ):
@@ -232,7 +234,7 @@ class PipelineRunner:
         elif stage_name == "preprocess":
             try:
                 metadata = json.loads(artifact.read_text(encoding="utf-8"))
-                output_path = context.store.resolve_project_path(
+                output_path = context.store.resolve_artifact_path(
                     context.project.id, metadata["output_path"]
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

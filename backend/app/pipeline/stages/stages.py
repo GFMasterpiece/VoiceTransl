@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from ...domain import PipelineConfig, PipelineStageName, Transcript
-from ...exporters import render_lrc, render_srt
+from ...exporters import output_names, render_lrc, render_srt, render_vtt
 from ...providers import PreprocessProvider, TranslationContext
 
 
@@ -125,14 +125,17 @@ class ExportStage(BaseStage):
         super().__init__(PipelineStageName.EXPORT)
 
     async def run(self, c):
-        out = c.project_dir / "output"
+        out = c.store.resolve_project_path(c.project.id, "output")
         out.mkdir(exist_ok=True)
         segs = c.transcript.segments
-        files = {
-            "zh.srt": render_srt(segs),
-            "ja-zh.srt": render_srt(segs, True),
-            "zh.lrc": render_lrc(segs),
-        }
+        config = c.config or PipelineConfig()
+        files = {}
+        for name in output_names(config):
+            bilingual = name.startswith("ja-zh.")
+            extension = name.rsplit(".", 1)[1]
+            renderer = {"srt": render_srt, "vtt": render_vtt, "lrc": render_lrc}[extension]
+            files[name] = renderer(segs) if extension == "lrc" else renderer(segs, bilingual)
         for name, text in files.items():
             c.store.save_output_text(c.project.id, name, text)
+        c.store.prune_generated_outputs(c.project.id, set(files))
         c.artifacts[self.name.value] = out

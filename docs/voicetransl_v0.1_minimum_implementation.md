@@ -5,6 +5,8 @@
 > 适用场景：单机或个人服务器上的 ASMR 音频转写与翻译 WebUI  
 > 核心原则：文件系统是唯一持久化数据源，不使用数据库
 
+> 兼容说明：本文保留 v0.1 单音频项目的历史基线。当前一个项目可以包含多个音频，资源粒度、并发保护、目录扩展与音频 API 以 [多音频项目契约](voicetransl_multi_audio_project.md) 为准；本文“一个项目一个任务”等单音频假设仅描述旧项目/主音频，不约束整个多音频父项目。既有 Pipeline、Provider、状态机和原子持久化规则继续适用。
+
 ## 1. 本文结论
 
 v0.1 先交付一条可运行的纵向链路：
@@ -652,6 +654,10 @@ Content-Type: multipart/form-data
 
 创建项目不自动运行，避免上传完成即占用计算资源。
 
+当前接口创建包含首个音频 `aud_primary` 的项目，`project.source` 保留兼容。
+多文件上传后续文件使用 `POST /api/v1/projects/{project_id}/audios` 添加到同一项目，
+不再次调用创建项目接口。资源列表与逐音频 API 见多音频项目契约。
+
 ### 13.2 项目查询
 
 ```text
@@ -684,6 +690,10 @@ POST /api/v1/projects/{project_id}/cancel
 
 重复运行请求返回 `409 Conflict`，而不是创建第二个任务。
 
+上述旧路径只运行/取消主音频 `aud_primary`，不会启动或取消项目内其他音频。
+多音频选择使用逐音频接口或 `/projects/{project_id}/audios/run`；并发保护作用于
+单个音频，而非整个父项目。
+
 ### 13.4 状态与字幕
 
 ```text
@@ -692,6 +702,9 @@ GET /api/v1/projects/{project_id}/transcript
 ```
 
 `transcript` 默认按 `translated → aligned → raw` 的优先级返回当前最完整版本，并在响应中给出实际阶段。
+
+上述旧路径与下节旧输出路径均指向主音频；其他音频的状态、字幕、输出通过
+`/projects/{project_id}/audios/{audio_id}/...` 访问，各音频时间轴相互独立。
 
 ### 13.5 输出列表与下载
 

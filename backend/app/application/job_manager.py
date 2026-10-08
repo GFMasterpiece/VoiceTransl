@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from ..config import load_preset
 from ..domain import Job, JobError, JobStatus, PipelineConfig
+from ..domain.project import PRIMARY_AUDIO_ID
 from ..logging_utils import stable_job_error
 from ..pipeline import (
     AlignmentStage,
@@ -26,6 +27,13 @@ from ..providers import (
 )
 
 logger = logging.getLogger("voicetransl.jobs")
+
+
+class AudioTaskMap(dict):
+    """Tuple keys internally, with legacy primary lookup via project ID."""
+
+    def __getitem__(self, key):
+        return super().__getitem__((key, PRIMARY_AUDIO_ID) if isinstance(key, str) else key)
 
 
 class JobManager:
@@ -56,33 +64,41 @@ class JobManager:
         self.crispasr_model_dir = crispasr_model_dir
         self.crispasr_timeout_seconds = crispasr_timeout_seconds
         self.crispasr_process_factory = crispasr_process_factory
-        self.tasks: dict[str, asyncio.Task] = {}
-        self.cancel_events: dict[str, asyncio.Event] = {}
-        self.locks: dict[str, asyncio.Lock] = {}
+        self.tasks: dict[tuple[str, str], asyncio.Task] = AudioTaskMap()
+        self.cancel_events: dict[tuple[str, str], asyncio.Event] = {}
+        self.locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
-    def job(self, project_id):
-        return self.store.load_job(project_id)
+    def job(self, project_id, audio_id=PRIMARY_AUDIO_ID):
+        return self.store.scope(project_id, audio_id).load_job(project_id)
 
-    def running(self, project_id):
-        t = self.tasks.get(project_id)
+    def running(self, project_id, audio_id=PRIMARY_AUDIO_ID):
+        t = self.tasks.get((project_id, audio_id))
         return t is not None and not t.done()
 
-    def _lock(self, project_id: str) -> asyncio.Lock:
-        return self.locks.setdefault(project_id, asyncio.Lock())
+    def _lock(self, project_id: str, audio_id=PRIMARY_AUDIO_ID) -> asyncio.Lock:
+        return self.locks.setdefault((project_id, audio_id), asyncio.Lock())
 
-    async def start(self, project_id, resume=True):
+    async def start(self, project_id, resume=True, audio_id=PRIMARY_AUDIO_ID):
+        async with self.store.mutation_lock(project_id):
+            return await self._start(project_id, resume, audio_id)
+
+    async def _start(self, project_id, resume, audio_id):
         # The lock covers the running check and task registration.  Without it,
         # two simultaneous HTTP requests could both pass the check.
-        async with self._lock(project_id):
-            if self.running(project_id):
+        async with self._lock(project_id, audio_id):
+            store = self.store.scope(project_id, audio_id)
+            key = (project_id, audio_id)
+            if self.running(project_id, audio_id):
                 raise RuntimeError("JOB_ALREADY_RUNNING")
-            project = self.store.load_project(project_id)
-            previous = self.store.load_job(project_id)
+            project = store.load_project(project_id)
+            previous = store.load_job(project_id)
             # The in-memory task map is intentionally not the source of truth:
             # a task can disappear after a process restart or an unexpected
             # scheduler failure while job.json still says it is running.
-            if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
+            if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
+                previous.status == JobStatus.PENDING and previous.config_snapshot is not None
+            ):
                 raise RuntimeError("JOB_ALREADY_RUNNING")
             pipeline_resume = resume
             if previous.status == JobStatus.COMPLETED:
@@ -101,27 +117,28 @@ class JobManager:
             else:
                 # Explicit restart gets a new job identity while keeping the
                 # project's current job pointer in job.json.
-                job = Job(id=f"job_{uuid4().hex}", project_id=project_id, stages={})
+                job = Job(
+                    id=f"job_{uuid4().hex}", project_id=project_id, audio_id=audio_id, stages={}
+                )
                 from ..domain import default_stages
 
                 job.stages = default_stages()
             # Legacy projects have no config.json or snapshot.  Resolve their
             # safe mock defaults at run time and persist the exact copy used
             # by this job before the asynchronous pipeline starts.
-            current_config = self.store.load_pipeline_config(project_id)
             snapshot: PipelineConfig = (
                 previous.config_snapshot.model_copy(deep=True)
                 if pipeline_resume and previous.config_snapshot is not None
-                else current_config.model_copy(deep=True)
+                else store.load_pipeline_config(project_id).model_copy(deep=True)
             )
             job.status = JobStatus.PENDING
             job.cancel_requested = False
             job.error = None
             job.current_stage = None
             job.config_snapshot = snapshot
-            self.store.save_job(job)
+            store.save_job(job)
             ev = asyncio.Event()
-            self.cancel_events[project_id] = ev
+            self.cancel_events[key] = ev
 
             async def work():
                 current_task = asyncio.current_task()
@@ -134,13 +151,14 @@ class JobManager:
                             job.status = JobStatus.CANCELLED
                             job.cancel_requested = True
                             job.updated_at = datetime.now(timezone.utc)
-                            self.store.save_job(job)
+                            store.save_job(job)
                             await self.event_bus.publish(
                                 {
                                     "schema_version": "1.0",
                                     "event_id": f"evt_{uuid4().hex}",
                                     "type": "job.cancelled",
                                     "project_id": project_id,
+                                    "audio_id": audio_id,
                                     "job_id": job.id,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                     "data": {},
@@ -212,10 +230,10 @@ class JobManager:
                         ]
                         c = PipelineContext(
                             project=project,
-                            project_dir=self.store.project_dir(project_id),
+                            project_dir=store.project_dir(project_id),
                             job=job,
                             preset=preset.model_dump(mode="json") if preset else {"name": "mock"},
-                            store=self.store,
+                            store=store,
                             cancel_event=ev,
                             allow_transcript_overwrite=not pipeline_resume,
                             config=snapshot,
@@ -236,7 +254,7 @@ class JobManager:
                         job.status = JobStatus.INTERRUPTED
                         job.current_stage = None
                         job.updated_at = datetime.now(timezone.utc)
-                        self.store.save_job(job)
+                        store.save_job(job)
                     raise
                 except Exception as exc:
                     # Runner handles stage failures.  This guard covers
@@ -247,8 +265,8 @@ class JobManager:
                     error_type, error_message = stable_job_error(exc)
                     job.error = JobError(type=error_type, message=error_message, retryable=True)
                     job.updated_at = datetime.now(timezone.utc)
-                    self.store.save_job(job)
-                    append_log = getattr(self.store, "append_log", None)
+                    store.save_job(job)
+                    append_log = getattr(store, "append_log", None)
                     if callable(append_log):
                         try:
                             append_log(project_id, f"job failed job={job.id} code={error_type}")
@@ -260,6 +278,7 @@ class JobManager:
                             "event_id": f"evt_{uuid4().hex}",
                             "type": "job.failed",
                             "project_id": project_id,
+                            "audio_id": audio_id,
                             "job_id": job.id,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "data": {"message": error_message, "code": error_type},
@@ -269,40 +288,42 @@ class JobManager:
                 finally:
                     # A completed task must never remove a newer task that
                     # has already been registered for the same project.
-                    if self.tasks.get(project_id) is current_task:
-                        self.tasks.pop(project_id, None)
-                    if self.cancel_events.get(project_id) is ev:
-                        self.cancel_events.pop(project_id, None)
+                    if self.tasks.get(key) is current_task:
+                        self.tasks.pop(key, None)
+                    if self.cancel_events.get(key) is ev:
+                        self.cancel_events.pop(key, None)
 
-            self.tasks[project_id] = asyncio.create_task(work())
+            self.tasks[key] = asyncio.create_task(work())
             logger.info("job queued project=%s job=%s resume=%s", project_id, job.id, resume)
             return job
 
     async def delete_project(self, project_id: str) -> None:
         """Delete a project while serializing against start requests."""
-        async with self._lock(project_id):
-            if self.running(project_id):
-                raise RuntimeError("PROJECT_BUSY")
-            job = self.store.load_job(project_id)
-            if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
-                job.status == JobStatus.PENDING and job.config_snapshot is not None
-            ):
-                raise RuntimeError("PROJECT_BUSY")
+        async with self.store.mutation_lock(project_id):
+            for audio in self.store.load_project(project_id).audios:
+                job = self.job(project_id, audio.id)
+                if (
+                    self.running(project_id, audio.id)
+                    or job.status in {JobStatus.RUNNING, JobStatus.CANCELLING}
+                    or (job.status == JobStatus.PENDING and job.config_snapshot is not None)
+                ):
+                    raise RuntimeError("PROJECT_BUSY")
             self.store.delete_project(project_id)
 
-    def cancel(self, project_id):
-        if not self.running(project_id):
+    def cancel(self, project_id, audio_id=PRIMARY_AUDIO_ID):
+        if not self.running(project_id, audio_id):
             return False
-        event = self.cancel_events.get(project_id)
+        event = self.cancel_events.get((project_id, audio_id))
         if event is None:
             return False
         event.set()
-        job = self.store.load_job(project_id)
+        store = self.store.scope(project_id, audio_id)
+        job = store.load_job(project_id)
         if job.status not in {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.CANCELLING}:
             return False
         job.cancel_requested = True
         job.status = JobStatus.CANCELLING
-        self.store.save_job(job)
+        store.save_job(job)
         logger.info("job cancellation requested project=%s job=%s", project_id, job.id)
         return True
 
