@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { Audio, Project } from './projects'
 
 export type JobStatus = 'pending' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted'
@@ -260,6 +260,9 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   const stageDetailError = ref('')
   let stageDetailGeneration = 0
   let jobRequestGeneration = 0
+  let audiosRequestGeneration = 0
+  let transcriptRequestGeneration = 0
+  let outputsRequestGeneration = 0
   const retiredJobIds = new Set<string>()
   const config = ref<PipelineConfig | null>(null)
   const configLoading = ref(false)
@@ -270,12 +273,12 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   const actionLoading = ref(false)
   const error = ref('')
   const projectId = ref<string | null>(null)
-  const socket = ref<WebSocket | null>(null)
+  const socket = shallowRef<WebSocket | null>(null)
   const reconnectTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttempt = ref(0)
   let connectionGeneration = 0
   let stopped = true
-  let statusTimer: ReturnType<typeof setInterval> | null = null
+  let statusTimer: ReturnType<typeof setTimeout> | null = null
   const activeAudio = computed(() => audios.value.find((audio) => audio.id === activeAudioId.value) || null)
   const isBusyJob = (value: Job | null) => !!value && (['running', 'cancelling'].includes(value.status) || (value.status === 'pending' && !!value.config_snapshot))
   const anyRunning = computed(() => audios.value.some((audio) => isBusyJob(audio.job)))
@@ -300,15 +303,32 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
 
   async function fetchProject(id = projectId.value || '') {
     if (!id) return null
+    const generation = connectionGeneration
     const value = await request<Project>(`/projects/${encodeURIComponent(id)}`)
-    if (id === projectId.value && !stopped) project.value = value
+    if (id === projectId.value && generation === connectionGeneration && !stopped) project.value = value
     return value
   }
 
   async function fetchAudios(id = projectId.value || '') {
+    const generation = connectionGeneration
+    const requestGeneration = ++audiosRequestGeneration
+    const jobGeneration = jobRequestGeneration
     const value = await request<{ items: AudioItem[] }>(`/projects/${encodeURIComponent(id)}/audios`)
-    if (id === projectId.value && !stopped) {
-      audios.value = value.items.map((audio) => ({ ...audio, job: normalizeJob(audio.job) }))
+    if (id === projectId.value && generation === connectionGeneration && requestGeneration === audiosRequestGeneration && !stopped) {
+      audios.value = value.items.map((audio) => {
+        const previous = audios.value.find((entry) => entry.id === audio.id)
+        const next = normalizeJob(audio.job)
+        // A list request may predate a restart or a newer focused WS/REST update.
+        if (retiredJobIds.has(next.id)) return previous || { ...audio, job: next }
+        if (audio.id === activeAudioId.value && jobGeneration !== jobRequestGeneration && job.value) return { ...audio, job: job.value }
+        if (previous && previous.job.id !== next.id) retiredJobIds.add(previous.job.id)
+        return { ...audio, job: next }
+      })
+      const focused = audios.value.find((audio) => audio.id === activeAudioId.value)
+      if (focused && !retiredJobIds.has(focused.job.id) && jobGeneration === jobRequestGeneration) {
+        jobRequestGeneration += 1
+        job.value = focused.job
+      }
       selectedAudioIds.value = selectedAudioIds.value.filter((audioId) => audios.value.some((audio) => audio.id === audioId))
     }
     return value.items
@@ -319,7 +339,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     const generation = connectionGeneration
     const requestGeneration = ++jobRequestGeneration
     const value = normalizeJob(await request<Job>(`${audioPath(id, audioId)}/job`))
-    if (isCurrent(id, audioId, generation) && requestGeneration === jobRequestGeneration) {
+    if (isCurrent(id, audioId, generation) && requestGeneration === jobRequestGeneration && !retiredJobIds.has(value.id)) {
       if (job.value && job.value.id !== value.id) retiredJobIds.add(job.value.id)
       job.value = value
       const audio = audios.value.find((entry) => entry.id === audioId)
@@ -359,21 +379,45 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
 
   // Only the selected stage is fetched. Job replacement and completed-stage
   // notifications invalidate pending responses before loading its own artifact.
-  watch(() => [job.value?.id, selectedStage.value, job.value?.stages[selectedStage.value]?.status], () => {
+  watch(() => `${job.value?.id || ''}:${selectedStage.value}:${job.value?.stages[selectedStage.value]?.status || ''}`, () => {
     void fetchStageDetail()
+  }, { flush: 'sync' })
+
+  // REST reconciliation must refresh artifacts too, including jobs that finish
+  // before their first event is observed. Never reload the editable config draft.
+  watch(() => job.value ? `${job.value.id}:${job.value.status}:${['asr', 'alignment', 'translation', 'export'].map((stage) => job.value!.stages[stage as StageName].status).join(':')}` : '', (next, previous) => {
+    if (!next || !previous || !job.value) return
+    const before = previous.split(':')
+    const changedJob = before[0] !== job.value.id
+    if (changedJob) {
+      transcriptRequestGeneration += 1
+      outputsRequestGeneration += 1
+      transcript.value = null
+      outputs.value = []
+    }
+    const completed = job.value.status === 'completed' && (changedJob || before[1] !== 'completed')
+    if (completed || (['asr', 'alignment', 'translation'] as StageName[]).some((stage, index) => job.value!.stages[stage].status === 'completed' && (changedJob || before[index + 2] !== 'completed'))) {
+      void fetchTranscript().catch(() => undefined)
+    }
+    if (completed || (job.value.stages.export.status === 'completed' && (changedJob || before[5] !== 'completed'))) {
+      void fetchOutputs().catch(() => undefined)
+    }
   }, { flush: 'sync' })
 
   async function fetchTranscript(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
     const generation = connectionGeneration
+    const jobId = job.value?.id
+    const requestGeneration = ++transcriptRequestGeneration
+    const current = () => isCurrent(id, audioId, generation) && requestGeneration === transcriptRequestGeneration && (!jobId || job.value?.id === jobId)
     try {
       const value = await request<TranscriptResponse>(`${audioPath(id, audioId)}/transcript`)
-      if (isCurrent(id, audioId, generation)) transcript.value = value.transcript
+      if (current()) transcript.value = value.transcript
       return value.transcript
     } catch (reason) {
       // A transcript is expected to be absent before ASR starts.
       if (reason instanceof Error && reason.message.includes('字幕不存在')) {
-        if (isCurrent(id, audioId, generation)) transcript.value = null
+        if (current()) transcript.value = null
         return null
       }
       throw reason
@@ -383,8 +427,10 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   async function fetchOutputs(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return []
     const generation = connectionGeneration
+    const jobId = job.value?.id
+    const requestGeneration = ++outputsRequestGeneration
     const value = await request<{ items: Output[] }>(`${audioPath(id, audioId)}/outputs`)
-    if (isCurrent(id, audioId, generation)) outputs.value = value.items
+    if (isCurrent(id, audioId, generation) && requestGeneration === outputsRequestGeneration && (!jobId || job.value?.id === jobId)) outputs.value = value.items
     return value.items
   }
 
@@ -419,6 +465,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   function applyEvent(message: EventMessage) {
     const type = message.type
     const data = message.data || {}
+    if (message.job_id && retiredJobIds.has(message.job_id)) return false
     if (message.audio_id && message.audio_id !== activeAudioId.value) return false
     if (data.audio_id && data.audio_id !== activeAudioId.value) return false
     if (type === 'job.snapshot' && data && typeof data === 'object') {
@@ -432,6 +479,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     if (!job.value) return false
     if (message.job_id && message.job_id !== job.value.id) return false
     if (data.job_id && data.job_id !== job.value.id) return false
+    jobRequestGeneration += 1
     const stage = data.stage as StageName | undefined
     if (stage && job.value.stages[stage]) {
       if (type === 'stage.started') {
@@ -501,31 +549,25 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     }
     socket.value = ws
     ws.onopen = () => {
-      if (!isCurrent(id, audioId, generation)) return
+      if (socket.value !== ws || !isCurrent(id, audioId, generation)) return
       reconnectAttempt.value = 0
       void fetchJob(id, audioId).catch(() => undefined)
     }
     ws.onmessage = (event) => {
-      if (!isCurrent(id, audioId, generation)) return
+      if (socket.value !== ws || !isCurrent(id, audioId, generation)) return
       try {
         const message = JSON.parse(event.data) as EventMessage
         if (!applyEvent(message)) return
         const audio = audios.value.find((entry) => entry.id === audioId)
         if (audio && job.value) audio.job = job.value
-        const stage = message.data?.stage
-        if (message.type === 'job.completed' || (message.type === 'stage.completed' && ['asr', 'alignment', 'translation'].includes(String(stage)))) {
-          void fetchTranscript(id, audioId).catch(() => undefined)
-        }
-        if (message.type === 'job.completed' || (message.type === 'stage.completed' && stage === 'export')) {
-          void fetchOutputs(id, audioId).catch(() => undefined)
-        }
       } catch {
         // Ignore malformed event payloads and keep REST as the source of truth.
       }
     }
     ws.onerror = () => ws.close()
     ws.onclose = () => {
-      if (socket.value === ws) socket.value = null
+      if (socket.value !== ws) return
+      socket.value = null
       if (!stopped && generation === connectionGeneration) {
         void fetchJob(id, audioId).catch(() => undefined)
         scheduleReconnect(id, generation, audioId)
@@ -537,6 +579,9 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     stopped = true
     connectionGeneration += 1
     jobRequestGeneration += 1
+    audiosRequestGeneration += 1
+    transcriptRequestGeneration += 1
+    outputsRequestGeneration += 1
     stageDetailGeneration += 1
     stageDetail.value = null
     stageDetailLoading.value = false
@@ -545,8 +590,17 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     reconnectTimer.value = null
     socket.value?.close()
     socket.value = null
-    if (statusTimer) clearInterval(statusTimer)
+    if (statusTimer) clearTimeout(statusTimer)
     statusTimer = null
+  }
+
+  function scheduleStatusPoll(id: string, audioId: string, generation: number) {
+    if (!isCurrent(id, audioId, generation)) return
+    statusTimer = setTimeout(async () => {
+      statusTimer = null
+      try { await fetchAudios(id) } catch { /* Retry on the next poll. */ }
+      scheduleStatusPoll(id, audioId, generation)
+    }, 3000)
   }
 
   async function selectAudio(audioId: string) {
@@ -568,7 +622,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
       await Promise.all([fetchJob(id, audioId), fetchConfig(id, audioId), fetchTranscript(id, audioId), fetchOutputs(id, audioId)])
       if (isCurrent(id, audioId, generation)) {
         connect(id, generation, audioId)
-        statusTimer = setInterval(() => { void fetchAudios(id).catch(() => undefined) }, 3000)
+        scheduleStatusPoll(id, audioId, generation)
       }
     } catch (reason) {
       if (isCurrent(id, audioId, generation)) error.value = reason instanceof Error ? reason.message : '音频详情加载失败'
@@ -611,20 +665,25 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   }
 
   async function run(resume = true) {
-    if (!projectId.value) return
+    if (!projectId.value || actionLoading.value || configSaving.value) return
+    const id = projectId.value
+    const audioId = activeAudioId.value || 'aud_primary'
+    const generation = connectionGeneration
     actionLoading.value = true
     error.value = ''
+    audiosRequestGeneration += 1
+    jobRequestGeneration += 1
     try {
-      const id = projectId.value
-      const audioId = activeAudioId.value || 'aud_primary'
-      await request(`${audioPath(id, audioId)}/run`, {
+      const value = await request<AudioActionResult>(`${audioPath(id, audioId)}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resume }),
       })
+      if (!isCurrent(id, audioId, generation)) return
+      acknowledgeRuns([{ ...value, audio_id: audioId }])
       await fetchJob(id, audioId)
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '任务启动失败'
+      if (isCurrent(id, audioId, generation)) error.value = reason instanceof Error ? reason.message : '任务启动失败'
       throw reason
     } finally {
       actionLoading.value = false
@@ -728,18 +787,32 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   async function runSelected() {
     if (!projectId.value || !selectedAudioIds.value.length || actionLoading.value || configSaving.value || selectedConfigFailed.value) return
     const id = projectId.value
+    const generation = connectionGeneration
     const audioIds = [...selectedAudioIds.value]
     actionLoading.value = true
     error.value = ''
+    audiosRequestGeneration += 1
+    jobRequestGeneration += 1
     try {
       if (activeAudioId.value && audioIds.includes(activeAudioId.value) && configDirty.value) await saveConfig()
+      if (generation !== connectionGeneration || stopped || id !== projectId.value) return
       const value = await request<{ items: AudioActionResult[] }>(`/projects/${encodeURIComponent(id)}/audios/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_ids: audioIds, resume: false }) })
-      if (id !== projectId.value) return
+      if (id !== projectId.value || generation !== connectionGeneration || stopped) return
+      acknowledgeRuns(value.items)
       batchResults.value = value.items
       await Promise.all([fetchAudios(id), fetchJob(id)])
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '所选音频启动失败'
+      if (id === projectId.value && generation === connectionGeneration && !stopped) error.value = reason instanceof Error ? reason.message : '所选音频启动失败'
     } finally { actionLoading.value = false }
+  }
+
+  function acknowledgeRuns(items: AudioActionResult[]) {
+    audiosRequestGeneration += 1
+    jobRequestGeneration += 1
+    for (const item of items) {
+      const previous = audios.value.find((audio) => audio.id === item.audio_id)?.job
+      if (!item.error && item.job_id && previous && previous.id !== item.job_id) retiredJobIds.add(previous.id)
+    }
   }
 
   return {
