@@ -58,8 +58,12 @@ The VoiceTransl architecture keeps these decisions:
 - The frontend already provides project listing, project detail/workspace,
   pipeline progress and stage inspection, configuration validation, deletion,
   cancellation, and completed-project reprocessing.
-- A project is still created from one audio file at a time. The multiple-audio
-  upload behavior is designed in the v0.2 document but is not yet implemented.
+- The frontend supports multiple-audio selection/drop and a validated upload
+  queue. It reuses the single-file endpoint sequentially to create independent
+  projects, retains successful project links, and supports individual failed-item
+  retries. Uploading never starts the pipeline automatically.
+- Shared batch Pipeline configuration remains future work; configure and start
+  each created project in its workspace.
 - The node configuration modal exposes HTTP translation `base_url` and
   `api_key_env`; the real API key remains backend-only and is read from the
   named environment variable.

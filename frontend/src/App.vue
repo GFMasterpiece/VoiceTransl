@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useProjectsStore } from './stores/projects'
 import { useProjectDetailStore, type Stage, type StageName } from './stores/projectDetail'
+import { useUploadQueue, type UploadPolicy, type UploadStatus } from './composables/useUploadQueue'
 
 type View = 'list' | 'create' | 'detail'
 
@@ -10,7 +11,18 @@ const detail = useProjectDetailStore()
 const view = ref<View>('list')
 const projectName = ref('')
 const sourceLanguage = ref('ja')
-const selectedFile = ref<File | null>(null)
+const upload = useUploadQueue((file, name, language) => store.createProject(file, name, language))
+const { items: uploadItems, busy: uploadBusy, feedback: uploadFeedback, policy: uploadPolicy, validCount, readyCount, createdCount, failedCount, pendingCount } = upload
+const policyLoading = ref(false)
+const policyError = ref('')
+const uploadAccept = computed(() => uploadPolicy.value?.allowed_extensions.map((extension) => `.${extension}`).join(',') || '')
+const uploadSubmitLabel = computed(() => {
+  if (uploadBusy.value) return '上传并创建中…'
+  if (readyCount.value) return `创建 ${readyCount.value} 个项目`
+  if (failedCount.value) return '请重试失败文件'
+  if (createdCount.value) return '创建完成'
+  return '等待有效文件'
+})
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedStage = ref<StageName>('preprocess')
 
@@ -31,12 +43,12 @@ const pageTitle = computed(() => {
 })
 
 const pageSubtitle = computed(() => {
-  if (view.value === 'create') return '上传音频，开始一条可追踪的翻译流水线。'
+  if (view.value === 'create') return '一次选择多个音频，分别创建项目，再配置并开始处理。'
   if (view.value === 'detail') return '从处理进度到最终字幕，所有信息都在这里。'
   return '把音频变成可交付的字幕文件。'
 })
 
-const currentError = computed(() => (view.value === 'detail' ? detail.error : store.error))
+const currentError = computed(() => (view.value === 'detail' ? detail.error : view.value === 'create' ? '' : store.error))
 const selectedStageMeta = computed(() => stageList.find((item) => item.key === selectedStage.value) || stageList[0])
 const selectedStageValue = computed(() => stageState(selectedStage.value))
 const selectedStagePercent = computed(() => Math.round(selectedStageValue.value.progress * 100))
@@ -121,21 +133,58 @@ function syncTranslationTarget() {
 }
 
 function chooseFile() {
+  if (uploadBusy.value) return
   fileInput.value?.click()
 }
 
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
-  selectedFile.value = input.files?.[0] ?? null
-  if (selectedFile.value && !projectName.value) projectName.value = selectedFile.value.name.replace(/\.[^/.]+$/, '')
+  upload.add(Array.from(input.files || []))
+  input.value = ''
 }
 
 function handleDrop(event: DragEvent) {
   event.preventDefault()
-  const file = event.dataTransfer?.files?.[0]
-  if (!file) return
-  selectedFile.value = file
-  if (!projectName.value) projectName.value = file.name.replace(/\.[^/.]+$/, '')
+  upload.add(Array.from(event.dataTransfer?.files || []))
+}
+
+async function loadUploadPolicy() {
+  if (uploadBusy.value || policyLoading.value) return
+  policyLoading.value = true
+  policyError.value = ''
+  try {
+    const base = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+    const response = await fetch(`${base}/upload-policy`)
+    if (!response.ok) throw new Error()
+    const policy = await response.json() as UploadPolicy
+    if (!Array.isArray(policy.allowed_extensions) || !policy.allowed_extensions.every((value) => typeof value === 'string') || !Number.isFinite(policy.max_upload_bytes) || policy.max_upload_bytes <= 0) throw new Error()
+    upload.setPolicy(policy)
+  } catch {
+    policyError.value = '无法获取上传限制，请检查后端服务后重试。'
+  } finally {
+    policyLoading.value = false
+  }
+}
+
+function uploadStatusLabel(status: UploadStatus) {
+  return { invalid: '校验失败', ready: '可上传', uploading: '上传中', created: '已创建', failed: '创建失败' }[status]
+}
+
+function clearUploadQueue() {
+  if (uploadBusy.value) return
+  if (createdCount.value && !window.confirm('清空此上传队列吗？已创建的项目会保留在项目列表中。')) return
+  upload.clear()
+  projectName.value = ''
+}
+
+function guardUploadNavigation() {
+  return !uploadBusy.value
+}
+
+function guardUnload(event: BeforeUnloadEvent) {
+  if (!uploadBusy.value) return
+  event.preventDefault()
+  event.returnValue = ''
 }
 
 function formatDate(value: string) {
@@ -198,20 +247,32 @@ function stageMetric(key: StageName) {
 }
 
 async function submitProject() {
-  if (!selectedFile.value) return
-  const project = await store.createProject(selectedFile.value, projectName.value, sourceLanguage.value)
-  projectName.value = ''
-  selectedFile.value = null
-  if (fileInput.value) fileInput.value.value = ''
-  await openProject(project.id)
+  const single = uploadItems.value.length === 1
+  await upload.submit({ name: projectName.value, language: sourceLanguage.value })
+  const item = uploadItems.value[0]
+  if (single && item?.projectId) await openProject(item.projectId)
+}
+
+async function retryUpload(id: number) {
+  await upload.retry(id)
+  const item = uploadItems.value[0]
+  if (uploadItems.value.length === 1 && item?.projectId) await openProject(item.projectId)
 }
 
 function cancelCreate() {
+  if (!guardUploadNavigation()) return
   view.value = 'list'
   store.error = ''
 }
 
+function showCreate() {
+  if (!guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
+  detail.stop()
+  view.value = 'create'
+}
+
 async function openProject(id: string) {
+  if (!guardUploadNavigation()) return
   closeStageConfig(true)
   view.value = 'detail'
   selectedStage.value = 'preprocess'
@@ -226,6 +287,7 @@ async function openProject(id: string) {
 }
 
 function showList() {
+  if (!guardUploadNavigation()) return
   if (configModalOpen.value && !closeStageConfig()) return
   detail.stop()
   view.value = 'list'
@@ -267,8 +329,15 @@ async function deleteProject(id: string, name: string) {
   }
 }
 
-onMounted(() => void store.fetchProjects())
-onUnmounted(() => detail.stop())
+onMounted(() => {
+  void store.fetchProjects()
+  void loadUploadPolicy()
+  window.addEventListener('beforeunload', guardUnload)
+})
+onUnmounted(() => {
+  detail.stop()
+  window.removeEventListener('beforeunload', guardUnload)
+})
 </script>
 
 <template>
@@ -279,20 +348,49 @@ onUnmounted(() => detail.stop())
     </header>
 
     <main class="main-content">
-      <section class="page-heading"><div><p class="eyebrow">VOICE / TRANSLATE</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><button v-if="view === 'list'" class="primary-button" type="button" @click="view = 'create'"><span aria-hidden="true">＋</span> 新建项目</button></section>
+      <section class="page-heading"><div><p class="eyebrow">VOICE / TRANSLATE</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><button v-if="view !== 'create'" class="primary-button" type="button" @click="showCreate"><span aria-hidden="true">＋</span> {{ uploadItems.length ? '返回上传队列' : '新建项目' }}</button></section>
 
       <div v-if="currentError" class="alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" aria-label="关闭提示" @click="view === 'detail' ? (detail.error = '') : (store.error = '')">×</button></div>
 
       <section v-if="view === 'list'" class="list-layout">
         <div class="list-toolbar"><div><span class="section-kicker">PROJECTS</span><h2>项目列表</h2></div><button class="text-button" type="button" :disabled="store.loading" @click="store.fetchProjects()"><span :class="{ spinning: store.loading }" aria-hidden="true">↻</span> 刷新</button></div>
         <div v-if="store.loading && !store.projects.length" class="empty-state skeleton-state"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
-        <div v-else-if="!store.projects.length" class="empty-state"><div class="empty-icon" aria-hidden="true">◌</div><h3>还没有项目</h3><p>上传音频后，项目会显示在这里。</p><button class="secondary-button" type="button" @click="view = 'create'">创建第一个项目</button></div>
+        <div v-else-if="!store.projects.length" class="empty-state"><div class="empty-icon" aria-hidden="true">◌</div><h3>还没有项目</h3><p>上传音频后，项目会显示在这里。</p><button class="secondary-button" type="button" @click="showCreate">创建第一个项目</button></div>
         <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><button class="project-delete" type="button" aria-label="删除项目" @click.stop="deleteProject(project.id, project.name)">删除</button><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ formatSize(project.source.size_bytes) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
       </section>
 
       <section v-else-if="view === 'create'" class="create-layout">
-        <div class="create-copy"><span class="section-kicker">NEW PROJECT</span><h2>让音频开始流动。</h2><p>上传文件后，VoiceTransl 会按五个阶段处理，并持续同步每一步的状态。</p><div class="mini-pipeline"><span v-for="stage in stageList" :key="stage.key">{{ stage.shortLabel }}</span></div></div>
-        <form class="create-form" @submit.prevent="submitProject"><div class="form-heading"><span class="section-kicker">SOURCE</span><h3>项目资料</h3></div><label class="field-label" for="project-name">项目名称 <span>可选</span></label><input id="project-name" v-model="projectName" class="text-input" type="text" placeholder="例如：第一集字幕" /><label class="field-label" for="source-language">源语言</label><select id="source-language" v-model="sourceLanguage" class="text-input"><option value="ja">日语</option><option value="en">英语</option><option value="zh">中文</option><option value="ko">韩语</option></select><label class="field-label">音频文件</label><button class="upload-zone" type="button" @click="chooseFile" @dragover.prevent @drop="handleDrop"><span class="upload-icon" aria-hidden="true">↑</span><span v-if="selectedFile" class="upload-name">{{ selectedFile.name }}</span><span v-else><strong>点击选择音频文件</strong><small>支持拖放 · WAV / MP3 / M4A / FLAC</small></span></button><p v-if="selectedFile" class="file-hint">已选择 {{ formatSize(selectedFile.size) }}</p><div class="form-actions"><button class="secondary-button" type="button" @click="cancelCreate">取消</button><button class="primary-button" type="submit" :disabled="!selectedFile || store.creating"><span v-if="store.creating" class="button-loader" aria-hidden="true"></span>{{ store.creating ? '创建中…' : '创建项目' }}</button></div><input ref="fileInput" class="visually-hidden" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac" @change="handleFileChange" /></form>
+        <div class="create-copy"><span class="section-kicker">NEW PROJECT</span><h2>让音频开始流动。</h2><p>每个音频会创建一个独立项目。上传后打开项目配置五个处理阶段，再点击“开始处理”。</p><div class="mini-pipeline"><span v-for="stage in stageList" :key="stage.key">{{ stage.shortLabel }}</span></div></div>
+        <form class="create-form" :aria-busy="uploadBusy" @submit.prevent="submitProject">
+          <div class="form-heading"><span class="section-kicker">SOURCE</span><h3>项目资料</h3></div>
+          <label class="field-label" for="project-name">项目名称 <span>{{ uploadItems.length > 1 ? '多文件使用各自文件名' : '可选，仅用于单文件' }}</span></label>
+          <input id="project-name" v-model="projectName" class="text-input" type="text" :disabled="uploadBusy || uploadItems.length > 1" placeholder="留空时使用文件名" />
+          <label class="field-label" for="source-language">源语言</label>
+          <select id="source-language" v-model="sourceLanguage" class="text-input" :disabled="uploadBusy"><option value="ja">日语</option><option value="en">英语</option><option value="zh">中文</option><option value="ko">韩语</option></select>
+          <label class="field-label" for="audio-picker">音频文件</label>
+          <button id="audio-picker" class="upload-zone" type="button" :disabled="uploadBusy" @click="chooseFile" @dragover.prevent @drop="handleDrop"><span class="upload-icon" aria-hidden="true">↑</span><span><strong>{{ uploadItems.length ? '继续添加音频' : '点击选择一个或多个音频' }}</strong><small>支持多文件拖放</small></span></button>
+          <p v-if="uploadPolicy" class="file-hint">{{ uploadPolicy.allowed_extensions.map((extension) => extension.toUpperCase()).join(' / ') }} · 每个文件最多 {{ formatSize(uploadPolicy.max_upload_bytes) }}</p>
+          <p v-else-if="policyLoading" class="file-hint" role="status">正在获取后端上传限制…</p>
+          <div v-if="policyError" class="upload-policy-error" role="alert"><span>{{ policyError }}</span><button class="text-button" type="button" :disabled="policyLoading || uploadBusy" @click="loadUploadPolicy">重试加载限制</button></div>
+          <p v-if="uploadFeedback" class="upload-feedback" role="status">{{ uploadFeedback }}</p>
+          <section v-if="uploadItems.length" class="upload-queue" aria-labelledby="upload-queue-title">
+            <div class="upload-queue-heading"><h4 id="upload-queue-title">{{ validCount }} 个有效 / {{ uploadItems.length }} 个已选</h4><button class="text-button" type="button" :disabled="uploadBusy" @click="clearUploadQueue">清空队列</button></div>
+            <p class="upload-summary" role="status" aria-live="polite">{{ createdCount }} 个已创建 · {{ pendingCount }} 个待完成 · {{ failedCount }} 个创建失败 · {{ uploadItems.length - validCount }} 个校验失败</p>
+            <ul class="upload-list">
+              <li v-for="item in uploadItems" :key="item.id" class="upload-row" :class="`is-${item.status}`">
+                <div class="upload-file-copy"><strong :title="item.file.name">{{ item.file.name }}</strong><span>{{ formatSize(item.file.size) }}</span><span v-if="item.snapshot">项目名称：{{ item.snapshot.name }} · 源语言：{{ item.snapshot.language.toUpperCase() }}</span></div>
+                <span class="upload-status" :class="`is-${item.status}`">{{ uploadStatusLabel(item.status) }}</span>
+                <div class="upload-row-actions"><button v-if="item.projectId" class="text-button" type="button" :disabled="uploadBusy" @click="openProject(item.projectId)">打开项目</button><button v-if="item.status === 'failed'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`重试上传 ${item.file.name}`" @click="retryUpload(item.id)">重试此文件</button><button v-if="item.status !== 'created'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`移除 ${item.file.name}`" @click="upload.remove(item.id)">移除</button></div>
+                <p v-if="item.error" class="upload-item-error">{{ item.error }}</p>
+              </li>
+            </ul>
+            <p class="file-hint">每个音频创建独立项目。重复选择会提示，同名文件不会覆盖。</p>
+            <p v-if="createdCount" class="upload-result-note">已创建的项目尚未开始处理。打开项目配置 Pipeline 后再启动；返回列表后仍可回到此队列。</p>
+          </section>
+          <p v-if="uploadBusy" class="upload-lock-note" role="status">正在逐个上传，请等待队列完成后离开。文件、项目名称和源语言已固定。</p>
+          <div class="form-actions"><button class="secondary-button" type="button" :disabled="uploadBusy" @click="cancelCreate">返回列表</button><button class="primary-button" type="submit" :disabled="!readyCount || uploadBusy || !uploadPolicy"><span v-if="uploadBusy" class="button-loader" aria-hidden="true"></span>{{ uploadSubmitLabel }}</button></div>
+          <input ref="fileInput" class="visually-hidden" type="file" multiple :accept="uploadAccept" :disabled="uploadBusy" @change="handleFileChange" />
+        </form>
       </section>
 
       <section v-else class="workspace">

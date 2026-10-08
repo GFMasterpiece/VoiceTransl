@@ -109,3 +109,29 @@ select.text-input:focus { background-image: linear-gradient(45deg, transparent 5
 .modal-errors { margin-top: 20px; }.config-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--quiet); font-size: 10px; }.config-modal-footer > div { display: flex; gap: 8px; }
 @media (max-width: 980px) { .config-map { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .config-overview { padding: 20px 18px; }.config-overview-heading { align-items: flex-start; flex-direction: column; }.config-overview-actions { width: 100%; align-items: flex-start; flex-direction: column; }.config-overview-actions .compact-button { width: 100%; }.config-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }.config-modal { max-height: calc(100vh - 32px); padding: 20px 18px; }.modal-field-grid { grid-template-columns: 1fr; gap: 14px; }.config-modal-footer { align-items: flex-start; flex-direction: column; }.config-modal-footer > div { width: 100%; }.config-modal-footer .secondary-button, .config-modal-footer .primary-button { flex: 1; } }
+
+/* Upload results stay beside their files, including partial failures. */
+.create-form { min-width: 0; }
+.upload-queue { margin-top: 24px; }
+.upload-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.upload-queue-heading h4 { margin: 0; font-size: 13px; }
+.upload-summary { margin: 8px 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.upload-list { margin: 0; padding: 0; list-style: none; }
+.upload-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 16px; padding: 16px 0; border-top: 1px solid var(--line); }
+.upload-file-copy { min-width: 0; }
+.upload-file-copy strong, .upload-file-copy span { display: block; overflow-wrap: anywhere; }
+.upload-file-copy strong { font-size: 13px; line-height: 1.6; }
+.upload-file-copy span { margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.upload-status { padding: 4px 8px; border-radius: 8px; color: var(--muted); background: oklch(94% .012 82); font-size: 11px; white-space: nowrap; }
+.upload-status.is-created, .upload-status.is-ready { color: oklch(38% .08 174); background: var(--teal-soft); }
+.upload-status.is-uploading { color: oklch(42% .1 38); background: var(--coral-soft); }
+.upload-status.is-invalid, .upload-status.is-failed { color: var(--danger); background: oklch(96% .025 25); }
+.upload-row-actions { display: flex; flex-wrap: wrap; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; }
+.upload-row-actions .text-button { min-height: 40px; padding: 8px 16px; border: 1px solid var(--line); font-size: 12px; }
+.upload-item-error { grid-column: 1 / -1; margin: 0; color: var(--danger); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.upload-feedback, .upload-policy-error, .upload-lock-note, .upload-result-note { margin: 16px 0 0; padding: 16px; border-radius: 8px; color: var(--muted); background: oklch(95% .016 82); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.upload-policy-error { color: var(--danger); background: oklch(96% .025 25); }
+.upload-lock-note { color: var(--ink); background: var(--coral-soft); }
+.upload-result-note { color: oklch(38% .08 174); background: var(--teal-soft); }
+.upload-zone:hover:not(:disabled) { border-color: var(--teal); background: var(--teal-soft); }
+@media (max-width: 640px) { .create-form .form-actions { flex-wrap: wrap; gap: 8px; }.create-form .form-actions button { flex: 1; padding: 0 16px; }.upload-row { gap: 8px; }.upload-row-actions { justify-content: flex-start; }.upload-queue-heading { flex-wrap: wrap; } }
