@@ -13,6 +13,7 @@ export interface UploadItem {
   status: UploadStatus
   error: string
   projectId?: string
+  audioId?: string
   snapshot?: UploadOptions
 }
 
@@ -47,15 +48,21 @@ export function validateUpload(file: File, policy: UploadPolicy | null): string 
 
 function uploadError(reason: unknown) {
   if (reason instanceof TypeError) return '无法连接后端，请检查服务和网络后重试此文件。'
-  const message = reason instanceof Error ? reason.message : '项目创建失败'
-  return `${message}。请检查文件或后端服务后重试此文件；已创建的项目会保留。`
+  const message = reason instanceof Error ? reason.message : '音频上传失败'
+  return `${message}。请检查文件或后端服务后重试此文件；已上传的音频会保留。`
 }
 
-export function useUploadQueue(createProject: (file: File, name: string, language: string) => Promise<{ id: string }>) {
+export function useUploadQueue(
+  createProject: (file: File, name: string, language: string) => Promise<{ id: string; audios?: { id: string }[] }>,
+  addAudio: (projectId: string, file: File, language: string) => Promise<{ id: string }>,
+) {
   const items = ref<UploadItem[]>([])
   const busy = ref(false)
   const feedback = ref('')
   const policy = ref<UploadPolicy | null>(null)
+  const targetProjectId = ref<string | null>(null)
+  const targetName = ref('')
+  let projectSnapshot: UploadOptions | null = null
   let nextId = 0
   const validCount = computed(() => items.value.filter((item) => item.status !== 'invalid').length)
   const readyCount = computed(() => items.value.filter((item) => item.status === 'ready').length)
@@ -83,7 +90,7 @@ export function useUploadQueue(createProject: (file: File, name: string, languag
         continue
       }
       if (items.value.some((item) => item.file.name === file.name)) {
-        messages.push(`“${file.name}”与队列中文件同名，将分别创建独立项目，不会覆盖。`)
+        messages.push(`“${file.name}”与队列中文件同名，将作为不同音频保存，不会覆盖。`)
       }
       const error = validateUpload(file, policy.value)
       items.value.push({ id: ++nextId, file, status: error ? 'invalid' : 'ready', error })
@@ -104,6 +111,16 @@ export function useUploadQueue(createProject: (file: File, name: string, languag
     if (busy.value) return false
     items.value = []
     feedback.value = ''
+    targetProjectId.value = null
+    targetName.value = ''
+    projectSnapshot = null
+    return true
+  }
+
+  function setTarget(projectId: string, name: string) {
+    if (busy.value || items.value.length) return false
+    targetProjectId.value = projectId
+    targetName.value = name
     return true
   }
 
@@ -116,8 +133,16 @@ export function useUploadQueue(createProject: (file: File, name: string, languag
         item.status = 'uploading'
         item.error = ''
         try {
-          const project = await createProject(item.file, item.snapshot!.name, item.snapshot!.language)
-          item.projectId = project.id
+          if (targetProjectId.value) {
+            const audio = await addAudio(targetProjectId.value, item.file, item.snapshot!.language)
+            item.audioId = audio.id
+          } else {
+            const project = await createProject(item.file, projectSnapshot!.name, item.snapshot!.language)
+            targetProjectId.value = project.id
+            targetName.value = projectSnapshot!.name
+            item.audioId = project.audios?.[0]?.id || 'aud_primary'
+          }
+          item.projectId = targetProjectId.value!
           item.status = 'created'
         } catch (reason) {
           item.error = uploadError(reason)
@@ -132,9 +157,9 @@ export function useUploadQueue(createProject: (file: File, name: string, languag
   async function submit(options: UploadOptions) {
     if (busy.value) return
     const selected = items.value.filter((item) => item.status === 'ready')
-    const single = items.value.length === 1
+    if (!projectSnapshot && selected.length) projectSnapshot = { name: options.name.trim() || fileStem(selected[0].file.name), language: options.language }
     for (const item of selected) {
-      item.snapshot = { name: single && options.name.trim() ? options.name.trim() : fileStem(item.file.name), language: options.language }
+      item.snapshot = { name: projectSnapshot!.name, language: options.language }
     }
     await process(selected)
   }
@@ -145,5 +170,5 @@ export function useUploadQueue(createProject: (file: File, name: string, languag
     if (item) await process([item])
   }
 
-  return { items, busy, feedback, policy, validCount, readyCount, createdCount, failedCount, pendingCount, setPolicy, add, remove, clear, submit, retry }
+  return { items, busy, feedback, policy, targetProjectId, targetName, validCount, readyCount, createdCount, failedCount, pendingCount, setTarget, setPolicy, add, remove, clear, submit, retry }
 }

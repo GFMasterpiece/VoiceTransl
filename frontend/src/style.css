@@ -20,6 +20,29 @@
   --display: 'Sora', 'Noto Sans SC', sans-serif;
 }
 
+.audio-library { margin-bottom: 24px; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
+.heading-actions { display: flex; flex-wrap: wrap; flex: 0 0 auto; gap: 16px; }
+@media (max-width: 640px) { .heading-actions { width: 100%; }.heading-actions > button { width: 100%; } }
+.audio-library .panel-heading { align-items: flex-start; gap: 16px; }
+.audio-selection-bar { display: flex; align-items: center; gap: 24px; margin-top: 24px; padding: 16px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.audio-selection-bar .text-button { margin-left: auto; }
+.audio-resource-list { margin: 0; padding: 0; list-style: none; }
+.audio-resource-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 8px; border-bottom: 1px solid var(--line); }
+.audio-resource-row.is-active { background: var(--teal-soft); }
+.audio-focus-button { min-width: 0; padding: 8px; border: 0; color: var(--ink); background: transparent; text-align: left; }
+.audio-focus-button strong, .audio-focus-button small { display: block; overflow-wrap: anywhere; }
+.audio-focus-button strong { font-size: 14px; }
+.audio-focus-button small { margin-top: 8px; font-size: 12px; }
+.audio-job-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.audio-resource-row.is-active .audio-job-status { color: var(--ink); }
+.audio-job-status.is-failed { color: var(--danger); }
+.audio-job-status.is-completed { color: oklch(42% 0.095 174); }
+.audio-batch-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; margin-top: 24px; }
+.audio-action-results { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.audio-action-results li { display: flex; flex-wrap: wrap; gap: 16px; padding: 8px 0; }
+.audio-action-results .is-error { color: var(--danger); }
+@media (max-width: 640px) { .audio-library { padding: 16px; }.audio-resource-row { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; }.audio-job-status { grid-column: 2; padding-left: 8px; }.audio-selection-bar { gap: 16px; }.audio-batch-actions > button { width: 100%; }.audio-library .panel-heading { flex-wrap: wrap; } }
+
 * { box-sizing: border-box; }
 body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--paper); }
 button, input, select { font: inherit; }

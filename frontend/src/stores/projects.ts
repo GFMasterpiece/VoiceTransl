@@ -1,12 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+export interface Audio {
+  id: string
+  source: Project['source']
+}
+
 export interface Project {
   id: string
   name: string
   created_at: string
   updated_at: string
   preset: string
+  audios?: Audio[]
   source: {
     original_name: string
     language: string
@@ -83,5 +89,17 @@ export const useProjectsStore = defineStore('projects', () => {
     projects.value = projects.value.filter((project) => project.id !== id)
   }
 
-  return { projects, loading, creating, error, fetchProjects, createProject, deleteProject }
+  async function addAudio(projectId: string, file: File, language: string) {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('source_language', language)
+    const response = await fetch(`${API_BASE_URL}/projects/${encodeURIComponent(projectId)}/audios`, { method: 'POST', body: form })
+    if (!response.ok) throw await parseError(response)
+    const payload = await response.json() as { audio: Audio }
+    const project = projects.value.find((entry) => entry.id === projectId)
+    if (project) project.audios = [...(project.audios || [{ id: 'aud_primary', source: project.source }]), payload.audio]
+    return payload.audio
+  }
+
+  return { projects, loading, creating, error, fetchProjects, createProject, addAudio, deleteProject }
 })

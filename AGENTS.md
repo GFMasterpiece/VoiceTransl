@@ -24,8 +24,10 @@ Confirm which area a task targets before editing. Do not refactor the legacy des
 
 ## VoiceTransl source of truth
 
-For the filesystem, API, pipeline, and persistence contract, follow
-`docs/voicetransl_v0.1_minimum_implementation.md`. For the current
+For the current project/audio resource, filesystem, API, and persistence contract,
+follow `docs/voicetransl_multi_audio_project.md`. The v0.1 contract in
+`docs/voicetransl_v0.1_minimum_implementation.md` remains the legacy single-audio
+baseline; the multi-audio contract supersedes its resource granularity. For the current
 configuration-first frontend workflow, follow
 `docs/voicetransl_v0.2_frontend_workflow.md`. Provider-specific behavior is
 documented in `docs/crispasr_provider.md` and
@@ -35,6 +37,10 @@ The VoiceTransl architecture keeps these decisions:
 
 - The filesystem is the only persistent data source.
 - One project maps to one independent project directory.
+- One project contains one or more audio resources. Each audio owns its job,
+  progress, transcripts, outputs, and immutable run configuration snapshot.
+- A project has a common default workflow configuration; selected audios may
+  receive individual overrides. Sharing configuration does not merge timelines.
 - FastAPI and Pydantic are used for the HTTP service and domain models.
 - The pipeline consists of `preprocess`, `asr`, `alignment`, `translation`, and `export`.
 - Stage results and job state are persisted after each stage.
@@ -58,12 +64,13 @@ The VoiceTransl architecture keeps these decisions:
 - The frontend already provides project listing, project detail/workspace,
   pipeline progress and stage inspection, configuration validation, deletion,
   cancellation, and completed-project reprocessing.
-- The frontend supports multiple-audio selection/drop and a validated upload
-  queue. It reuses the single-file endpoint sequentially to create independent
-  projects, retains successful project links, and supports individual failed-item
-  retries. Uploading never starts the pipeline automatically.
-- Shared batch Pipeline configuration remains future work; configure and start
-  each created project in its workspace.
+- Multiple-audio selection/drop and the validated upload queue create one project
+  with multiple audio resources. Failed uploads may be retried individually in
+  the same project without recreating successful resources. Uploading never
+  starts the pipeline automatically.
+- In a project workspace, select one, several, or all audios, configure workflow
+  nodes, apply the configuration to the selection, and start independent jobs.
+  Each audio remains individually inspectable, resumable, and cancellable.
 - The node configuration modal exposes HTTP translation `base_url` and
   `api_key_env`; the real API key remains backend-only and is read from the
   named environment variable.
@@ -77,11 +84,12 @@ The VoiceTransl architecture keeps these decisions:
 - Translation providers do not modify segment IDs, source text, or time ranges.
 - Source files and manually edited transcript files are not silently overwritten.
 - Interrupted jobs remain visible and resumable from the first incomplete stage.
-- The same project cannot run two jobs concurrently.
-- Deleting a running or queued project is rejected as `PROJECT_BUSY`; completed,
+- The same audio cannot run two jobs concurrently; different audios in a project
+  may run or queue independently under the global concurrency limit.
+- Deleting a project with ANY running or queued audio is rejected as `PROJECT_BUSY`; completed,
   failed, cancelled, and interrupted projects may be deleted with their stored
   artifacts.
-- Reprocessing a completed project creates a new Job ID and configuration
+- Reprocessing a completed audio creates a new Job ID and configuration
   snapshot; it must not mutate or resume the old completed job.
 - A running job uses its immutable configuration snapshot even if the editable
   project configuration changes later.
@@ -135,9 +143,11 @@ A change is complete only when affected tests pass, the API behavior matches the
 
 ## Documentation
 
-- Treat `docs/voicetransl_v0.1_minimum_implementation.md` as the backend design source of truth.
+- Treat `docs/voicetransl_multi_audio_project.md` as the current project/audio
+  contract; retain `docs/voicetransl_v0.1_minimum_implementation.md` for legacy
+  pipeline and single-audio compatibility details.
 - Treat `docs/voicetransl_v0.2_frontend_workflow.md` as the source of truth for
-  configuration-before-run, project lifecycle, and planned multi-file upload
+  configuration-before-run, project lifecycle, and multi-audio selection/upload
   behavior.
 - Keep CrispASR setup and HTTP translation protocol details in their dedicated
   provider documents instead of duplicating them here.

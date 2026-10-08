@@ -79,6 +79,117 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('audio workspace scope and switching', () => {
+  const audioIds = ['aud_primary', 'aud_second', 'aud_third']
+  const audioItems = () => audioIds.map((id, index) => ({ id, source: { ...project.source, original_name: `${id}.wav`, language: index === 2 ? 'ko' : 'en' }, job: makeJob({ id: `job-${id}`, audio_id: id, status: 'pending', current_stage: null }) }))
+
+  function setup(override?: (path: string, init?: RequestInit) => Promise<Response> | undefined) {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      const custom = override?.(path, init)
+      if (custom) return custom
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: audioItems() }))
+      const audio = audioItems().find((entry) => path.includes(`/audios/${entry.id}/`)) || audioItems()[0]
+      if (path.endsWith('/config')) return Promise.resolve(jsonResponse(init?.method === 'PUT' ? JSON.parse(String(init.body)) : { source_language: audio.source.language, target_language: 'zh-CN' }))
+      if (path.endsWith('/job')) return Promise.resolve(jsonResponse(audio.job))
+      if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, language: audio.source.language, stage: 'asr', segments: [{ id: audio.id, source_text: audio.id }] } }))
+      if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [{ name: `${audio.id}.srt`, size_bytes: 3, download_url: `${path}/download` }] }))
+      if (path.endsWith('/audios/run')) return Promise.resolve(jsonResponse({ items: JSON.parse(String(init?.body)).audio_ids.map((audio_id: string) => ({ audio_id, job_id: `new-${audio_id}`, status: 'pending' })) }))
+      return Promise.resolve(jsonResponse(project))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+    return { store, fetchMock }
+  }
+
+  it('applies the full workflow only to checked audio and starts only that selection with fresh snapshots', async () => {
+    const { store, fetchMock } = setup()
+    await store.load(project.id)
+    expect(store.selectedAudioIds).toEqual(['aud_primary'])
+    store.selectedAudioIds = ['aud_second', 'aud_third']
+    store.config!.translation.model = 'selected-model'
+    store.markConfigDirty()
+    await store.applyConfigToSelected()
+    const writes = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')
+    expect(writes.map(([url]) => url)).toEqual(['/api/v1/projects/project-1/audios/aud_second/config', '/api/v1/projects/project-1/audios/aud_third/config'])
+    expect(writes.map(([, init]) => JSON.parse(String(init!.body)).asr.language)).toEqual(['en', 'ko'])
+    expect(writes.every(([, init]) => JSON.parse(String(init!.body)).translation.model === 'selected-model')).toBe(true)
+    await store.runSelected()
+    const run = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/audios/run'))!
+    expect(JSON.parse(String(run[1]!.body))).toEqual({ audio_ids: ['aud_second', 'aud_third'], resume: false })
+    expect(store.batchResults).toHaveLength(2)
+    expect(store.activeAudioId).toBe('aud_primary')
+  })
+
+  it('blocks starting a known config failure until it is successfully reapplied or deselected', async () => {
+    let fail = true
+    const { store, fetchMock } = setup((path, init) => path.includes('/aud_second/config') && init?.method === 'PUT' && fail ? Promise.resolve(jsonResponse({ error: { message: '模型不可用' } }, 422)) : undefined)
+    await store.load(project.id)
+    store.selectAll(true)
+    await store.applyConfigToSelected()
+    expect(store.batchResults.filter((entry) => entry.error)).toHaveLength(1)
+    expect(store.selectedConfigFailed).toBe(true)
+    await store.runSelected()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/audios/run'))).toBe(false)
+    store.selectedAudioIds = ['aud_third']
+    await store.runSelected()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/audios/run'))).toBe(true)
+    fail = false
+    store.selectedAudioIds = ['aud_second']
+    await store.applyConfigToSelected()
+    expect(store.selectedConfigFailed).toBe(false)
+  })
+
+  it('locks queued configurations and keeps whole-project deletion blocked', async () => {
+    const { store } = setup((path) => path.endsWith('/aud_primary/job') ? Promise.resolve(jsonResponse(makeJob({ status: 'pending', config_snapshot: { source_language: 'en' } as Job['config_snapshot'] }))) : undefined)
+    await store.load(project.id)
+    expect(store.configLocked).toBe(true)
+    expect(store.isRunning).toBe(true)
+    expect(store.anyRunning).toBe(true)
+    await expect(store.saveConfig()).rejects.toThrow('只读')
+  })
+
+  it('ignores old REST resources and websocket messages after switching the focused audio', async () => {
+    const deferred = new Map<string, (response: Response) => void>()
+    let hold = false
+    const { store } = setup((path) => hold && path.includes('/aud_second/') ? new Promise<Response>((resolve) => deferred.set(path.split('/').pop()!, resolve)) : undefined)
+    await store.load(project.id)
+    const oldSocket = FakeWebSocket.instances[0]
+    hold = true
+    const switching = store.selectAudio('aud_second')
+    await store.selectAudio('aud_third')
+    expect(store.config!.source_language).toBe('ko')
+    expect(store.outputs[0].name).toBe('aud_third.srt')
+    oldSocket.onmessage?.({ data: JSON.stringify({ type: 'job.snapshot', data: makeJob({ id: 'stale-job' }) }) } as MessageEvent)
+    deferred.get('job')!(jsonResponse(makeJob({ id: 'stale-job' })))
+    deferred.get('config')!(jsonResponse({ source_language: 'en', target_language: 'ja' }))
+    deferred.get('transcript')!(jsonResponse({ transcript: { segments: [{ id: 'stale' }] } }))
+    deferred.get('outputs')!(jsonResponse({ items: [{ name: 'stale.srt' }] }))
+    await switching
+    expect(store.activeAudioId).toBe('aud_third')
+    expect(store.job!.id).toBe('job-aud_third')
+    expect(store.config!.source_language).toBe('ko')
+    expect(store.transcript!.segments[0].id).toBe('aud_third')
+    expect(store.outputs[0].name).toBe('aud_third.srt')
+    expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1].url).toContain('/audios/aud_third/events')
+  })
+
+  it('does not let an older project load failure overwrite the newly opened project', async () => {
+    let rejectOld: (reason: Error) => void = () => undefined
+    const { store } = setup((path) => path === '/api/v1/projects/old' ? new Promise<Response>((_, reject) => { rejectOld = reject }) : undefined)
+    const oldLoad = store.load('old')
+    await store.load(project.id)
+    rejectOld(new Error('stale error'))
+    await oldLoad
+    expect(store.project!.id).toBe(project.id)
+    expect(store.error).toBe('')
+    expect(store.loading).toBe(false)
+  })
+})
+
 describe('projects store', () => {
   it('loads projects and clears loading state on success', async () => {
     setActivePinia(createPinia())
@@ -158,6 +269,7 @@ describe('project detail store', () => {
     }
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/config') && init?.method === 'PUT') return Promise.resolve(jsonResponse(config))
       if (path.endsWith('/config')) return Promise.resolve(jsonResponse(config))
       if (path.endsWith('/job')) return Promise.resolve(jsonResponse(makeJob({ status: 'pending', current_stage: null })))
@@ -191,6 +303,7 @@ describe('project detail store', () => {
     setActivePinia(createPinia())
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/config')) return Promise.resolve(jsonResponse({ source_language: 'en', target_language: 'zh-CN' }))
       if (path.endsWith('/job')) return Promise.resolve(jsonResponse(makeJob({ status: 'completed', progress: 1, current_stage: null })))
       if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'translated', transcript: { project_id: project.id, stage: 'translated', language: 'zh-CN', segments: [] } }))
@@ -210,6 +323,7 @@ describe('project detail store', () => {
     setActivePinia(createPinia())
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/config')) {
         return Promise.resolve(jsonResponse({
           source_language: 'en',
@@ -260,6 +374,7 @@ describe('project detail store', () => {
     }
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/job')) return Promise.resolve(jsonResponse(incompleteJob))
       if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
       if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [{ name: 'out.srt', size_bytes: 20, download_url: '/download' }] }))
@@ -285,6 +400,7 @@ describe('project detail store', () => {
     const initialJob = makeJob({ status: 'pending', current_stage: null })
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/run') || path.endsWith('/cancel')) return Promise.resolve(jsonResponse({ ok: true }))
       if (path.endsWith('/job')) return Promise.resolve(jsonResponse(initialJob))
       if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
@@ -314,6 +430,7 @@ describe('project detail store', () => {
     const runningJob = makeJob()
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname
+      if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: [{ id: 'aud_primary', source: project.source, job: makeJob({ status: 'pending', current_stage: null }) }] }))
       if (path.endsWith('/job')) return Promise.resolve(jsonResponse(runningJob))
       if (path.endsWith('/transcript')) return Promise.resolve(jsonResponse({ stage: 'asr', transcript: { project_id: project.id, stage: 'asr', language: 'en', segments: [] } }))
       if (path.endsWith('/outputs')) return Promise.resolve(jsonResponse({ items: [] }))

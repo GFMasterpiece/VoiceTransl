@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Project } from './projects'
+import type { Audio, Project } from './projects'
 
 export type JobStatus = 'pending' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted'
 export type StageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
@@ -69,6 +69,7 @@ export interface Job {
   schema_version?: string
   id: string
   project_id: string
+  audio_id?: string
   status: JobStatus
   current_stage?: StageName | null
   progress: number
@@ -110,6 +111,9 @@ export interface Output {
   size_bytes: number
   download_url: string
 }
+
+export interface AudioItem extends Audio { job: Job }
+export interface AudioActionResult { audio_id: string; job_id?: string; status?: string; error?: { code?: string; message: string } }
 
 interface TranscriptResponse {
   stage: string
@@ -227,6 +231,11 @@ function normalizeJob(value: Job): Job {
 
 export const useProjectDetailStore = defineStore('projectDetail', () => {
   const project = ref<Project | null>(null)
+  const audios = ref<AudioItem[]>([])
+  const activeAudioId = ref<string | null>(null)
+  const selectedAudioIds = ref<string[]>([])
+  const batchResults = ref<AudioActionResult[]>([])
+  const failedConfigAudioIds = ref<string[]>([])
   const job = ref<Job | null>(null)
   const transcript = ref<Transcript | null>(null)
   const outputs = ref<Output[]>([])
@@ -244,10 +253,21 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   const reconnectAttempt = ref(0)
   let connectionGeneration = 0
   let stopped = true
+  let statusTimer: ReturnType<typeof setInterval> | null = null
+  const activeAudio = computed(() => audios.value.find((audio) => audio.id === activeAudioId.value) || null)
+  const isBusyJob = (value: Job | null) => !!value && (['running', 'cancelling'].includes(value.status) || (value.status === 'pending' && !!value.config_snapshot))
+  const anyRunning = computed(() => audios.value.some((audio) => isBusyJob(audio.job)))
+  const selectedConfigFailed = computed(() => selectedAudioIds.value.some((id) => failedConfigAudioIds.value.includes(id)))
+  function audioPath(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
+    return `/projects/${encodeURIComponent(id)}/audios/${encodeURIComponent(audioId)}`
+  }
+  function isCurrent(id: string, audioId: string, generation: number) {
+    return id === projectId.value && audioId === activeAudioId.value && generation === connectionGeneration && !stopped
+  }
 
   const progressPercent = computed(() => Math.round((job.value?.progress || 0) * 100))
-  const isRunning = computed(() => job.value?.status === 'running' || job.value?.status === 'cancelling')
-  const configLocked = computed(() => isRunning.value)
+  const isRunning = computed(() => isBusyJob(job.value))
+  const configLocked = computed(() => isBusyJob(job.value))
   const configValid = computed(() => configErrors.value.length === 0 && !!config.value)
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -259,76 +279,90 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   async function fetchProject(id = projectId.value || '') {
     if (!id) return null
     const value = await request<Project>(`/projects/${encodeURIComponent(id)}`)
-    project.value = value
+    if (id === projectId.value && !stopped) project.value = value
     return value
   }
 
-  async function fetchJob(id = projectId.value || '') {
+  async function fetchAudios(id = projectId.value || '') {
+    const value = await request<{ items: AudioItem[] }>(`/projects/${encodeURIComponent(id)}/audios`)
+    if (id === projectId.value && !stopped) {
+      audios.value = value.items.map((audio) => ({ ...audio, job: normalizeJob(audio.job) }))
+      selectedAudioIds.value = selectedAudioIds.value.filter((audioId) => audios.value.some((audio) => audio.id === audioId))
+    }
+    return value.items
+  }
+
+  async function fetchJob(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
-    const value = normalizeJob(await request<Job>(`/projects/${encodeURIComponent(id)}/job`))
-    job.value = value
+    const generation = connectionGeneration
+    const value = normalizeJob(await request<Job>(`${audioPath(id, audioId)}/job`))
+    if (isCurrent(id, audioId, generation)) {
+      job.value = value
+      const audio = audios.value.find((entry) => entry.id === audioId)
+      if (audio) audio.job = value
+    }
     return value
   }
 
-  async function fetchTranscript(id = projectId.value || '') {
+  async function fetchTranscript(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
+    const generation = connectionGeneration
     try {
-      const value = await request<TranscriptResponse>(`/projects/${encodeURIComponent(id)}/transcript`)
-      transcript.value = value.transcript
+      const value = await request<TranscriptResponse>(`${audioPath(id, audioId)}/transcript`)
+      if (isCurrent(id, audioId, generation)) transcript.value = value.transcript
       return value.transcript
     } catch (reason) {
       // A transcript is expected to be absent before ASR starts.
       if (reason instanceof Error && reason.message.includes('字幕不存在')) {
-        transcript.value = null
+        if (isCurrent(id, audioId, generation)) transcript.value = null
         return null
       }
       throw reason
     }
   }
 
-  async function fetchOutputs(id = projectId.value || '') {
+  async function fetchOutputs(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return []
-    const value = await request<{ items: Output[] }>(`/projects/${encodeURIComponent(id)}/outputs`)
-    outputs.value = value.items
+    const generation = connectionGeneration
+    const value = await request<{ items: Output[] }>(`${audioPath(id, audioId)}/outputs`)
+    if (isCurrent(id, audioId, generation)) outputs.value = value.items
     return value.items
   }
 
-  async function fetchConfig(id = projectId.value || '') {
+  async function fetchConfig(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
     configLoading.value = true
+    const generation = connectionGeneration
     try {
-      const value = await request<Partial<PipelineConfig>>(`/projects/${encodeURIComponent(id)}/config`)
-      config.value = normalizeConfig(value, project.value?.source.language || value.source_language || 'ja')
+      const value = await request<Partial<PipelineConfig>>(`${audioPath(id, audioId)}/config`)
+      if (!isCurrent(id, audioId, generation)) return null
+      config.value = normalizeConfig(value, activeAudio.value?.source.language || value.source_language || 'ja')
       configDirty.value = false
       configErrors.value = validateConfig(config.value)
       return config.value
     } catch (reason) {
+      if (!isCurrent(id, audioId, generation)) return null
       // A legacy response or an unavailable config endpoint can still render
       // a usable mock draft while the user decides whether to save it.
-      if (!config.value) config.value = defaultConfig(project.value?.source.language || 'ja')
+      if (!config.value) config.value = defaultConfig(activeAudio.value?.source.language || 'ja')
       configErrors.value = [reason instanceof Error ? reason.message : 'Pipeline 配置加载失败']
       throw reason
     } finally {
-      configLoading.value = false
+      if (isCurrent(id, audioId, generation)) configLoading.value = false
     }
   }
 
-  async function fetchAll(id = projectId.value || '') {
-    if (!id) return
-    await fetchProject(id)
-    await Promise.all([fetchJob(id), fetchConfig(id), fetchTranscript(id), fetchOutputs(id)])
-  }
-
-  function websocketUrl(id: string) {
+  function websocketUrl(id: string, audioId: string) {
     const base = new URL(API_BASE_URL, typeof window === 'undefined' ? 'http://localhost' : window.location.origin)
     base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
-    base.pathname = `${base.pathname.replace(/\/+$/, '')}/projects/${encodeURIComponent(id)}/events`
+    base.pathname = `${base.pathname.replace(/\/+$/, '')}${audioPath(id, audioId)}/events`
     return base.toString()
   }
 
   function applyEvent(message: EventMessage) {
     const type = message.type
     const data = message.data || {}
+    if (data.audio_id && data.audio_id !== activeAudioId.value) return
     if (type === 'job.snapshot' && data && typeof data === 'object') {
       job.value = normalizeJob(data as unknown as Job)
       return
@@ -379,42 +413,46 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     }
   }
 
-  function scheduleReconnect(id: string, generation: number) {
+  function scheduleReconnect(id: string, generation: number, audioId: string) {
     if (stopped || generation !== connectionGeneration || reconnectTimer.value) return
     const delay = Math.min(10_000, 500 * 2 ** reconnectAttempt.value)
     reconnectAttempt.value += 1
     reconnectTimer.value = setTimeout(() => {
       reconnectTimer.value = null
-      void fetchJob(id).catch(() => undefined)
-      connect(id, generation)
+      void fetchJob(id, audioId).catch(() => undefined)
+      connect(id, generation, audioId)
     }, delay)
   }
 
-  function connect(id = projectId.value || '', generation = connectionGeneration) {
+  function connect(id = projectId.value || '', generation = connectionGeneration, audioId = activeAudioId.value || 'aud_primary') {
     if (!id || stopped || generation !== connectionGeneration) return
     socket.value?.close()
     let ws: WebSocket
     try {
-      ws = new WebSocket(websocketUrl(id))
+      ws = new WebSocket(websocketUrl(id, audioId))
     } catch {
-      scheduleReconnect(id, generation)
+      scheduleReconnect(id, generation, audioId)
       return
     }
     socket.value = ws
     ws.onopen = () => {
+      if (!isCurrent(id, audioId, generation)) return
       reconnectAttempt.value = 0
-      void fetchJob(id).catch(() => undefined)
+      void fetchJob(id, audioId).catch(() => undefined)
     }
     ws.onmessage = (event) => {
+      if (!isCurrent(id, audioId, generation)) return
       try {
         const message = JSON.parse(event.data) as EventMessage
         applyEvent(message)
+        const audio = audios.value.find((entry) => entry.id === audioId)
+        if (audio && job.value) audio.job = job.value
         const stage = message.data?.stage
         if (message.type === 'job.completed' || (message.type === 'stage.completed' && ['asr', 'alignment', 'translation'].includes(String(stage)))) {
-          void fetchTranscript(id).catch(() => undefined)
+          void fetchTranscript(id, audioId).catch(() => undefined)
         }
         if (message.type === 'job.completed' || (message.type === 'stage.completed' && stage === 'export')) {
-          void fetchOutputs(id).catch(() => undefined)
+          void fetchOutputs(id, audioId).catch(() => undefined)
         }
       } catch {
         // Ignore malformed event payloads and keep REST as the source of truth.
@@ -424,8 +462,8 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     ws.onclose = () => {
       if (socket.value === ws) socket.value = null
       if (!stopped && generation === connectionGeneration) {
-        void fetchJob(id).catch(() => undefined)
-        scheduleReconnect(id, generation)
+        void fetchJob(id, audioId).catch(() => undefined)
+        scheduleReconnect(id, generation, audioId)
       }
     }
   }
@@ -437,23 +475,68 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     reconnectTimer.value = null
     socket.value?.close()
     socket.value = null
+    if (statusTimer) clearInterval(statusTimer)
+    statusTimer = null
   }
 
-  async function load(id: string) {
+  async function selectAudio(audioId: string) {
+    const id = projectId.value
+    if (!id || actionLoading.value || configSaving.value || !audios.value.some((audio) => audio.id === audioId)) return
+    stop()
+    stopped = false
+    activeAudioId.value = audioId
+    const generation = connectionGeneration
+    job.value = null
+    transcript.value = null
+    outputs.value = []
+    config.value = null
+    configDirty.value = false
+    configErrors.value = []
+    loading.value = true
+    error.value = ''
+    try {
+      await Promise.all([fetchJob(id, audioId), fetchConfig(id, audioId), fetchTranscript(id, audioId), fetchOutputs(id, audioId)])
+      if (isCurrent(id, audioId, generation)) {
+        connect(id, generation, audioId)
+        statusTimer = setInterval(() => { void fetchAudios(id).catch(() => undefined) }, 3000)
+      }
+    } catch (reason) {
+      if (isCurrent(id, audioId, generation)) error.value = reason instanceof Error ? reason.message : '音频详情加载失败'
+    } finally {
+      if (isCurrent(id, audioId, generation)) loading.value = false
+    }
+  }
+
+  async function load(id: string, audioId?: string) {
     stop()
     projectId.value = id
+    project.value = null
+    audios.value = []
+    activeAudioId.value = null
+    selectedAudioIds.value = []
+    batchResults.value = []
+    failedConfigAudioIds.value = []
+    const generation = connectionGeneration
     stopped = false
     loading.value = true
     error.value = ''
     try {
-      await fetchAll(id)
-      connectionGeneration += 1
-      connect(id, connectionGeneration)
+      await fetchProject(id)
+      if (generation !== connectionGeneration || id !== projectId.value) return
+      await fetchAudios(id)
+      if (generation !== connectionGeneration || id !== projectId.value) return
+      const chosen = audios.value.find((audio) => audio.id === audioId)?.id || audios.value[0]?.id
+      if (chosen) {
+        selectedAudioIds.value = [chosen]
+        await selectAudio(chosen)
+      }
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '项目详情加载失败'
-      throw reason
+      if (generation === connectionGeneration && id === projectId.value) {
+        error.value = reason instanceof Error ? reason.message : '项目详情加载失败'
+        throw reason
+      }
     } finally {
-      loading.value = false
+      if (generation === connectionGeneration && id === projectId.value) loading.value = false
     }
   }
 
@@ -462,12 +545,14 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     actionLoading.value = true
     error.value = ''
     try {
-      await request(`/projects/${encodeURIComponent(projectId.value)}/run`, {
+      const id = projectId.value
+      const audioId = activeAudioId.value || 'aud_primary'
+      await request(`${audioPath(id, audioId)}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resume }),
       })
-      await fetchJob()
+      await fetchJob(id, audioId)
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : '任务启动失败'
       throw reason
@@ -484,13 +569,17 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     if (configLocked.value) throw new Error('当前任务配置只读')
     configSaving.value = true
     error.value = ''
+    const id = projectId.value
+    const audioId = activeAudioId.value || 'aud_primary'
+    const generation = connectionGeneration
     try {
-      const value = await request<PipelineConfig>(`/projects/${encodeURIComponent(projectId.value)}/config`, {
+      const value = await request<PipelineConfig>(`${audioPath(id, audioId)}/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config.value),
       })
-      config.value = normalizeConfig(value, config.value.source_language)
+      if (!isCurrent(id, audioId, generation)) return null
+      config.value = normalizeConfig(value, config.value!.source_language)
       configDirty.value = false
       configErrors.value = validateConfig(config.value)
       return config.value
@@ -517,8 +606,10 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     actionLoading.value = true
     error.value = ''
     try {
-      await request(`/projects/${encodeURIComponent(projectId.value)}/cancel`, { method: 'POST' })
-      await fetchJob()
+      const id = projectId.value
+      const audioId = activeAudioId.value || 'aud_primary'
+      await request(`${audioPath(id, audioId)}/cancel`, { method: 'POST' })
+      await fetchJob(id, audioId)
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : '取消任务失败'
       throw reason
@@ -527,8 +618,63 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     }
   }
 
+  function selectAll(selected: boolean) {
+    selectedAudioIds.value = selected ? audios.value.map((audio) => audio.id) : []
+  }
+
+  async function applyConfigToSelected() {
+    if (!projectId.value || !config.value || actionLoading.value || configSaving.value || !selectedAudioIds.value.length) return
+    const id = projectId.value
+    const selected = [...selectedAudioIds.value]
+    const draft = JSON.parse(JSON.stringify(config.value)) as PipelineConfig
+    actionLoading.value = true
+    batchResults.value = []
+    try {
+      for (const audioId of selected) {
+        const audio = audios.value.find((entry) => entry.id === audioId)!
+        const value = normalizeConfig(draft, audio.source.language)
+        value.source_language = audio.source.language
+        value.asr.language = audio.source.language
+        try {
+          const errors = validateConfig(value)
+          if (errors.length) throw new Error(errors[0])
+          if (isBusyJob(audio.job)) throw new Error('此音频正在处理或排队，请完成或取消后再应用配置。')
+          const saved = await request<PipelineConfig>(`${audioPath(id, audioId)}/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) })
+          failedConfigAudioIds.value = failedConfigAudioIds.value.filter((entry) => entry !== audioId)
+          batchResults.value.push({ audio_id: audioId, status: '配置已应用' })
+          if (projectId.value === id && activeAudioId.value === audioId) {
+            config.value = normalizeConfig(saved, audio.source.language)
+            configDirty.value = false
+            configErrors.value = validateConfig(config.value)
+          }
+        } catch (reason) {
+          if (!failedConfigAudioIds.value.includes(audioId)) failedConfigAudioIds.value.push(audioId)
+          batchResults.value.push({ audio_id: audioId, error: { message: reason instanceof Error ? reason.message : '配置应用失败' } })
+        }
+      }
+    } finally { actionLoading.value = false }
+  }
+
+  async function runSelected() {
+    if (!projectId.value || !selectedAudioIds.value.length || actionLoading.value || configSaving.value || selectedConfigFailed.value) return
+    const id = projectId.value
+    const audioIds = [...selectedAudioIds.value]
+    actionLoading.value = true
+    error.value = ''
+    try {
+      if (activeAudioId.value && audioIds.includes(activeAudioId.value) && configDirty.value) await saveConfig()
+      const value = await request<{ items: AudioActionResult[] }>(`/projects/${encodeURIComponent(id)}/audios/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_ids: audioIds, resume: false }) })
+      if (id !== projectId.value) return
+      batchResults.value = value.items
+      await Promise.all([fetchAudios(id), fetchJob(id)])
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : '所选音频启动失败'
+    } finally { actionLoading.value = false }
+  }
+
   return {
     project,
+    audios, activeAudioId, activeAudio, selectedAudioIds, batchResults, anyRunning, selectedConfigFailed,
     job,
     transcript,
     outputs,
@@ -545,6 +691,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     configLocked,
     configValid,
     load,
+    selectAudio, selectAll, fetchAudios, applyConfigToSelected, runSelected,
     stop,
     fetchProject,
     fetchJob,

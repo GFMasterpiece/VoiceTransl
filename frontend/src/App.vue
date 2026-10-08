@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useProjectsStore } from './stores/projects'
+import { useProjectsStore, type Project } from './stores/projects'
 import { useProjectDetailStore, type Stage, type StageName } from './stores/projectDetail'
 import { useUploadQueue, type UploadPolicy, type UploadStatus } from './composables/useUploadQueue'
 
@@ -11,16 +11,16 @@ const detail = useProjectDetailStore()
 const view = ref<View>('list')
 const projectName = ref('')
 const sourceLanguage = ref('ja')
-const upload = useUploadQueue((file, name, language) => store.createProject(file, name, language))
+const upload = useUploadQueue((file, name, language) => store.createProject(file, name, language), (id, file, language) => store.addAudio(id, file, language))
 const { items: uploadItems, busy: uploadBusy, feedback: uploadFeedback, policy: uploadPolicy, validCount, readyCount, createdCount, failedCount, pendingCount } = upload
 const policyLoading = ref(false)
 const policyError = ref('')
 const uploadAccept = computed(() => uploadPolicy.value?.allowed_extensions.map((extension) => `.${extension}`).join(',') || '')
 const uploadSubmitLabel = computed(() => {
-  if (uploadBusy.value) return '上传并创建中…'
-  if (readyCount.value) return `创建 ${readyCount.value} 个项目`
+  if (uploadBusy.value) return '正在上传音频…'
+  if (readyCount.value) return `上传 ${readyCount.value} 条音频到${upload.targetProjectId.value ? '此项目' : '新项目'}`
   if (failedCount.value) return '请重试失败文件'
-  if (createdCount.value) return '创建完成'
+  if (createdCount.value) return '上传完成'
   return '等待有效文件'
 })
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -37,14 +37,14 @@ const stageList: { key: StageName; label: string; shortLabel: string; descriptio
 const waveformBars = [34, 54, 42, 76, 62, 89, 47, 68, 36, 58, 82, 50, 72, 45, 63, 92, 52, 77, 39, 61, 84, 48, 70, 55, 88, 43, 66, 31, 57, 74, 46, 81, 52, 69, 40, 63]
 
 const pageTitle = computed(() => {
-  if (view.value === 'create') return '新建项目'
+  if (view.value === 'create') return upload.targetProjectId.value ? `添加音频 · ${upload.targetName.value}` : '新建项目'
   if (view.value === 'detail') return detail.project?.name || '项目详情'
   return '我的项目'
 })
 
 const pageSubtitle = computed(() => {
-  if (view.value === 'create') return '一次选择多个音频，分别创建项目，再配置并开始处理。'
-  if (view.value === 'detail') return '从处理进度到最终字幕，所有信息都在这里。'
+  if (view.value === 'create') return '多个音频归入同一个项目，上传完成后配置并选择处理范围。'
+  if (view.value === 'detail') return '选择音频查看详情，勾选一条、多条或全部音频应用工作流。'
   return '把音频变成可交付的字幕文件。'
 })
 
@@ -89,7 +89,7 @@ function stageConfigSummary(key: StageName) {
 }
 
 function openStageConfig(key: StageName) {
-  if (!detail.config || detail.configLoading) return
+  if (!detail.config || detail.loading || detail.configLoading || detail.actionLoading || detail.configSaving) return
   selectedStage.value = key
   configModalStage.value = key
   configModalSnapshot.value = cloneConfig()
@@ -167,18 +167,18 @@ async function loadUploadPolicy() {
 }
 
 function uploadStatusLabel(status: UploadStatus) {
-  return { invalid: '校验失败', ready: '可上传', uploading: '上传中', created: '已创建', failed: '创建失败' }[status]
+  return { invalid: '校验失败', ready: '可上传', uploading: '上传中', created: '已上传', failed: '上传失败' }[status]
 }
 
 function clearUploadQueue() {
   if (uploadBusy.value) return
-  if (createdCount.value && !window.confirm('清空此上传队列吗？已创建的项目会保留在项目列表中。')) return
+  if (uploadItems.value.length && !window.confirm('清空此上传队列并开始新项目吗？已上传的音频会保留在原项目中。')) return
   upload.clear()
   projectName.value = ''
 }
 
 function guardUploadNavigation() {
-  return !uploadBusy.value
+  return !uploadBusy.value && !detail.actionLoading && !detail.configSaving
 }
 
 function guardUnload(event: BeforeUnloadEvent) {
@@ -190,6 +190,9 @@ function guardUnload(event: BeforeUnloadEvent) {
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value))
 }
+
+function projectAudioCount(project: Project) { return project.audios?.length || 1 }
+function projectAudioSize(project: Project) { return project.audios?.reduce((sum, audio) => sum + audio.source.size_bytes, 0) ?? project.source.size_bytes }
 
 function formatSize(size: number) {
   if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
@@ -239,7 +242,7 @@ function stageIcon(key: StageName) {
 
 function stageMetric(key: StageName) {
   const segments = detail.transcript?.segments.length || 0
-  if (key === 'preprocess') return detail.project ? formatSize(detail.project.source.size_bytes) : '—'
+  if (key === 'preprocess') return detail.activeAudio ? formatSize(detail.activeAudio.source.size_bytes) : '—'
   if (key === 'asr') return segments ? `${segments} 条片段` : '等待字幕'
   if (key === 'alignment') return detail.transcript?.duration ? formatTime(detail.transcript.duration) : '时间轴待生成'
   if (key === 'translation') return segments ? `${detail.transcript?.segments.filter((segment) => segment.translated_text).length || 0} 条译文` : '等待识别'
@@ -247,16 +250,13 @@ function stageMetric(key: StageName) {
 }
 
 async function submitProject() {
-  const single = uploadItems.value.length === 1
   await upload.submit({ name: projectName.value, language: sourceLanguage.value })
-  const item = uploadItems.value[0]
-  if (single && item?.projectId) await openProject(item.projectId)
+  if (createdCount.value && !failedCount.value && !uploadItems.value.some((item) => item.status === 'invalid') && upload.targetProjectId.value) await openProject(upload.targetProjectId.value)
 }
 
 async function retryUpload(id: number) {
   await upload.retry(id)
-  const item = uploadItems.value[0]
-  if (uploadItems.value.length === 1 && item?.projectId) await openProject(item.projectId)
+  if (createdCount.value && !failedCount.value && !uploadItems.value.some((item) => item.status === 'invalid') && upload.targetProjectId.value) await openProject(upload.targetProjectId.value)
 }
 
 function cancelCreate() {
@@ -267,23 +267,52 @@ function cancelCreate() {
 
 function showCreate() {
   if (!guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
+  if (uploadItems.value.some((item) => item.status !== 'created') && !window.confirm('新建项目会清空当前未完成的上传队列。已上传音频会保留在原项目中，继续新建吗？')) return
+  upload.clear()
+  projectName.value = ''
+  sourceLanguage.value = 'ja'
   detail.stop()
   view.value = 'create'
 }
 
-async function openProject(id: string) {
+function returnUploadQueue() {
+  if (!guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
+  detail.stop()
+  view.value = 'create'
+}
+
+async function openProject(id: string, audioId?: string) {
   if (!guardUploadNavigation()) return
   closeStageConfig(true)
   view.value = 'detail'
   selectedStage.value = 'preprocess'
   try {
-    await detail.load(id)
+    await detail.load(id, audioId)
     if (detail.job?.current_stage) selectedStage.value = detail.job.current_stage
     else if (detail.job?.status === 'completed') selectedStage.value = 'export'
     else if (detail.job?.error?.stage) selectedStage.value = detail.job.error.stage
   } catch {
     // The store exposes a user-facing error while keeping the detail view open.
   }
+}
+
+function addProjectAudio() {
+  if (!detail.project || !guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
+  if (uploadItems.value.length && !window.confirm('替换当前上传队列，向此项目添加音频吗？已上传的音频会保留。')) return
+  upload.clear()
+  upload.setTarget(detail.project.id, detail.project.name)
+  projectName.value = detail.project.name
+  sourceLanguage.value = detail.activeAudio?.source.language || detail.project.source.language
+  detail.stop()
+  view.value = 'create'
+}
+
+async function focusAudio(id: string) {
+  if (detail.actionLoading || detail.configSaving || id === detail.activeAudioId) return
+  if (configModalOpen.value && !closeStageConfig()) return
+  if (detail.configDirty && !window.confirm('当前音频有未保存配置，切换后会放弃修改。继续切换吗？')) return
+  await detail.selectAudio(id)
+  selectedStage.value = detail.job?.current_stage || 'preprocess'
 }
 
 function showList() {
@@ -310,8 +339,9 @@ function toggleExportFormat(format: string) {
 
 async function runJob() {
   try {
-    await detail.saveConfig()
-    await detail.run(detail.job?.status !== 'completed')
+    const resume = ['failed', 'cancelled', 'interrupted'].includes(detail.job?.status || '')
+    if (!resume) await detail.saveConfig()
+    await detail.run(resume)
   } catch { /* The store keeps the translated API error. */ }
 }
 
@@ -320,7 +350,7 @@ async function cancelJob() {
 }
 
 async function deleteProject(id: string, name: string) {
-  if (!window.confirm(`确定删除项目“${name}”吗？这会移除源音频、字幕和输出文件。`)) return
+  if (!window.confirm(`确定删除项目“${name}”吗？这会移除项目内全部音频、字幕和输出文件。`)) return
   try {
     await store.deleteProject(id)
     if (detail.project?.id === id) showList()
@@ -348,7 +378,7 @@ onUnmounted(() => {
     </header>
 
     <main class="main-content">
-      <section class="page-heading"><div><p class="eyebrow">VOICE / TRANSLATE</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><button v-if="view !== 'create'" class="primary-button" type="button" @click="showCreate"><span aria-hidden="true">＋</span> {{ uploadItems.length ? '返回上传队列' : '新建项目' }}</button></section>
+      <section class="page-heading"><div><p class="eyebrow">VOICE / TRANSLATE</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div v-if="view !== 'create'" class="heading-actions"><button class="primary-button" type="button" aria-label="新建项目" @click="showCreate"><span aria-hidden="true">＋</span> 新建项目</button><button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button" type="button" aria-label="返回上传队列" @click="returnUploadQueue">返回上传队列</button></div></section>
 
       <div v-if="currentError" class="alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" aria-label="关闭提示" @click="view === 'detail' ? (detail.error = '') : (store.error = '')">×</button></div>
 
@@ -356,15 +386,15 @@ onUnmounted(() => {
         <div class="list-toolbar"><div><span class="section-kicker">PROJECTS</span><h2>项目列表</h2></div><button class="text-button" type="button" :disabled="store.loading" @click="store.fetchProjects()"><span :class="{ spinning: store.loading }" aria-hidden="true">↻</span> 刷新</button></div>
         <div v-if="store.loading && !store.projects.length" class="empty-state skeleton-state"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
         <div v-else-if="!store.projects.length" class="empty-state"><div class="empty-icon" aria-hidden="true">◌</div><h3>还没有项目</h3><p>上传音频后，项目会显示在这里。</p><button class="secondary-button" type="button" @click="showCreate">创建第一个项目</button></div>
-        <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><button class="project-delete" type="button" aria-label="删除项目" @click.stop="deleteProject(project.id, project.name)">删除</button><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ formatSize(project.source.size_bytes) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
+        <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><button class="project-delete" type="button" aria-label="删除项目" @click.stop="deleteProject(project.id, project.name)">删除</button><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ projectAudioCount(project) }} 条音频 · {{ formatSize(projectAudioSize(project)) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
       </section>
 
       <section v-else-if="view === 'create'" class="create-layout">
-        <div class="create-copy"><span class="section-kicker">NEW PROJECT</span><h2>让音频开始流动。</h2><p>每个音频会创建一个独立项目。上传后打开项目配置五个处理阶段，再点击“开始处理”。</p><div class="mini-pipeline"><span v-for="stage in stageList" :key="stage.key">{{ stage.shortLabel }}</span></div></div>
+        <div class="create-copy"><span class="section-kicker">NEW PROJECT</span><h2>让音频开始流动。</h2><p>音频保存在同一个项目中。上传后逐条配置，或把当前工作流应用到勾选的音频，再批量开始处理。</p><div class="mini-pipeline"><span v-for="stage in stageList" :key="stage.key">{{ stage.shortLabel }}</span></div></div>
         <form class="create-form" :aria-busy="uploadBusy" @submit.prevent="submitProject">
           <div class="form-heading"><span class="section-kicker">SOURCE</span><h3>项目资料</h3></div>
-          <label class="field-label" for="project-name">项目名称 <span>{{ uploadItems.length > 1 ? '多文件使用各自文件名' : '可选，仅用于单文件' }}</span></label>
-          <input id="project-name" v-model="projectName" class="text-input" type="text" :disabled="uploadBusy || uploadItems.length > 1" placeholder="留空时使用文件名" />
+          <label class="field-label" for="project-name">项目名称 <span>{{ upload.targetProjectId.value ? '上传到现有项目' : '所有音频共用，可选' }}</span></label>
+          <input id="project-name" v-model="projectName" class="text-input" type="text" :disabled="uploadBusy || !!upload.targetProjectId.value" placeholder="留空时使用第一个有效文件名" />
           <label class="field-label" for="source-language">源语言</label>
           <select id="source-language" v-model="sourceLanguage" class="text-input" :disabled="uploadBusy"><option value="ja">日语</option><option value="en">英语</option><option value="zh">中文</option><option value="ko">韩语</option></select>
           <label class="field-label" for="audio-picker">音频文件</label>
@@ -375,31 +405,41 @@ onUnmounted(() => {
           <p v-if="uploadFeedback" class="upload-feedback" role="status">{{ uploadFeedback }}</p>
           <section v-if="uploadItems.length" class="upload-queue" aria-labelledby="upload-queue-title">
             <div class="upload-queue-heading"><h4 id="upload-queue-title">{{ validCount }} 个有效 / {{ uploadItems.length }} 个已选</h4><button class="text-button" type="button" :disabled="uploadBusy" @click="clearUploadQueue">清空队列</button></div>
-            <p class="upload-summary" role="status" aria-live="polite">{{ createdCount }} 个已创建 · {{ pendingCount }} 个待完成 · {{ failedCount }} 个创建失败 · {{ uploadItems.length - validCount }} 个校验失败</p>
+            <p class="upload-summary" role="status" aria-live="polite">{{ createdCount }} 条已上传 · {{ pendingCount }} 条待完成 · {{ failedCount }} 条上传失败 · {{ uploadItems.length - validCount }} 个校验失败</p>
             <ul class="upload-list">
               <li v-for="item in uploadItems" :key="item.id" class="upload-row" :class="`is-${item.status}`">
                 <div class="upload-file-copy"><strong :title="item.file.name">{{ item.file.name }}</strong><span>{{ formatSize(item.file.size) }}</span><span v-if="item.snapshot">项目名称：{{ item.snapshot.name }} · 源语言：{{ item.snapshot.language.toUpperCase() }}</span></div>
                 <span class="upload-status" :class="`is-${item.status}`">{{ uploadStatusLabel(item.status) }}</span>
-                <div class="upload-row-actions"><button v-if="item.projectId" class="text-button" type="button" :disabled="uploadBusy" @click="openProject(item.projectId)">打开项目</button><button v-if="item.status === 'failed'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`重试上传 ${item.file.name}`" @click="retryUpload(item.id)">重试此文件</button><button v-if="item.status !== 'created'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`移除 ${item.file.name}`" @click="upload.remove(item.id)">移除</button></div>
+                <div class="upload-row-actions"><button v-if="item.projectId" class="text-button" type="button" :disabled="uploadBusy" @click="openProject(item.projectId, item.audioId)">打开项目</button><button v-if="item.status === 'failed'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`重试上传 ${item.file.name}`" @click="retryUpload(item.id)">重试此文件</button><button v-if="item.status !== 'created'" class="text-button" type="button" :disabled="uploadBusy" :aria-label="`移除 ${item.file.name}`" @click="upload.remove(item.id)">移除</button></div>
                 <p v-if="item.error" class="upload-item-error">{{ item.error }}</p>
               </li>
             </ul>
-            <p class="file-hint">每个音频创建独立项目。重复选择会提示，同名文件不会覆盖。</p>
-            <p v-if="createdCount" class="upload-result-note">已创建的项目尚未开始处理。打开项目配置 Pipeline 后再启动；返回列表后仍可回到此队列。</p>
+            <p class="file-hint">所有音频进入同一个项目。重复选择会提示，同名文件作为不同音频保存。</p>
+            <p v-if="createdCount" class="upload-result-note">音频已上传，尚未开始处理。打开项目配置工作流；返回列表后仍可回到此队列。</p>
           </section>
           <p v-if="uploadBusy" class="upload-lock-note" role="status">正在逐个上传，请等待队列完成后离开。文件、项目名称和源语言已固定。</p>
-          <div class="form-actions"><button class="secondary-button" type="button" :disabled="uploadBusy" @click="cancelCreate">返回列表</button><button class="primary-button" type="submit" :disabled="!readyCount || uploadBusy || !uploadPolicy"><span v-if="uploadBusy" class="button-loader" aria-hidden="true"></span>{{ uploadSubmitLabel }}</button></div>
+          <div class="form-actions"><button class="secondary-button" type="button" :disabled="uploadBusy" @click="cancelCreate">返回列表</button><button v-if="upload.targetProjectId.value" class="secondary-button" type="button" :disabled="uploadBusy" @click="openProject(upload.targetProjectId.value)">打开项目</button><button class="primary-button" type="submit" :disabled="!readyCount || uploadBusy || !uploadPolicy"><span v-if="uploadBusy" class="button-loader" aria-hidden="true"></span>{{ uploadSubmitLabel }}</button></div>
           <input ref="fileInput" class="visually-hidden" type="file" multiple :accept="uploadAccept" :disabled="uploadBusy" @change="handleFileChange" />
         </form>
       </section>
 
       <section v-else class="workspace">
-        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><button class="secondary-button danger-button" type="button" :disabled="detail.isRunning || detail.actionLoading" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.actionLoading || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理' : detail.job?.status === 'pending' ? '开始处理' : '继续处理' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消任务' }}</button></div></div>
+        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><button class="secondary-button danger-button" type="button" :disabled="detail.anyRunning || detail.actionLoading" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.loading || detail.actionLoading || detail.configLocked || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理当前音频' : detail.job?.status === 'pending' ? '开始当前音频' : '继续当前音频' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消当前音频' }}</button></div></div>
         <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         <template v-else-if="detail.project">
+          <section class="audio-library" aria-labelledby="audio-library-title">
+            <div class="panel-heading"><div><span class="section-kicker">AUDIO LIBRARY</span><h3 id="audio-library-title">项目音频 · {{ detail.audios.length }} 条</h3><p class="config-overview-note">点击文件名查看详情；勾选控制应用配置和开始处理的范围。</p></div><button class="secondary-button" type="button" :disabled="detail.actionLoading || detail.configSaving" @click="addProjectAudio">添加音频</button></div>
+            <div class="audio-selection-bar"><label class="check-option"><input type="checkbox" :checked="!!detail.audios.length && detail.selectedAudioIds.length === detail.audios.length" :indeterminate="detail.selectedAudioIds.length > 0 && detail.selectedAudioIds.length < detail.audios.length" :disabled="detail.actionLoading || detail.configSaving" @change="detail.selectAll(($event.target as HTMLInputElement).checked)" /><span>全选</span></label><span>已选 {{ detail.selectedAudioIds.length }} / {{ detail.audios.length }} 条</span><button class="text-button" type="button" :disabled="detail.loading || detail.actionLoading" @click="detail.fetchAudios()">刷新状态</button></div>
+            <ul class="audio-resource-list"><li v-for="audio in detail.audios" :key="audio.id" class="audio-resource-row" :class="{ 'is-active': audio.id === detail.activeAudioId }"><input v-model="detail.selectedAudioIds" type="checkbox" :value="audio.id" :aria-label="`选择音频 ${audio.source.original_name}`" :disabled="detail.actionLoading || detail.configSaving" /><button class="audio-focus-button" type="button" :disabled="detail.actionLoading || detail.configSaving" :aria-pressed="audio.id === detail.activeAudioId" @click="focusAudio(audio.id)"><strong>{{ audio.source.original_name }}</strong><small>{{ audio.source.language.toUpperCase() }} · {{ formatSize(audio.source.size_bytes) }}<span v-if="audio.id === detail.activeAudioId"> · 当前查看</span></small></button><span class="audio-job-status" :class="`is-${audio.job.status}`">{{ audio.job.status === 'pending' && audio.job.config_snapshot ? '排队中' : statusLabel(audio.job.status) }} · {{ Math.round(audio.job.progress * 100) }}%</span></li></ul>
+            <div class="audio-batch-actions"><button class="secondary-button" type="button" :disabled="detail.loading || detail.actionLoading || !detail.configValid || !detail.selectedAudioIds.length" @click="detail.applyConfigToSelected()">应用到所选音频（{{ detail.selectedAudioIds.length }}）</button><button class="primary-button" type="button" :disabled="detail.loading || detail.actionLoading || !detail.selectedAudioIds.length || detail.selectedConfigFailed" @click="detail.runSelected()">开始所选音频（{{ detail.selectedAudioIds.length }}）</button></div>
+            <p class="file-hint">应用配置会复制当前查看音频的完整工作流，源语言自动匹配每条音频。开始所选音频使用各自已保存配置创建新任务；继续当前音频使用原任务快照。</p>
+            <p v-if="detail.selectedConfigFailed" class="upload-item-error" role="alert">所选音频有配置应用失败项，请修正后重新应用，或取消勾选失败项再开始。</p>
+            <ul v-if="detail.batchResults.length" class="audio-action-results" aria-live="polite"><li v-for="result in detail.batchResults" :key="result.audio_id" :class="{ 'is-error': result.error }"><strong>{{ detail.audios.find((audio) => audio.id === result.audio_id)?.source.original_name || result.audio_id }}</strong><span>{{ result.error?.message || (result.status === 'running' ? '已开始处理' : result.status === 'pending' ? '已加入处理队列' : result.status) }}</span></li></ul>
+          </section>
+          <p v-if="detail.loading" class="config-loading" role="status">正在加载当前音频的配置、进度与输出…</p>
           <section class="config-overview" aria-labelledby="config-title">
-            <div class="panel-heading config-overview-heading"><div><span class="section-kicker">CONFIGURATION MAP</span><h3 id="config-title">节点配置</h3><p class="config-overview-note">每个阶段只显示自己的设置。点击节点卡片编辑详细参数。</p></div><div class="config-overview-actions"><span class="config-state" :class="{ 'is-valid': detail.configValid, 'is-locked': detail.configLocked }">{{ detail.configLocked ? '运行中只读' : detail.configValid ? '配置有效' : '需要修正' }}</span><button class="secondary-button compact-button" type="button" :disabled="detail.configLocked || !detail.configDirty || detail.configSaving" @click="detail.saveConfig">{{ detail.configSaving ? '保存中…' : '保存全部配置' }}</button></div></div>
-            <div v-if="detail.configLoading" class="config-loading">正在加载项目配置…</div>
+            <div class="panel-heading config-overview-heading"><div><span class="section-kicker">CONFIGURATION MAP</span><h3 id="config-title">节点配置</h3><p class="config-overview-note">当前音频：{{ detail.activeAudio?.source.original_name }}。节点弹窗只修改这条音频；点击“应用到所选音频”复制完整工作流。</p></div><div class="config-overview-actions"><span class="config-state" :class="{ 'is-valid': detail.configValid, 'is-locked': detail.configLocked }">{{ detail.configLocked ? '运行中只读' : detail.configValid ? '配置有效' : '需要修正' }}</span><button class="secondary-button compact-button" type="button" :disabled="detail.configLocked || !detail.configDirty || detail.configSaving" @click="detail.saveConfig">{{ detail.configSaving ? '保存中…' : '保存全部配置' }}</button></div></div>
+            <div v-if="detail.configLoading" class="config-loading">正在加载当前音频配置…</div>
             <template v-else-if="detail.config">
               <div class="config-map">
                 <article v-for="stage in stageList" :key="stage.key" class="config-tile" :class="{ 'is-invalid': !detail.configValid, 'is-locked': detail.configLocked }">
@@ -412,7 +452,7 @@ onUnmounted(() => {
               <p class="config-footer-note">{{ detail.configDirty ? '有未保存的修改，保存后才能开始处理。' : '配置会在开始处理前固定为任务快照。' }}</p>
             </template>
           </section>
-          <section class="workspace-title"><div><span class="section-kicker">{{ detail.project.source.language.toUpperCase() }} · {{ detail.project.preset }}</span><h2>{{ detail.project.name }}</h2><p>{{ detail.project.source.original_name }} · {{ formatSize(detail.project.source.size_bytes) }}</p></div><div class="total-progress"><span>总进度</span><strong>{{ detail.progressPercent }}%</strong><div class="progress-track"><span :style="{ width: `${detail.progressPercent}%` }"></span></div><small>{{ statusLabel(detail.job?.status) }}</small></div></section>
+          <section class="workspace-title"><div><span class="section-kicker">{{ detail.activeAudio?.source.language.toUpperCase() }} · {{ detail.project.preset }}</span><h2>{{ detail.activeAudio?.source.original_name || '选择音频' }}</h2><p>{{ detail.project.name }} · {{ formatSize(detail.activeAudio?.source.size_bytes || 0) }}</p></div><div class="total-progress"><span>当前音频进度</span><strong>{{ detail.progressPercent }}%</strong><div class="progress-track"><span :style="{ width: `${detail.progressPercent}%` }"></span></div><small>{{ statusLabel(detail.job?.status) }}</small></div></section>
           <section class="pipeline-panel" aria-labelledby="pipeline-title"><div class="panel-heading"><div><span class="section-kicker">PIPELINE</span><h3 id="pipeline-title">处理进度</h3><p class="pipeline-hint">选择节点打开配置</p></div><span class="live-badge"><i></i>{{ detail.isRunning ? '实时同步' : '状态已保存' }}</span></div><div class="pipeline-scroll"><ol class="pipeline-list"><li v-for="(stage, index) in stageList" :key="stage.key" class="pipeline-step" :class="{ 'is-last': index === stageList.length - 1 }"><button class="pipeline-node" :class="[`is-${stageVisualStatus(stage.key)}`, { 'is-selected': selectedStage === stage.key }]" type="button" :aria-label="`打开${stage.label}配置`" :aria-pressed="selectedStage === stage.key" @click="openStageConfig(stage.key)"><span class="node-icon">{{ stageIcon(stage.key) }}</span><span class="node-copy"><strong>{{ stage.label }}</strong><small>{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</small></span><span class="node-percent">{{ Math.round(stageState(stage.key).progress * 100) }}%</span></button><span v-if="index < stageList.length - 1" class="pipeline-connector" :class="{ 'is-complete': stageVisualStatus(stage.key) === 'completed' }" aria-hidden="true"></span></li></ol></div></section>
           <section class="inspector-grid"><article class="inspector-panel"><div class="inspector-heading"><div><span class="section-kicker">STAGE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3>{{ selectedStageMeta.label }}</h3><p>{{ selectedStageMeta.description }}</p></div><span class="stage-badge" :class="`is-${stageVisualStatus(selectedStage)}`">{{ stageStatusLabel(stageVisualStatus(selectedStage)) }}</span></div><div class="metric-row"><div><span>阶段进度</span><strong>{{ selectedStagePercent }}%</strong></div><div><span>阶段结果</span><strong>{{ stageMetric(selectedStage) }}</strong></div><div><span>更新时间</span><strong>{{ detail.job?.updated_at ? formatDate(detail.job.updated_at) : '—' }}</strong></div></div><div class="timeline-block"><div class="timeline-heading"><span>音频时间轴</span><small>{{ detail.transcript?.duration ? formatTime(detail.transcript.duration) : '等待时间轴数据' }}</small></div><div class="waveform" :class="{ muted: stageVisualStatus(selectedStage) === 'pending' }"><span v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}%` }"></span></div><div class="timeline-scale"><span>00:00</span><span>01:00</span><span>02:00</span><span>03:00</span></div></div><div class="log-block"><div class="log-heading"><span>处理日志</span><small>{{ detail.job?.updated_at ? new Date(detail.job.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '—' }}</small></div><p :class="{ 'is-error': !!selectedStageValue.error }"><i :class="`log-dot is-${stageVisualStatus(selectedStage)}`"></i>{{ selectedStageLog }}</p></div></article><aside class="transcript-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE PREVIEW</span><h3>字幕预览</h3></div><span v-if="detail.transcript" class="count-label">{{ detail.transcript.segments.length }} 条</span></div><div v-if="!detail.transcript" class="preview-empty"><span class="empty-wave" aria-hidden="true">∿</span><h4>字幕还在路上</h4><p>语音识别完成后，片段会显示在这里。</p></div><div v-else class="subtitle-list"><div v-for="segment in detail.transcript.segments.slice(0, 6)" :key="segment.id" class="subtitle-row"><div class="subtitle-time">{{ formatTime(segment.start) }}<br /><span>{{ formatTime(segment.end) }}</span></div><div><p>{{ segment.source_text }}</p><p class="translated-line">{{ segment.translated_text || '等待翻译' }}</p></div></div><div v-if="detail.transcript.segments.length > 6" class="more-hint">还有 {{ detail.transcript.segments.length - 6 }} 条字幕…</div></div></aside></section>
           <section class="outputs-rail"><div class="panel-heading"><div><span class="section-kicker">DELIVERABLES</span><h3>输出文件</h3></div><span class="count-label">{{ detail.outputs.length }} 个文件</span></div><div v-if="!detail.outputs.length" class="outputs-empty">导出完成后，SRT、VTT 或媒体文件会出现在这里。</div><div v-else class="output-list"><a v-for="output in detail.outputs" :key="output.name" class="output-item" :href="output.download_url" download><span class="output-icon">↓</span><span><strong>{{ output.name }}</strong><small>{{ formatOutputSize(output.size_bytes) }}</small></span><span class="download-label">下载</span></a></div></section>
