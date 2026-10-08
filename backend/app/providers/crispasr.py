@@ -34,7 +34,7 @@ _SRT_TIMING = re.compile(
     r"(?P<end>\d{1,4}:\d{2}:\d{2}[,.]\d{1,3})"
 )
 SUPPORTED_BACKENDS = frozenset(
-    {"qwen3-1.7b", "whisper", "mega-asr", "voxtral", "voxtral4b", "granite"}
+    {"qwen3", "qwen3-1.7b", "whisper", "mega-asr", "voxtral", "voxtral4b", "granite"}
 )
 
 

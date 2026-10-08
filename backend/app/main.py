@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from .api.local_asr_settings import router as local_asr_router
 from .api.routes import router
 from .application import EventBus, JobManager
+from .application.local_asr_models import LocalASRModels
 from .application.local_asr_settings import LocalASRSettings
 from .config import load_settings
 from .logging_utils import configure_logging
@@ -95,6 +96,7 @@ def create_app(data_dir=None):
 
     app.state.settings = settings
     app.state.local_asr_settings = LocalASRSettings(Path(config_path), settings)
+    app.state.local_asr_models = LocalASRModels(app.state.local_asr_settings)
     app.state.store = store
     app.state.events = events
     app.state.jobs = jobs

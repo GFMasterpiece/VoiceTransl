@@ -59,7 +59,8 @@ class FakeProcess:
 
 
 @pytest.mark.asyncio
-async def test_provider_builds_safe_argv_and_parses_srt(tmp_path):
+@pytest.mark.parametrize("backend", ["qwen3-1.7b", "qwen3"])
+async def test_provider_builds_safe_argv_and_parses_srt(tmp_path, backend):
     binary, models, audio = setup_files(tmp_path)
     seen = {}
 
@@ -70,13 +71,13 @@ async def test_provider_builds_safe_argv_and_parses_srt(tmp_path):
     provider = CrispASRProvider(
         binary,
         models,
-        ASRConfig(provider="crispasr", backend="qwen3-1.7b", model="model.gguf", language="ja"),
+        ASRConfig(provider="crispasr", backend=backend, model="model.gguf", language="ja"),
         process_factory=factory,
     )
     result = await provider.transcribe(audio, project())
     assert result.segments[0].source_text == "hello"
     command = list(seen["command"])
-    assert command[command.index("--backend") + 1] == "qwen3-1.7b"
+    assert command[command.index("--backend") + 1] == backend
     assert "--vad-max-speech-duration-s" in command
     assert "--shell" not in command
 
