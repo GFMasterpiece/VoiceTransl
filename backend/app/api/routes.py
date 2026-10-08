@@ -1,8 +1,10 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import (
@@ -19,7 +21,18 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ..config import load_preset
-from ..domain import Job, JobStatus, PipelineConfig, Project, SourceAsset, default_stages
+from ..domain import (
+    Job,
+    JobStatus,
+    PipelineConfig,
+    PipelineStageName,
+    Project,
+    SourceAsset,
+    StageState,
+    StageStatus,
+    Transcript,
+    default_stages,
+)
 from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
@@ -127,6 +140,38 @@ class OutputItem(BaseModel):
 
 class OutputsResponse(BaseModel):
     items: list[OutputItem]
+
+
+class PreprocessResult(BaseModel):
+    kind: Literal["preprocess"] = "preprocess"
+    data: dict[str, object]
+
+
+class TranscriptResult(BaseModel):
+    kind: Literal["transcript"] = "transcript"
+    transcript: Transcript
+
+
+class OutputsResult(OutputsResponse):
+    kind: Literal["outputs"] = "outputs"
+
+
+class StageResultError(BaseModel):
+    code: Literal["STAGE_RESULT_NOT_FOUND"] = "STAGE_RESULT_NOT_FOUND"
+    message: str = "阶段结果缺失或无法读取，请重新处理该音频"
+
+
+class StageDetailResponse(BaseModel):
+    stage: PipelineStageName
+    job_id: str
+    audio_id: str
+    state: StageState
+    config: dict[str, object] | None
+    result: (
+        Annotated[PreprocessResult | TranscriptResult | OutputsResult, Field(discriminator="kind")]
+        | None
+    ) = None
+    result_error: StageResultError | None = None
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -565,6 +610,63 @@ async def audio_job(pid: str, aid: str, request: Request):
 @router.get("/projects/{pid}/audios/{aid}/transcript", response_model=TranscriptResponse)
 async def audio_transcript(pid: str, aid: str, request: Request):
     return await transcript(pid, audio_request(request, pid, aid))
+
+
+@router.get("/projects/{pid}/audios/{aid}/stages/{stage}", response_model=StageDetailResponse)
+async def audio_stage_detail(pid: str, aid: str, stage: PipelineStageName, request: Request):
+    scoped_request = audio_request(request, pid, aid)
+    store = deps(scoped_request).store
+    current = get_job(deps(scoped_request), pid)
+    state = current.stages.get(stage, StageState())
+    detail = StageDetailResponse(
+        stage=stage,
+        job_id=current.id,
+        audio_id=current.audio_id,
+        state=state,
+        config=(
+            getattr(current.config_snapshot, stage.value).model_dump(mode="json")
+            if current.config_snapshot is not None
+            else None
+        ),
+    )
+    # A fresh run keeps old files until each stage replaces them. Only its
+    # completed stages may expose results, including when later stages fail.
+    if state.status != StageStatus.COMPLETED:
+        return detail
+    try:
+        if not state.artifact:
+            raise ValueError("missing stage artifact")
+        artifact = store.resolve_artifact_path(pid, state.artifact)
+        transcript_name = {
+            PipelineStageName.ASR: "raw",
+            PipelineStageName.ALIGNMENT: "aligned",
+            PipelineStageName.TRANSLATION: "translated",
+        }.get(stage)
+        if transcript_name:
+            expected = store.resolve_project_path(pid, f"transcript/{transcript_name}.json")
+            if artifact != expected:
+                raise ValueError("wrong transcript artifact")
+            value = Transcript.model_validate_json(artifact.read_text(encoding="utf-8"))
+            if value.project_id != pid or value.stage != transcript_name:
+                raise ValueError("wrong transcript identity")
+            detail.result = TranscriptResult(transcript=value)
+        elif stage == PipelineStageName.PREPROCESS:
+            if artifact != store.resolve_project_path(pid, "cache/preprocess.json"):
+                raise ValueError("wrong preprocessing artifact")
+            metadata = json.loads(artifact.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict):
+                raise ValueError("invalid preprocessing metadata")
+            detail.result = PreprocessResult(data=metadata)
+        else:
+            if artifact != store.resolve_project_path(pid, "output") or not artifact.is_dir():
+                raise ValueError("missing output directory")
+            result = await audio_outputs(pid, aid, request)
+            if not result["items"]:
+                raise ValueError("missing outputs")
+            detail.result = OutputsResult(items=result["items"])
+    except (OSError, ValueError):
+        detail.result_error = StageResultError()
+    return detail
 
 
 @router.get("/projects/{pid}/audios/{aid}/outputs", response_model=OutputsResponse)

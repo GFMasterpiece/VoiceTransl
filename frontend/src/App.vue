@@ -24,7 +24,7 @@ const uploadSubmitLabel = computed(() => {
   return '等待有效文件'
 })
 const fileInput = ref<HTMLInputElement | null>(null)
-const selectedStage = ref<StageName>('preprocess')
+const selectedStage = computed({ get: () => detail.selectedStage, set: (value: StageName) => { detail.selectedStage = value } })
 
 const stageList: { key: StageName; label: string; shortLabel: string; description: string }[] = [
   { key: 'preprocess', label: '预处理', shortLabel: '源音频', description: '清理音频、统一采样率并准备识别输入。' },
@@ -33,8 +33,6 @@ const stageList: { key: StageName; label: string; shortLabel: string; descriptio
   { key: 'translation', label: '翻译', shortLabel: '翻译', description: '根据源语言上下文生成目标语言字幕。' },
   { key: 'export', label: '导出', shortLabel: '交付', description: '整理字幕和媒体文件，准备下载。' },
 ]
-
-const waveformBars = [34, 54, 42, 76, 62, 89, 47, 68, 36, 58, 82, 50, 72, 45, 63, 92, 52, 77, 39, 61, 84, 48, 70, 55, 88, 43, 66, 31, 57, 74, 46, 81, 52, 69, 40, 63]
 
 const pageTitle = computed(() => {
   if (view.value === 'create') return upload.targetProjectId.value ? `添加音频 · ${upload.targetName.value}` : '新建项目'
@@ -53,6 +51,49 @@ const selectedStageMeta = computed(() => stageList.find((item) => item.key === s
 const selectedStageValue = computed(() => stageState(selectedStage.value))
 const selectedStagePercent = computed(() => Math.round(selectedStageValue.value.progress * 100))
 const selectedStageIndex = computed(() => stageList.findIndex((item) => item.key === selectedStage.value))
+const stageTranscript = computed(() => selectedStageValue.value.status === 'completed' && detail.stageDetail?.result?.kind === 'transcript' ? detail.stageDetail.result.transcript : null)
+const stageMetadata = computed(() => selectedStageValue.value.status === 'completed' && detail.stageDetail?.result?.kind === 'preprocess' ? detail.stageDetail.result.data : null)
+const stageOutputs = computed(() => selectedStageValue.value.status === 'completed' && detail.stageDetail?.result?.kind === 'outputs' ? detail.stageDetail.result.items : [])
+const snapshotSummary = computed(() => {
+  const config = detail.job?.config_snapshot?.[selectedStage.value]
+  if (!config) return '尚未开始处理，没有任务配置快照。'
+  if ('formats' in config) return `${config.formats.map((format) => format.toUpperCase()).join(' / ')} · ${config.bilingual ? '双语' : '单语'}`
+  if ('enabled' in config && !config.enabled) return '已关闭，沿用识别时间轴'
+  return [config.provider.toUpperCase(), 'model' in config ? config.model : `${config.sample_rate / 1000} kHz · ${config.channels} 声道`].join(' · ')
+})
+const configUnavailableReason = computed(() => {
+  if (detail.loading || detail.configLoading) return '正在加载此音频的配置，加载完成后可查看。'
+  if (!detail.config) return '此音频配置尚未加载，请刷新配置后再查看。'
+  if (detail.actionLoading || detail.configSaving) return '正在保存配置或提交任务，完成后可查看。'
+  return ''
+})
+const stageEmptyMessage = computed(() => {
+  if (selectedStageValue.value.status === 'skipped') return '此阶段已跳过，没有独立产物；可查看后续阶段。'
+  if (selectedStageValue.value.status === 'failed') return '此阶段处理失败；修正错误后继续当前音频。'
+  if (selectedStageValue.value.status === 'running') return '正在处理此阶段，完成后会展示本阶段结果。'
+  if (selectedStageValue.value.status === 'completed') return '本阶段没有可展示的结果，请刷新阶段详情。'
+  return '此阶段尚未完成；配置工作流并开始当前音频后查看结果。'
+})
+
+function metadataValue(value: unknown) {
+  return value === null ? '未记录' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)
+}
+
+async function reloadStageConfig() {
+  const audioId = detail.activeAudioId
+  const projectId = detail.project?.id
+  if (!audioId) return
+  try {
+    await detail.selectAudio(audioId)
+  } catch (reason) {
+    if (audioId !== detail.activeAudioId || projectId !== detail.project?.id) return
+    detail.error = reason instanceof Error ? reason.message : '配置读取失败，请检查后端服务后重新加载。'
+  }
+}
+
+function formatTimestamp(value?: string | null) {
+  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未记录'
+}
 const selectedStageLog = computed(() => {
   const stage = selectedStageValue.value
   if (stage.error) return stage.error
@@ -68,7 +109,6 @@ const configModalSnapshot = ref<ReturnType<typeof cloneConfig> | null>(null)
 const configModalInitialSerialized = ref('')
 const configModalWasDirty = ref(false)
 const configModalStageMeta = computed(() => stageList.find((item) => item.key === configModalStage.value) || stageList[0])
-const configModalStatus = computed(() => stageVisualStatus(configModalStage.value))
 
 function cloneConfig() {
   return detail.config ? JSON.parse(JSON.stringify(detail.config)) as NonNullable<typeof detail.config> : null
@@ -218,7 +258,7 @@ function statusLabel(status?: string) {
 }
 
 function stageStatusLabel(status?: string) {
-  const labels: Record<string, string> = { pending: '待处理', running: '处理中', completed: '已完成', failed: '失败', cancelled: '已取消' }
+  const labels: Record<string, string> = { pending: '待处理', running: '处理中', completed: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过' }
   return labels[status || 'pending'] || status || '待处理'
 }
 
@@ -238,15 +278,6 @@ function stageIcon(key: StageName) {
   if (status === 'failed') return '!'
   if (status === 'cancelled') return '×'
   return String(stageList.findIndex((item) => item.key === key) + 1).padStart(2, '0')
-}
-
-function stageMetric(key: StageName) {
-  const segments = detail.transcript?.segments.length || 0
-  if (key === 'preprocess') return detail.activeAudio ? formatSize(detail.activeAudio.source.size_bytes) : '—'
-  if (key === 'asr') return segments ? `${segments} 条片段` : '等待字幕'
-  if (key === 'alignment') return detail.transcript?.duration ? formatTime(detail.transcript.duration) : '时间轴待生成'
-  if (key === 'translation') return segments ? `${detail.transcript?.segments.filter((segment) => segment.translated_text).length || 0} 条译文` : '等待识别'
-  return detail.outputs.length ? `${detail.outputs.length} 个文件` : '等待导出'
 }
 
 async function submitProject() {
@@ -322,10 +353,6 @@ function showList() {
   view.value = 'list'
   detail.error = ''
   void store.fetchProjects()
-}
-
-function selectStage(key: StageName) {
-  selectedStage.value = key
 }
 
 function toggleExportFormat(format: string) {
@@ -428,7 +455,7 @@ onUnmounted(() => {
         <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         <template v-else-if="detail.project">
           <section class="audio-library" aria-labelledby="audio-library-title">
-            <div class="panel-heading"><div><span class="section-kicker">AUDIO LIBRARY</span><h3 id="audio-library-title">项目音频 · {{ detail.audios.length }} 条</h3><p class="config-overview-note">点击文件名查看详情；勾选控制应用配置和开始处理的范围。</p></div><button class="secondary-button" type="button" :disabled="detail.actionLoading || detail.configSaving" @click="addProjectAudio">添加音频</button></div>
+            <div class="panel-heading"><div><span class="section-kicker">AUDIO LIBRARY</span><h3 id="audio-library-title">项目音频 · {{ detail.audios.length }} 条</h3><p class="audio-library-note">点击文件名查看详情；勾选控制应用配置和开始处理的范围。</p></div><button class="secondary-button" type="button" :disabled="detail.actionLoading || detail.configSaving" @click="addProjectAudio">添加音频</button></div>
             <div class="audio-selection-bar"><label class="check-option"><input type="checkbox" :checked="!!detail.audios.length && detail.selectedAudioIds.length === detail.audios.length" :indeterminate="detail.selectedAudioIds.length > 0 && detail.selectedAudioIds.length < detail.audios.length" :disabled="detail.actionLoading || detail.configSaving" @change="detail.selectAll(($event.target as HTMLInputElement).checked)" /><span>全选</span></label><span>已选 {{ detail.selectedAudioIds.length }} / {{ detail.audios.length }} 条</span><button class="text-button" type="button" :disabled="detail.loading || detail.actionLoading" @click="detail.fetchAudios()">刷新状态</button></div>
             <ul class="audio-resource-list"><li v-for="audio in detail.audios" :key="audio.id" class="audio-resource-row" :class="{ 'is-active': audio.id === detail.activeAudioId }"><input v-model="detail.selectedAudioIds" type="checkbox" :value="audio.id" :aria-label="`选择音频 ${audio.source.original_name}`" :disabled="detail.actionLoading || detail.configSaving" /><button class="audio-focus-button" type="button" :disabled="detail.actionLoading || detail.configSaving" :aria-pressed="audio.id === detail.activeAudioId" @click="focusAudio(audio.id)"><strong>{{ audio.source.original_name }}</strong><small>{{ audio.source.language.toUpperCase() }} · {{ formatSize(audio.source.size_bytes) }}<span v-if="audio.id === detail.activeAudioId"> · 当前查看</span></small></button><span class="audio-job-status" :class="`is-${audio.job.status}`">{{ audio.job.status === 'pending' && audio.job.config_snapshot ? '排队中' : statusLabel(audio.job.status) }} · {{ Math.round(audio.job.progress * 100) }}%</span></li></ul>
             <div class="audio-batch-actions"><button class="secondary-button" type="button" :disabled="detail.loading || detail.actionLoading || !detail.configValid || !detail.selectedAudioIds.length" @click="detail.applyConfigToSelected()">应用到所选音频（{{ detail.selectedAudioIds.length }}）</button><button class="primary-button" type="button" :disabled="detail.loading || detail.actionLoading || !detail.selectedAudioIds.length || detail.selectedConfigFailed" @click="detail.runSelected()">开始所选音频（{{ detail.selectedAudioIds.length }}）</button></div>
@@ -437,29 +464,40 @@ onUnmounted(() => {
             <ul v-if="detail.batchResults.length" class="audio-action-results" aria-live="polite"><li v-for="result in detail.batchResults" :key="result.audio_id" :class="{ 'is-error': result.error }"><strong>{{ detail.audios.find((audio) => audio.id === result.audio_id)?.source.original_name || result.audio_id }}</strong><span>{{ result.error?.message || (result.status === 'running' ? '已开始处理' : result.status === 'pending' ? '已加入处理队列' : result.status) }}</span></li></ul>
           </section>
           <p v-if="detail.loading" class="config-loading" role="status">正在加载当前音频的配置、进度与输出…</p>
-          <section class="config-overview" aria-labelledby="config-title">
-            <div class="panel-heading config-overview-heading"><div><span class="section-kicker">CONFIGURATION MAP</span><h3 id="config-title">节点配置</h3><p class="config-overview-note">当前音频：{{ detail.activeAudio?.source.original_name }}。节点弹窗只修改这条音频；点击“应用到所选音频”复制完整工作流。</p></div><div class="config-overview-actions"><span class="config-state" :class="{ 'is-valid': detail.configValid, 'is-locked': detail.configLocked }">{{ detail.configLocked ? '运行中只读' : detail.configValid ? '配置有效' : '需要修正' }}</span><button class="secondary-button compact-button" type="button" :disabled="detail.configLocked || !detail.configDirty || detail.configSaving" @click="detail.saveConfig">{{ detail.configSaving ? '保存中…' : '保存全部配置' }}</button></div></div>
-            <div v-if="detail.configLoading" class="config-loading">正在加载当前音频配置…</div>
-            <template v-else-if="detail.config">
-              <div class="config-map">
-                <article v-for="stage in stageList" :key="stage.key" class="config-tile" :class="{ 'is-invalid': !detail.configValid, 'is-locked': detail.configLocked }">
-                  <div class="config-tile-head"><span class="config-tile-index">{{ String(stageList.findIndex((item) => item.key === stage.key) + 1).padStart(2, '0') }}</span><span class="config-tile-status" :class="`is-${stageVisualStatus(stage.key)}`">{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</span></div>
-                  <h4>{{ stage.label }}</h4><p>{{ stageConfigSummary(stage.key) }}</p>
-                  <button class="config-tile-edit" type="button" :disabled="detail.configLocked" @click="openStageConfig(stage.key)">编辑配置 <span aria-hidden="true">↗</span></button>
-                </article>
-              </div>
-              <ul v-if="detail.configErrors.length" class="config-errors"><li v-for="message in detail.configErrors" :key="message">{{ message }}</li></ul>
-              <p class="config-footer-note">{{ detail.configDirty ? '有未保存的修改，保存后才能开始处理。' : '配置会在开始处理前固定为任务快照。' }}</p>
-            </template>
-          </section>
           <section class="workspace-title"><div><span class="section-kicker">{{ detail.activeAudio?.source.language.toUpperCase() }} · {{ detail.project.preset }}</span><h2>{{ detail.activeAudio?.source.original_name || '选择音频' }}</h2><p>{{ detail.project.name }} · {{ formatSize(detail.activeAudio?.source.size_bytes || 0) }}</p></div><div class="total-progress"><span>当前音频进度</span><strong>{{ detail.progressPercent }}%</strong><div class="progress-track"><span :style="{ width: `${detail.progressPercent}%` }"></span></div><small>{{ statusLabel(detail.job?.status) }}</small></div></section>
-          <section class="pipeline-panel" aria-labelledby="pipeline-title"><div class="panel-heading"><div><span class="section-kicker">PIPELINE</span><h3 id="pipeline-title">处理进度</h3><p class="pipeline-hint">选择节点打开配置</p></div><span class="live-badge"><i></i>{{ detail.isRunning ? '实时同步' : '状态已保存' }}</span></div><div class="pipeline-scroll"><ol class="pipeline-list"><li v-for="(stage, index) in stageList" :key="stage.key" class="pipeline-step" :class="{ 'is-last': index === stageList.length - 1 }"><button class="pipeline-node" :class="[`is-${stageVisualStatus(stage.key)}`, { 'is-selected': selectedStage === stage.key }]" type="button" :aria-label="`打开${stage.label}配置`" :aria-pressed="selectedStage === stage.key" @click="openStageConfig(stage.key)"><span class="node-icon">{{ stageIcon(stage.key) }}</span><span class="node-copy"><strong>{{ stage.label }}</strong><small>{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</small></span><span class="node-percent">{{ Math.round(stageState(stage.key).progress * 100) }}%</span></button><span v-if="index < stageList.length - 1" class="pipeline-connector" :class="{ 'is-complete': stageVisualStatus(stage.key) === 'completed' }" aria-hidden="true"></span></li></ol></div></section>
-          <section class="inspector-grid"><article class="inspector-panel"><div class="inspector-heading"><div><span class="section-kicker">STAGE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3>{{ selectedStageMeta.label }}</h3><p>{{ selectedStageMeta.description }}</p></div><span class="stage-badge" :class="`is-${stageVisualStatus(selectedStage)}`">{{ stageStatusLabel(stageVisualStatus(selectedStage)) }}</span></div><div class="metric-row"><div><span>阶段进度</span><strong>{{ selectedStagePercent }}%</strong></div><div><span>阶段结果</span><strong>{{ stageMetric(selectedStage) }}</strong></div><div><span>更新时间</span><strong>{{ detail.job?.updated_at ? formatDate(detail.job.updated_at) : '—' }}</strong></div></div><div class="timeline-block"><div class="timeline-heading"><span>音频时间轴</span><small>{{ detail.transcript?.duration ? formatTime(detail.transcript.duration) : '等待时间轴数据' }}</small></div><div class="waveform" :class="{ muted: stageVisualStatus(selectedStage) === 'pending' }"><span v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}%` }"></span></div><div class="timeline-scale"><span>00:00</span><span>01:00</span><span>02:00</span><span>03:00</span></div></div><div class="log-block"><div class="log-heading"><span>处理日志</span><small>{{ detail.job?.updated_at ? new Date(detail.job.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '—' }}</small></div><p :class="{ 'is-error': !!selectedStageValue.error }"><i :class="`log-dot is-${stageVisualStatus(selectedStage)}`"></i>{{ selectedStageLog }}</p></div></article><aside class="transcript-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE PREVIEW</span><h3>字幕预览</h3></div><span v-if="detail.transcript" class="count-label">{{ detail.transcript.segments.length }} 条</span></div><div v-if="!detail.transcript" class="preview-empty"><span class="empty-wave" aria-hidden="true">∿</span><h4>字幕还在路上</h4><p>语音识别完成后，片段会显示在这里。</p></div><div v-else class="subtitle-list"><div v-for="segment in detail.transcript.segments.slice(0, 6)" :key="segment.id" class="subtitle-row"><div class="subtitle-time">{{ formatTime(segment.start) }}<br /><span>{{ formatTime(segment.end) }}</span></div><div><p>{{ segment.source_text }}</p><p class="translated-line">{{ segment.translated_text || '等待翻译' }}</p></div></div><div v-if="detail.transcript.segments.length > 6" class="more-hint">还有 {{ detail.transcript.segments.length - 6 }} 条字幕…</div></div></aside></section>
-          <section class="outputs-rail"><div class="panel-heading"><div><span class="section-kicker">DELIVERABLES</span><h3>输出文件</h3></div><span class="count-label">{{ detail.outputs.length }} 个文件</span></div><div v-if="!detail.outputs.length" class="outputs-empty">导出完成后，SRT、VTT 或媒体文件会出现在这里。</div><div v-else class="output-list"><a v-for="output in detail.outputs" :key="output.name" class="output-item" :href="output.download_url" download><span class="output-icon">↓</span><span><strong>{{ output.name }}</strong><small>{{ formatOutputSize(output.size_bytes) }}</small></span><span class="download-label">下载</span></a></div></section>
+          <section class="pipeline-panel" aria-labelledby="pipeline-title"><div class="panel-heading"><div><span class="section-kicker">PIPELINE</span><h3 id="pipeline-title">处理进度</h3><p class="pipeline-hint">选择节点查看阶段详情</p></div><span class="live-badge"><i></i>{{ detail.isRunning ? '实时同步' : '状态已保存' }}</span></div><div class="pipeline-scroll"><ol class="pipeline-list"><li v-for="(stage, index) in stageList" :key="stage.key" class="pipeline-step" :class="{ 'is-last': index === stageList.length - 1 }"><button class="pipeline-node" :class="[`is-${stageVisualStatus(stage.key)}`, { 'is-selected': selectedStage === stage.key }]" type="button" :aria-label="`选择${stage.label}阶段`" :aria-pressed="selectedStage === stage.key" aria-controls="stage-workspace" @click="selectedStage = stage.key"><span class="node-icon">{{ stageIcon(stage.key) }}</span><span class="node-copy"><strong>{{ stage.label }}</strong><small>{{ stageStatusLabel(stageVisualStatus(stage.key)) }}</small></span><span class="node-percent">{{ Math.round(stageState(stage.key).progress * 100) }}%</span></button><span v-if="index < stageList.length - 1" class="pipeline-connector" :class="{ 'is-complete': stageVisualStatus(stage.key) === 'completed' }" aria-hidden="true"></span></li></ol></div></section>
+          <section id="stage-workspace" class="stage-workspace" :aria-labelledby="`stage-title-${selectedStage}`" :aria-busy="detail.stageDetailLoading">
+            <header class="stage-workspace-heading">
+              <div><span class="section-kicker">STAGE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3 :id="`stage-title-${selectedStage}`">{{ selectedStageMeta.label }}</h3><p>{{ selectedStageMeta.description }}</p></div>
+              <div class="stage-workspace-actions"><span class="stage-badge" :class="`is-${stageVisualStatus(selectedStage)}`">{{ stageStatusLabel(stageVisualStatus(selectedStage)) }}</span><button class="primary-button stage-config-button" type="button" :disabled="!!configUnavailableReason" aria-describedby="stage-config-note" @click="openStageConfig(selectedStage)">配置此阶段<span v-if="detail.configLocked"> · 只读</span></button></div>
+            </header>
+            <p id="stage-config-note" class="stage-config-note">{{ configUnavailableReason || (detail.configLocked ? '当前音频正在处理、取消或排队；配置可查看，字段只读。' : '配置入口只修改当前音频的下次处理配置；任务快照保持固定。') }}</p>
+            <button v-if="!detail.config && !detail.loading && !detail.configLoading" class="secondary-button compact-button stage-config-retry" type="button" :disabled="detail.actionLoading || detail.configSaving" @click="reloadStageConfig">重新加载配置</button>
+            <dl class="stage-metrics"><div><dt>阶段进度</dt><dd>{{ selectedStagePercent }}%</dd></div><div><dt>开始时间</dt><dd>{{ formatTimestamp(selectedStageValue.started_at) }}</dd></div><div><dt>结束时间</dt><dd>{{ formatTimestamp(selectedStageValue.finished_at) }}</dd></div></dl>
+            <p class="stage-state-note" :class="{ 'is-error': !!selectedStageValue.error || detail.job?.error?.stage === selectedStage }"><strong>阶段状态说明</strong> {{ selectedStageValue.error || (detail.job?.error?.stage === selectedStage ? detail.job.error.message : selectedStageLog) }}</p>
+            <div class="stage-config-summary">
+              <div><span>本次任务快照</span><strong>{{ snapshotSummary }}</strong><small v-if="detail.job?.config_snapshot">任务 {{ detail.job.id }} · 本次实际使用</small></div>
+              <div><span>下次处理配置</span><strong>{{ stageConfigSummary(selectedStage) }}</strong><small>{{ detail.configLocked ? '当前任务结束后可编辑' : detail.configDirty ? '有未保存修改' : '从“配置此阶段”进入编辑' }}</small></div>
+            </div>
+            <ul v-if="detail.configErrors.length" class="config-errors"><li v-for="message in detail.configErrors" :key="message">{{ message }}</li></ul>
+            <div v-if="selectedStage === 'preprocess' && detail.activeAudio" class="stage-source">
+              <h4>源音频资料</h4><dl class="stage-metadata"><div><dt>文件名</dt><dd>{{ detail.activeAudio.source.original_name }}</dd></div><div><dt>大小</dt><dd>{{ formatSize(detail.activeAudio.source.size_bytes) }}</dd></div><div><dt>语言</dt><dd>{{ detail.activeAudio.source.language }}</dd></div><div><dt>媒体类型</dt><dd>{{ detail.activeAudio.source.media_type || '未记录' }}</dd></div></dl>
+            </div>
+            <div v-if="detail.stageDetailLoading" class="stage-result-loading" role="status"><span>正在读取{{ selectedStageMeta.label }}的任务快照与阶段结果…</span><div class="stage-skeleton"></div><div class="stage-skeleton short"></div></div>
+            <div v-else-if="detail.stageDetailError || detail.stageDetail?.result_error" class="stage-result-error" role="alert"><p>{{ detail.stageDetailError || detail.stageDetail?.result_error?.message }}</p><p v-if="detail.stageDetail?.result_error">检查本阶段产物是否保留；恢复文件后刷新，或重新处理当前音频。</p><button class="secondary-button compact-button" type="button" @click="detail.fetchStageDetail()">刷新阶段详情</button></div>
+            <div v-else-if="stageMetadata" class="stage-result stage-preprocess-result"><h4>预处理结果 · 产物元数据</h4><dl class="stage-metadata"><div v-for="(value, key) in stageMetadata" :key="key"><dt>{{ key }}</dt><dd><pre>{{ metadataValue(value) }}</pre></dd></div></dl><p v-if="!Object.keys(stageMetadata).length" class="stage-empty">此预处理产物没有记录音频元数据。</p></div>
+            <div v-else-if="stageTranscript" class="stage-result stage-transcript-result">
+              <div class="stage-result-heading"><h4>{{ selectedStage === 'asr' ? '原始识别文本' : selectedStage === 'alignment' ? '对齐片段时间' : '源文与译文对照' }}</h4><span class="count-label">{{ stageTranscript.segments.length }} 条片段 · 时长 {{ formatTime(stageTranscript.duration) }}</span></div>
+              <div v-if="stageTranscript.segments.length" class="stage-table-scroll"><table class="stage-transcript-table"><thead><tr><th scope="col">片段</th><th scope="col">开始 → 结束</th><th scope="col">{{ selectedStage === 'translation' ? '源文' : '识别文本' }}</th><th v-if="selectedStage === 'translation'" scope="col">译文</th></tr></thead><tbody><tr v-for="segment in stageTranscript.segments" :key="segment.id"><td>{{ segment.id }}</td><td class="stage-segment-time">{{ formatTime(segment.start) }} → {{ formatTime(segment.end) }}</td><td>{{ segment.source_text }}</td><td v-if="selectedStage === 'translation'" class="translated-line">{{ segment.translated_text || '此片段未生成译文' }}</td></tr></tbody></table></div>
+              <p v-else class="stage-empty">本阶段已完成，没有识别到字幕片段。</p>
+            </div>
+            <div v-else-if="selectedStageValue.status === 'completed' && detail.stageDetail?.result?.kind === 'outputs'" class="stage-result stage-export-result"><div class="stage-result-heading"><h4>输出文件</h4><span class="count-label">{{ stageOutputs.length }} 个文件</span></div><div v-if="stageOutputs.length" class="output-list"><a v-for="output in stageOutputs" :key="output.name" class="output-item" :href="output.download_url" download><span class="output-icon">↓</span><span><strong>{{ output.name }}</strong><small>{{ formatOutputSize(output.size_bytes) }}</small></span><span class="download-label">下载</span></a></div><p v-else class="stage-empty">当前任务没有可下载的文件，请检查导出格式并重新处理。</p></div>
+            <p v-else class="stage-empty" role="status">{{ stageEmptyMessage }}</p>
+          </section>
           <div v-if="configModalOpen" class="modal-backdrop" role="presentation" @click.self="closeStageConfig()">
             <section class="config-modal" role="dialog" aria-modal="true" :aria-labelledby="`config-modal-${configModalStage}`">
-              <div class="config-modal-header"><div><span class="section-kicker">NODE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3 :id="`config-modal-${configModalStage}`">{{ configModalStageMeta.label }}配置</h3><p>{{ configModalStageMeta.description }}</p></div><button class="modal-close" type="button" aria-label="关闭节点配置" @click="closeStageConfig()">×</button></div>
-              <div v-if="detail.configLocked" class="modal-lock-note"><span aria-hidden="true">▣</span>任务运行或取消中，配置已锁定。完成后可以重新处理并修改。</div>
+              <div class="config-modal-header"><div><span class="section-kicker">NODE {{ String(selectedStageIndex + 1).padStart(2, '0') }}</span><h3 :id="`config-modal-${configModalStage}`">{{ configModalStageMeta.label }}配置</h3><p>下次处理配置 · 只修改当前音频的此阶段；当前任务使用固定快照。</p></div><button class="modal-close" type="button" aria-label="关闭节点配置" @click="closeStageConfig()">×</button></div>
+              <div v-if="detail.configLocked" class="modal-lock-note"><span aria-hidden="true">▣</span>任务运行、取消或排队中，字段只读。当前任务结束后可修改下次处理配置。</div>
               <form v-if="detail.config" class="config-modal-form" @submit.prevent="saveStageConfig">
                 <template v-if="configModalStage === 'preprocess'"><div class="modal-field-grid"><label class="config-field"><span>处理 Provider</span><select v-model="detail.config.preprocess.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="ffmpeg">FFmpeg（真实音频）</option></select></label><label class="config-field"><span>采样率</span><select v-model.number="detail.config.preprocess.sample_rate" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="8000">8 kHz</option><option :value="16000">16 kHz</option><option :value="44100">44.1 kHz</option><option :value="48000">48 kHz</option></select></label><label class="config-field"><span>声道数</span><select v-model.number="detail.config.preprocess.channels" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="1">单声道</option><option :value="2">双声道</option></select></label></div><label class="check-option modal-check"><input v-model="detail.config.preprocess.preserve_original" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>保留原始音频，便于后续重新处理</span></label></template>
                 <template v-else-if="configModalStage === 'asr'"><div class="modal-field-grid"><label class="config-field"><span>识别 Provider</span><select v-model="detail.config.asr.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="crispasr">CrispASR（本机）</option></select></label><label class="config-field"><span>识别后端</span><select v-model="detail.config.asr.backend" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="qwen3-1.7b">Qwen3 ASR 1.7B</option><option value="whisper">Whisper</option><option value="mega-asr">Mega ASR</option><option value="voxtral">Voxtral</option></select></label><label class="config-field"><span>识别模型</span><input v-model="detail.config.asr.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>识别语言</span><input v-model="detail.config.asr.language" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>分段时长（秒）</span><input v-model.number="detail.config.asr.chunk_seconds" type="number" min="1" max="600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label></div><label class="check-option modal-check"><input v-model="detail.config.asr.vad_enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用语音活动检测（VAD）</span></label></template>

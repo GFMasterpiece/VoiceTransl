@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Audio, Project } from './projects'
 
 export type JobStatus = 'pending' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted'
@@ -112,6 +112,19 @@ export interface Output {
   download_url: string
 }
 
+export interface StageDetail {
+  stage: StageName
+  job_id: string
+  audio_id: string
+  state: Stage
+  config: Record<string, unknown> | null
+  result: { kind: 'preprocess'; data: Record<string, unknown> }
+    | { kind: 'transcript'; transcript: Transcript }
+    | { kind: 'outputs'; items: Output[] }
+    | null
+  result_error: { code: string; message: string } | null
+}
+
 export interface AudioItem extends Audio { job: Job }
 export interface AudioActionResult { audio_id: string; job_id?: string; status?: string; error?: { code?: string; message: string } }
 
@@ -122,6 +135,8 @@ interface TranscriptResponse {
 
 interface EventMessage {
   type?: string
+  job_id?: string
+  audio_id?: string
   data?: Record<string, unknown>
 }
 
@@ -239,6 +254,13 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   const job = ref<Job | null>(null)
   const transcript = ref<Transcript | null>(null)
   const outputs = ref<Output[]>([])
+  const selectedStage = ref<StageName>('preprocess')
+  const stageDetail = ref<StageDetail | null>(null)
+  const stageDetailLoading = ref(false)
+  const stageDetailError = ref('')
+  let stageDetailGeneration = 0
+  let jobRequestGeneration = 0
+  const retiredJobIds = new Set<string>()
   const config = ref<PipelineConfig | null>(null)
   const configLoading = ref(false)
   const configSaving = ref(false)
@@ -295,14 +317,51 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   async function fetchJob(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
     const generation = connectionGeneration
+    const requestGeneration = ++jobRequestGeneration
     const value = normalizeJob(await request<Job>(`${audioPath(id, audioId)}/job`))
-    if (isCurrent(id, audioId, generation)) {
+    if (isCurrent(id, audioId, generation) && requestGeneration === jobRequestGeneration) {
+      if (job.value && job.value.id !== value.id) retiredJobIds.add(job.value.id)
       job.value = value
       const audio = audios.value.find((entry) => entry.id === audioId)
       if (audio) audio.job = value
     }
     return value
   }
+
+  async function fetchStageDetail() {
+    const id = projectId.value
+    const audioId = activeAudioId.value
+    const jobId = job.value?.id
+    const stage = selectedStage.value
+    const generation = connectionGeneration
+    const requestGeneration = ++stageDetailGeneration
+    stageDetail.value = null
+    stageDetailError.value = ''
+    stageDetailLoading.value = false
+    if (!id || !audioId || !jobId || stopped) return
+    const current = () => isCurrent(id, audioId, generation) && job.value?.id === jobId
+      && selectedStage.value === stage && requestGeneration === stageDetailGeneration
+    stageDetailLoading.value = true
+    try {
+      const value = await request<StageDetail>(`${audioPath(id, audioId)}/stages/${stage}`)
+      if (!current()) return
+      if (value.job_id !== jobId || value.audio_id !== audioId || value.stage !== stage) {
+        stageDetailError.value = '阶段详情与当前任务不一致，请刷新阶段详情。'
+        return
+      }
+      stageDetail.value = value
+    } catch (reason) {
+      if (current()) stageDetailError.value = `${reason instanceof Error ? reason.message : '阶段详情加载失败'}。请检查服务后重试。`
+    } finally {
+      if (current()) stageDetailLoading.value = false
+    }
+  }
+
+  // Only the selected stage is fetched. Job replacement and completed-stage
+  // notifications invalidate pending responses before loading its own artifact.
+  watch(() => [job.value?.id, selectedStage.value, job.value?.stages[selectedStage.value]?.status], () => {
+    void fetchStageDetail()
+  }, { flush: 'sync' })
 
   async function fetchTranscript(id = projectId.value || '', audioId = activeAudioId.value || 'aud_primary') {
     if (!id) return null
@@ -342,9 +401,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
       return config.value
     } catch (reason) {
       if (!isCurrent(id, audioId, generation)) return null
-      // A legacy response or an unavailable config endpoint can still render
-      // a usable mock draft while the user decides whether to save it.
-      if (!config.value) config.value = defaultConfig(activeAudio.value?.source.language || 'ja')
+      config.value = null
       configErrors.value = [reason instanceof Error ? reason.message : 'Pipeline 配置加载失败']
       throw reason
     } finally {
@@ -362,12 +419,19 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   function applyEvent(message: EventMessage) {
     const type = message.type
     const data = message.data || {}
-    if (data.audio_id && data.audio_id !== activeAudioId.value) return
+    if (message.audio_id && message.audio_id !== activeAudioId.value) return false
+    if (data.audio_id && data.audio_id !== activeAudioId.value) return false
     if (type === 'job.snapshot' && data && typeof data === 'object') {
+      if (message.job_id && message.job_id !== data.id) return false
+      if (retiredJobIds.has(String(data.id))) return false
+      jobRequestGeneration += 1
+      if (job.value && job.value.id !== data.id) retiredJobIds.add(job.value.id)
       job.value = normalizeJob(data as unknown as Job)
-      return
+      return true
     }
-    if (!job.value) return
+    if (!job.value) return false
+    if (message.job_id && message.job_id !== job.value.id) return false
+    if (data.job_id && data.job_id !== job.value.id) return false
     const stage = data.stage as StageName | undefined
     if (stage && job.value.stages[stage]) {
       if (type === 'stage.started') {
@@ -411,6 +475,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
         retryable: true,
       }
     }
+    return true
   }
 
   function scheduleReconnect(id: string, generation: number, audioId: string) {
@@ -444,7 +509,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
       if (!isCurrent(id, audioId, generation)) return
       try {
         const message = JSON.parse(event.data) as EventMessage
-        applyEvent(message)
+        if (!applyEvent(message)) return
         const audio = audios.value.find((entry) => entry.id === audioId)
         if (audio && job.value) audio.job = job.value
         const stage = message.data?.stage
@@ -471,6 +536,11 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   function stop() {
     stopped = true
     connectionGeneration += 1
+    jobRequestGeneration += 1
+    stageDetailGeneration += 1
+    stageDetail.value = null
+    stageDetailLoading.value = false
+    stageDetailError.value = ''
     if (reconnectTimer.value) clearTimeout(reconnectTimer.value)
     reconnectTimer.value = null
     socket.value?.close()
@@ -678,6 +748,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     job,
     transcript,
     outputs,
+    selectedStage, stageDetail, stageDetailLoading, stageDetailError, fetchStageDetail,
     config,
     configLoading,
     configSaving,

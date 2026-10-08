@@ -49,6 +49,7 @@ data/projects/<project-id>/
 | `GET /projects/{pid}/audios` | 返回 `{items: [{id, source, name, job}]}`，包含主音频和所有新增音频 |
 | `GET/PUT /projects/{pid}/audios/{aid}/config` | 读取有效配置 / 保存该音频配置，规则与旧配置接口一致 |
 | `GET /projects/{pid}/audios/{aid}/job` | 该音频当前 Job |
+| `GET /projects/{pid}/audios/{aid}/stages/{stage}` | 当前任务的单阶段状态、任务配置快照和对应真实产物 |
 | `POST /projects/{pid}/audios/{aid}/run` | `{resume: true/false}`，202 返回 `{job_id, status}` |
 | `POST /projects/{pid}/audios/{aid}/cancel` | 只取消该音频 |
 | `GET /projects/{pid}/audios/{aid}/transcript` | 该音频最完整的已完成字幕阶段 |
@@ -56,6 +57,8 @@ data/projects/<project-id>/
 | `GET /projects/{pid}/audios/{aid}/outputs/{filename}` | 该音频输出下载，严格校验路径 |
 | `POST /projects/{pid}/audios/run` | 批量启动选中的音频，见下文 |
 | `DELETE /projects/{pid}` | 删除整个父项目及所有音频；任一音频忙碌返回 409 `PROJECT_BUSY` |
+
+阶段详情响应为 `{stage, job_id, audio_id, state, config, result, result_error}`。`config` 是当前任务该阶段的不可变快照，无快照时为 `null`，与可编辑的下次处理配置分开。仅当前任务该阶段 `completed` 时读取对应产物：预处理为 `{kind: "preprocess", data: metadata}`，识别/对齐/翻译为 `{kind: "transcript", transcript}`（分别是 raw/aligned/translated），导出为 `{kind: "outputs", items}`。未完成、失败或跳过时 `result` 为 `null`；产物缺失或不可读时通过 `result_error: {code, message}` 提示，不回退到别的阶段或旧任务结果。
 
 批量启动请求示例：
 
