@@ -10,6 +10,7 @@ from .pipeline_config import (
     default_pipeline_config,
 )
 from .project import AudioAsset, Project, SourceAsset
+from .provider_profile import ProviderProfile, ProviderProfilesDocument
 from .transcript import Segment, Transcript
 
 __all__ = [
@@ -23,6 +24,8 @@ __all__ = [
     "Project",
     "AudioAsset",
     "SourceAsset",
+    "ProviderProfile",
+    "ProviderProfilesDocument",
     "Segment",
     "Transcript",
     "ASRConfig",

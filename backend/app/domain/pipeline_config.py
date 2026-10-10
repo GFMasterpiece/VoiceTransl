@@ -17,6 +17,14 @@ class PreprocessConfig(_ConfigModel):
 
 class ASRConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
+    # The profile is resolved and copied into the job snapshot when a run
+    # starts. It does not contain credentials.
+    provider_profile_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+    )
     # CrispASR backend is a safe identifier selected from the server's
     # supported capability list. It is never interpreted as a command or path.
     backend: str = Field(default="qwen3-1.7b", min_length=1, max_length=64)

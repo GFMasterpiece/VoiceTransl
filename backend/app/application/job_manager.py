@@ -131,11 +131,30 @@ class JobManager:
                 if pipeline_resume and previous.config_snapshot is not None
                 else store.load_pipeline_config(project_id).model_copy(deep=True)
             )
+            provider_profiles = (
+                {
+                    profile_id: profile.model_copy(deep=True)
+                    for profile_id, profile in previous.provider_profiles_snapshot.items()
+                }
+                if pipeline_resume
+                else {}
+            )
+            # Resolve a profile exactly once for a new run. Resumes use the
+            # profile copy persisted with the original run.
+            profile_id = snapshot.asr.provider_profile_id
+            if profile_id and not provider_profiles:
+                profile = store.provider_profile(profile_id)
+                if profile is None:
+                    raise ValueError(f"provider profile not found: {profile_id}")
+                if not profile.enabled:
+                    raise ValueError(f"provider profile disabled: {profile_id}")
+                provider_profiles = {profile.id: profile.model_copy(deep=True)}
             job.status = JobStatus.PENDING
             job.cancel_requested = False
             job.error = None
             job.current_stage = None
             job.config_snapshot = snapshot
+            job.provider_profiles_snapshot = provider_profiles
             store.save_job(job)
             ev = asyncio.Event()
             self.cancel_events[key] = ev

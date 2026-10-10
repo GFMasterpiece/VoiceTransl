@@ -31,7 +31,8 @@ baseline; the multi-audio contract supersedes its resource granularity. For the 
 configuration-first frontend workflow, follow
 `docs/voicetransl_v0.2_frontend_workflow.md`. Provider-specific behavior is
 documented in `docs/crispasr_provider.md` and
-`docs/translation_providers.md`.
+`docs/translation_providers.md`; reusable connection profiles are described
+in `docs/provider_profiles.md`.
 
 The VoiceTransl architecture keeps these decisions:
 

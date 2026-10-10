@@ -27,6 +27,7 @@ from ..domain import (
     PipelineConfig,
     PipelineStageName,
     Project,
+    ProviderProfile,
     SourceAsset,
     StageState,
     StageStatus,
@@ -107,6 +108,10 @@ class ProjectListResponse(BaseModel):
     items: list[Project]
 
 
+class ProviderProfileListResponse(BaseModel):
+    items: list[ProviderProfile]
+
+
 class CreateProjectResponse(BaseModel):
     project: Project
     job: Job
@@ -174,6 +179,24 @@ class StageDetailResponse(BaseModel):
     result_error: StageResultError | None = None
 
 
+def get_provider_profile(state, profile_id: str) -> ProviderProfile:
+    try:
+        profile = state.store.provider_profile(profile_id)
+    except (FileNotFoundError, ValueError):
+        profile = None
+    if profile is None:
+        raise HTTPException(
+            404,
+            detail={
+                "error": {
+                    "code": "PROVIDER_PROFILE_NOT_FOUND",
+                    "message": "提供商配置不存在",
+                }
+            },
+        )
+    return profile
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health():
     return {"status": "ok"}
@@ -186,6 +209,102 @@ async def upload_policy(request: Request):
         allowed_extensions=settings.allowed_extensions,
         max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
     )
+
+
+@router.get("/provider-profiles", response_model=ProviderProfileListResponse)
+async def provider_profiles(request: Request):
+    try:
+        profiles = deps(request).store.load_provider_profiles()
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "INVALID_PROVIDER_PROFILES",
+                    "message": "提供商配置文件无效",
+                }
+            },
+        )
+    return {"items": profiles}
+
+
+@router.post("/provider-profiles", status_code=201, response_model=ProviderProfile)
+async def create_provider_profile(value: ProviderProfile, request: Request):
+    state = deps(request)
+    profiles = state.store.load_provider_profiles()
+    if any(profile.id == value.id for profile in profiles):
+        raise HTTPException(
+            409,
+            detail={
+                "error": {
+                    "code": "PROVIDER_PROFILE_EXISTS",
+                    "message": "提供商配置 ID 已存在",
+                }
+            },
+        )
+    now = datetime.now(timezone.utc)
+    profile = value.model_copy(update={"created_at": now, "updated_at": now})
+    state.store.save_provider_profiles([*profiles, profile])
+    return profile
+
+
+@router.get("/provider-profiles/{profile_id}", response_model=ProviderProfile)
+async def provider_profile(profile_id: str, request: Request):
+    return get_provider_profile(deps(request), profile_id)
+
+
+@router.put("/provider-profiles/{profile_id}", response_model=ProviderProfile)
+async def update_provider_profile(profile_id: str, value: ProviderProfile, request: Request):
+    state = deps(request)
+    if value.id != profile_id:
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "PROVIDER_PROFILE_ID_MISMATCH",
+                    "message": "路径中的提供商配置 ID 必须与请求一致",
+                }
+            },
+        )
+    profiles = state.store.load_provider_profiles()
+    current = next((profile for profile in profiles if profile.id == profile_id), None)
+    if current is None:
+        raise HTTPException(
+            404,
+            detail={
+                "error": {
+                    "code": "PROVIDER_PROFILE_NOT_FOUND",
+                    "message": "提供商配置不存在",
+                }
+            },
+        )
+    profile = value.model_copy(
+        update={"created_at": current.created_at, "updated_at": datetime.now(timezone.utc)}
+    )
+    state.store.save_provider_profiles(
+        [profile if item.id == profile_id else item for item in profiles]
+    )
+    return profile
+
+
+@router.delete("/provider-profiles/{profile_id}", status_code=204)
+async def delete_provider_profile(profile_id: str, request: Request):
+    state = deps(request)
+    get_provider_profile(state, profile_id)
+    if state.store.provider_profile_in_use(profile_id):
+        raise HTTPException(
+            409,
+            detail={
+                "error": {
+                    "code": "PROVIDER_PROFILE_IN_USE",
+                    "message": "提供商配置正在被项目使用，请先切换项目配置",
+                }
+            },
+        )
+    profiles = [
+        profile for profile in state.store.load_provider_profiles() if profile.id != profile_id
+    ]
+    state.store.save_provider_profiles(profiles)
 
 
 @router.post("/projects", status_code=201, response_model=CreateProjectResponse)
@@ -320,6 +439,29 @@ def _update_pipeline_config(pid, value, request):
                 }
             },
         )
+    profile_id = value.asr.provider_profile_id
+    if profile_id:
+        profile = state.store.provider_profile(profile_id)
+        if profile is None:
+            raise HTTPException(
+                422,
+                detail={
+                    "error": {
+                        "code": "PROVIDER_PROFILE_NOT_FOUND",
+                        "message": "所选提供商配置不存在",
+                    }
+                },
+            )
+        if not profile.enabled:
+            raise HTTPException(
+                422,
+                detail={
+                    "error": {
+                        "code": "PROVIDER_PROFILE_DISABLED",
+                        "message": "所选提供商配置已停用",
+                    }
+                },
+            )
     state.store.save_pipeline_config(pid, value)
     return value
 
