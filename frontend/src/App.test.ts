@@ -271,7 +271,7 @@ describe('workflow navigation guards', () => {
     detail.loading = false
     await nextTick()
     expect(root!.querySelector('.workspace')).not.toBeNull()
-    expect(findButton('节点工作流 首版')).not.toBeUndefined()
+    expect(findButton('节点工作流 音频分支')).not.toBeUndefined()
     return { pinia, detail }
   }
 
@@ -295,7 +295,7 @@ describe('workflow navigation guards', () => {
 
   async function openDirtyWorkflow() {
     const state = await mountWorkflow()
-    findButton('节点工作流 首版')!.click()
+    findButton('节点工作流 音频分支')!.click()
     await settle()
     const workflow = useWorkflowStore(state.pinia)
     workflow.markDirty()

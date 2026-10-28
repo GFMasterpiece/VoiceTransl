@@ -23,7 +23,15 @@ Runner = Callable[[list[str]], Any | Awaitable[Any]]
 
 
 def _run_ffmpeg(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    # FFmpeg output is not part of the API contract. Discard both streams so a
+    # faulty or verbose child cannot accumulate unbounded output in memory.
+    return subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
 
 
 class FFmpegPreprocessProvider:
@@ -74,8 +82,7 @@ class FFmpegPreprocessProvider:
 
         return_code = getattr(result, "returncode", None)
         if return_code not in (0, None):
-            # stderr is retained in server diagnostics by the caller; never
-            # include arbitrary command output in the persisted job error.
+            # Never include arbitrary command output in the persisted error.
             raise PreprocessError("PREPROCESS_FFMPEG_FAILED", "FFmpeg 音频转换失败")
         if not output.is_file():
             raise PreprocessError("PREPROCESS_OUTPUT_MISSING", "FFmpeg 未生成预处理音频")

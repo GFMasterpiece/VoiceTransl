@@ -153,7 +153,9 @@ class JobManager:
                                     node.finished_at = run.finished_at
                                 store.save_workflow_run(run)
                                 return
-                            await execute_workflow_run(store, run, event)
+                            await execute_workflow_run(
+                                store, run, event, ffmpeg_path=self.ffmpeg_path
+                            )
                     except asyncio.CancelledError:
                         if run.status in {
                             WorkflowRunStatus.PENDING,

@@ -18,7 +18,7 @@
 
 ## 当前版本与目标的区别
 
-当前保留固定的 `preprocess → asr → alignment → translation → export` 五阶段，并新增独立的音频直通图编辑器：能连接一个音频输入与多个音频输出、独立配置输出，保存工作流修订并运行、查看历史和下载。该里程碑不含 ASR/翻译处理节点、文本/视频图输出、从节点重跑或产物清理，不能等同于完整 ComfyUI 式处理图。现行阶段、任务和文件契约见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)和[首版里程碑](../spec/workflow-audio-mvp.md)。
+当前保留固定的 `preprocess → asr → alignment → translation → export` 五阶段，并新增独立的音频节点图编辑器：能连接一个音频输入、多个 Mock/FFmpeg 预处理与音频输出，支持直出、串联与分支，独立配置节点，保存工作流修订并运行、查看历史和下载。当前不含 ASR/翻译处理节点、文本/视频图输出、从节点重跑或产物清理，不能等同于完整 ComfyUI 式处理图。现行阶段、任务和文件契约见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)、[首版里程碑](../spec/workflow-audio-mvp.md)和[预处理里程碑](../spec/workflow-preprocess.md)。
 
 ## 初步验收方向
 

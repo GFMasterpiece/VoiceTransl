@@ -17,6 +17,7 @@
 | --- | --- | --- |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 实现 ComfyUI 风格的可视化节点编排和节点独立配置 |
 | [首个音频直通里程碑](workflow-audio-mvp.md) | Implemented | 已验收输入/输出图编辑、版本化保存及独立运行历史；不含处理节点与重跑 |
+| [音频预处理节点里程碑](workflow-preprocess.md) | Implemented | 已验收 Mock/FFmpeg 预处理、直接上游产物、依赖调度及分支失败隔离 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 在现有音频处理流程中接入首个云端语音识别 Provider |
 
 整体产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，阶段与进度见 [`../docs/roadmap.md`](../docs/roadmap.md)。规格获批和实现后才把稳定行为沉淀为 `docs/` 契约；不要在两处重复维护完整细节。

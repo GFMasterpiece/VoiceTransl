@@ -3,8 +3,12 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import {
   WORKFLOW_NODE_HEIGHT,
   WORKFLOW_NODE_WIDTH,
-  useWorkflowStore,
+  executionSignature,
   nodeLabel,
+  readPreprocessConfig,
+  useWorkflowStore,
+  type PreprocessChannels,
+  type PreprocessProvider,
   type WorkflowNode,
 } from '../stores/workflow'
 
@@ -22,12 +26,17 @@ const historyOpen = ref(false)
 const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
 const filenameDraft = ref('')
+const providerDraft = ref<PreprocessProvider>('mock')
+const sampleRateDraft = ref('16000')
+const channelsDraft = ref<PreprocessChannels>(1)
+const preserveOriginalDraft = ref(true)
 const settingsError = ref('')
 const selected = computed(() => store.selectedNode)
-const panels = computed(() => store.draft.nodes.filter((node) => node.type === 'audio_output'))
 const currentInput = computed(() => store.draft.nodes.find((node) => node.type === 'audio_input'))
-const canSave = computed(() => store.dirty && !store.saving && !store.loading)
-const canValidateAndSave = computed(() => canSave.value && !store.validating)
+const connectionSource = computed(() => selected.value && ['audio_input', 'preprocess'].includes(selected.value.type) ? selected.value : currentInput.value)
+const connectionTargets = computed(() => store.draft.nodes.filter((node) => ['preprocess', 'audio_output'].includes(node.type)))
+const controlsLocked = computed(() => store.saving || !!store.activeRun)
+const canValidateAndSave = computed(() => store.dirty && !store.saving && !store.loading && !store.validating && !store.activeRun)
 const canRun = computed(() => !store.dirty && !store.saving && !!store.document && !store.activeRun && !store.actionLoading)
 
 const nodeWidth = WORKFLOW_NODE_WIDTH
@@ -69,9 +78,14 @@ function openNode(node: WorkflowNode) {
   if (store.activeRun) return
   store.selectNode(node.id)
   filenameDraft.value = typeof node.config.filename_stem === 'string' ? node.config.filename_stem : 'audio-copy'
+  const preprocess = readPreprocessConfig(node.config)
+  providerDraft.value = preprocess.provider
+  sampleRateDraft.value = String(preprocess.sample_rate)
+  channelsDraft.value = preprocess.channels
+  preserveOriginalDraft.value = preprocess.preserve_original
   settingsError.value = ''
   settingsOpen.value = true
-  void nextTick(() => document.getElementById('workflow-filename-stem')?.focus())
+  void nextTick(() => document.getElementById(node.type === 'audio_output' ? 'workflow-filename-stem' : node.type === 'preprocess' ? 'workflow-sample-rate' : 'workflow-settings-title')?.focus())
 }
 
 function closeSettings() {
@@ -80,14 +94,37 @@ function closeSettings() {
 }
 
 function commitSettings() {
-  if (!selected.value || store.saving) return
+  if (!selected.value || store.saving || store.activeRun) return
   if (selected.value.type === 'audio_output') {
     const stem = filenameDraft.value.trim()
-    if (!stem || stem === '.' || stem === '..' || /[\\/\u0000-\u001f]/.test(stem)) {
-      settingsError.value = '输出文件名不能为空，且不能包含路径分隔符或控制字符。'
+    const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)
+    if (!stem || stem === '.' || stem === '..' || stem.endsWith('.') || reserved || stem.includes(String.fromCharCode(92)) || /[\/<>:"|?*\u0000-\u001f\u007f]/.test(stem) || stem.length > 128) {
+      settingsError.value = '输出文件名不能为空、不能是系统保留名称，且不能包含路径分隔符或危险字符。'
       return
     }
     store.updateNode(selected.value.id, { config: { filename_stem: stem } })
+  } else if (selected.value.type === 'preprocess') {
+    const sampleRate = Number(sampleRateDraft.value)
+    if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
+      settingsError.value = '采样率必须是 8000–192000 之间的整数。'
+      return
+    }
+    if (providerDraft.value !== 'mock' && providerDraft.value !== 'ffmpeg') {
+      settingsError.value = '请选择 Mock 或 FFmpeg Provider。'
+      return
+    }
+    if (channelsDraft.value !== 1 && channelsDraft.value !== 2) {
+      settingsError.value = '声道数只能是 1 或 2。'
+      return
+    }
+    store.updateNode(selected.value.id, {
+      config: {
+        provider: providerDraft.value,
+        sample_rate: sampleRate,
+        channels: channelsDraft.value,
+        preserve_original: preserveOriginalDraft.value,
+      },
+    })
   }
   settingsOpen.value = false
 }
@@ -110,6 +147,7 @@ function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
 }
 
 function onPointerMove(event: PointerEvent) {
+  if (store.activeRun) return
   if (drag.value) {
     const point = canvasPoint(event)
     const node = store.draft.nodes.find((item) => item.id === drag.value!.nodeId)
@@ -137,7 +175,7 @@ function onPointerUp(event: PointerEvent) {
 }
 
 function startPan(event: PointerEvent) {
-  if ((event.target as Element).closest('.workflow-node') || event.button !== 0) return
+  if ((event.target as Element).closest('.workflow-node') || event.button !== 0 || store.activeRun) return
   panning.value = { startX: event.clientX, startY: event.clientY, x: store.pan.x, y: store.pan.y }
 }
 
@@ -163,13 +201,7 @@ function fitCanvas() {
   const height = Math.max(1, maxY - minY)
   const bounds = canvas.value?.getBoundingClientRect()
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) return
-  const horizontalPadding = 48
-  const verticalPadding = 72
-  const candidate = Math.min(
-    1.2,
-    (bounds.width - horizontalPadding) / width,
-    (bounds.height - verticalPadding) / height,
-  )
+  const candidate = Math.min(1.2, (bounds.width - 48) / width, (bounds.height - 72) / height)
   store.zoom = Math.max(.5, Math.floor(candidate * 100) / 100)
   store.pan = {
     x: (bounds.width - width * store.zoom) / 2 - minX * store.zoom,
@@ -178,14 +210,20 @@ function fitCanvas() {
 }
 
 function startConnection(node: WorkflowNode) {
-  if (node.type !== 'audio_input' || store.activeRun) return
+  if (!['audio_input', 'preprocess'].includes(node.type) || store.activeRun) return
   connectFrom.value = node.id
+  store.error = ''
 }
 
 function finishConnection(node: WorkflowNode) {
-  if (!connectFrom.value || node.type !== 'audio_output') return
-  store.connect(connectFrom.value, node.id)
+  const source = connectFrom.value
+  if (!source || !['preprocess', 'audio_output'].includes(node.type)) {
+    connectFrom.value = null
+    return
+  }
+  // Clear the pending source before the click bubbles to the SVG pointerup.
   connectFrom.value = null
+  if (source !== node.id) store.connect(source, node.id)
 }
 
 function removeEdge(edgeId: string) {
@@ -195,9 +233,14 @@ function removeEdge(edgeId: string) {
 
 async function validateAndSave() {
   settingsOpen.value = false
+  const signature = executionSignature(store.draft)
   try {
     const issues = await store.validate()
     if (issues.length || store.error) return
+    if (executionSignature(store.draft) !== signature) {
+      store.error = '草稿在校验期间已修改，请重新校验并保存。'
+      return
+    }
     await store.save()
   } catch {
     // Keep the current draft and node context; the store exposes the API error.
@@ -256,7 +299,7 @@ function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
     event.preventDefault()
     openNode(node)
   }
-  if (event.key === 'Delete' && node.type === 'audio_output') {
+  if (event.key === 'Delete' && node.type !== 'audio_input' && !store.activeRun) {
     event.preventDefault()
     if (window.confirm(`删除节点“${nodeLabel(node)}”？`)) store.removeNode(node.id)
   }
@@ -280,6 +323,28 @@ async function retryOutputChecks() {
   await store.loadOutputs(props.projectId, props.audioId, active.id)
 }
 
+function nodeKindLabel(node: WorkflowNode) {
+  if (node.type === 'audio_input') return '音频输入'
+  if (node.type === 'preprocess') return readPreprocessConfig(node.config).provider === 'ffmpeg' ? 'FFmpeg 预处理' : 'Mock 预处理'
+  return '音频输出'
+}
+
+function nodeKicker(node: WorkflowNode) {
+  if (node.type === 'audio_input') return 'AUDIO INPUT'
+  if (node.type === 'preprocess') return 'PREPROCESS'
+  return 'AUDIO OUTPUT'
+}
+
+function nodeMeta(node: WorkflowNode) {
+  if (node.type === 'audio_input') return '绑定当前音频'
+  if (node.type === 'preprocess') {
+    const config = readPreprocessConfig(node.config)
+    if (config.provider === 'mock') return 'Mock · 原字节直通'
+    return `${config.provider.toUpperCase()} · ${config.sample_rate / 1000} kHz · ${config.channels === 1 ? '单声道' : '双声道'}`
+  }
+  return `文件名 · ${node.config.filename_stem || 'audio-copy'}`
+}
+
 function runStatusLabel(status?: string) {
   return ({ pending: '排队中', running: '执行中', completed: '已完成', partial: '部分成功', failed: '失败', cancelling: '取消中', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[status || ''] || status || '尚未运行'
 }
@@ -298,7 +363,7 @@ function dateLabel(value?: string | null) {
 
 function connectFromLabel() {
   const node = store.draft.nodes.find((item) => item.id === connectFrom.value)
-  return node ? `从「${nodeLabel(node)}」选择输出节点完成连线` : ''
+  return node ? `从「${nodeLabel(node)}」选择预处理或输出节点的入端口完成连线` : ''
 }
 
 defineExpose({ requestClose })
@@ -315,12 +380,12 @@ onUnmounted(() => {
     <header class="node-workflow-heading">
       <div>
         <span class="section-kicker">NODE WORKFLOW / MVP</span>
-        <h2 id="node-workflow-title">节点工作流 <span class="mvp-badge">首版</span></h2>
-        <p>当前音频直通复制到独立输出文件。仅开放音频输入与音频输出；ASR、对齐、翻译和视频节点尚未迁入，不会把未实现节点伪装成可运行。</p>
+        <h2 id="node-workflow-title">节点工作流 <span class="mvp-badge">音频分支</span></h2>
+        <p>支持音频直出，以及多个 Mock/FFmpeg 预处理节点的分支与串联。每个处理节点按直接上游生成独立产物；源文件始终保留。ASR、对齐、翻译和视频节点尚未迁入。</p>
       </div>
       <div class="node-workflow-actions">
         <button class="secondary-button" type="button" :disabled="!!store.activeRun" @click="closeEditor">返回五阶段工作台</button>
-        <button class="secondary-button" type="button" @click="historyOpen = !historyOpen">{{ historyOpen ? '收起历史' : `运行历史 · ${store.history.length}` }}</button>
+        <button class="secondary-button" type="button" :disabled="!!store.activeRun" @click="historyOpen = !historyOpen">{{ historyOpen ? '收起历史' : `运行历史 · ${store.history.length}` }}</button>
       </div>
     </header>
 
@@ -330,12 +395,13 @@ onUnmounted(() => {
 
     <div v-if="store.loading" class="workflow-loading" role="status">正在读取项目节点工作流…</div>
     <template v-else>
-      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>直通模式</strong><span>输入节点只绑定当前焦点音频：{{ props.audioName }}。输出文件由后端复制生成，前端不构造本地文件或下载地址。</span></div>
+      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>音频分支模式</strong><span>输入绑定当前音频：{{ props.audioName }}。可让原音直出与预处理分支并存；新增节点不会静默替换原有连线。</span></div>
       <div class="workflow-toolbar" role="toolbar" aria-label="节点工作流工具">
         <button class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || !!currentInput" @click="store.addNode('audio_input')">＋ 输入节点</button>
-        <button class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun" @click="store.addNode('audio_output')">＋ 输出节点</button>
+        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('preprocess')">＋ 预处理</button>
+        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('audio_output')">＋ 输出节点</button>
         <span class="toolbar-rule" aria-hidden="true"></span>
-        <button class="secondary-button compact-button" type="button" :disabled="!currentInput || !panels.length" @click="startConnection(currentInput!)">连线模式</button>
+        <button class="secondary-button compact-button" type="button" :disabled="!connectionSource || !connectionTargets.length || !!store.activeRun" @click="connectionSource && startConnection(connectionSource)">连线模式</button>
         <span v-if="connectFrom" class="connection-hint" role="status">{{ connectFromLabel() }}</span>
         <span class="toolbar-spacer"></span>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? '保存中…' : store.validating ? '校验中…' : '校验并保存' }}</button>
@@ -348,22 +414,22 @@ onUnmounted(() => {
 
       <div class="workflow-main">
         <div ref="canvas" class="workflow-canvas" @wheel="onWheel">
-          <div class="canvas-caption"><span>拖动空白处平移 · Ctrl/⌘ + 滚轮缩放 · 选择节点后设置</span><span>版本 {{ store.document?.workflow_revision ?? '—' }}</span></div>
+          <div class="canvas-caption"><span>拖动空白处平移 · Ctrl/⌘ + 滚轮缩放 · 点击源节点右端口开始，再点目标节点左端口完成连线</span><span>版本 {{ store.document?.workflow_revision ?? '—' }}</span></div>
           <div class="workflow-stage" :style="{ transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})` }">
-            <svg ref="stage" class="workflow-svg" :viewBox="'0 0 900 480'" width="900" height="480" role="group" aria-label="音频输入到音频输出的节点画布" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
+            <svg ref="stage" class="workflow-svg" :viewBox="'0 0 900 480'" width="900" height="480" role="group" aria-label="音频输入、预处理与音频输出的节点画布" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
               <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern></defs>
               <rect width="900" height="480" fill="url(#workflow-grid)" />
-              <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!store.saving && removeEdge(edge.id)" />
+              <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
               <path v-for="edge in store.draft.edges" :key="`${edge.id}-line`" class="workflow-edge" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :d="edgePath(edge)" aria-hidden="true" />
-              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="button" tabindex="0" :aria-label="`${nodeLabel(node)}，${node.type === 'audio_input' ? '音频输入' : '音频输出'}，${nodeStatusLabel(nodeStatus(node))}`" :aria-pressed="store.selectedNodeId === node.id ? 'true' : 'false'" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="openNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
+              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="button" tabindex="0" :aria-label="`${nodeLabel(node)}，${nodeKindLabel(node)}，${nodeStatusLabel(nodeStatus(node))}`" :aria-pressed="store.selectedNodeId === node.id ? 'true' : 'false'" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="openNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
                 <rect class="node-card" :width="nodeWidth" :height="nodeHeight" rx="16" />
                 <rect class="node-accent" width="5" :height="nodeHeight" rx="2.5" />
-                <text class="node-kicker" x="22" y="27">{{ node.type === 'audio_input' ? 'AUDIO INPUT' : 'AUDIO OUTPUT' }}</text>
+                <text class="node-kicker" x="22" y="27">{{ nodeKicker(node) }}</text>
                 <text class="node-name" x="22" y="52">{{ nodeLabel(node) }}</text>
-                <text class="node-meta" x="22" y="72">{{ node.type === 'audio_input' ? '绑定当前音频' : `文件名 · ${node.config.filename_stem || 'audio-copy'}` }}</text>
+                <text class="node-meta" x="22" y="72">{{ nodeMeta(node) }}</text>
                 <rect :width="nodeWidth" :height="nodeHeight" fill="transparent" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" />
-                <circle class="node-port" cx="0" :cy="nodeHeight / 2" r="7" aria-hidden="true" />
-                <circle class="node-port" :cx="nodeWidth" :cy="nodeHeight / 2" r="7" aria-hidden="true" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" @click.stop="!store.saving && finishConnection(node)" />
+                <circle v-if="node.type !== 'audio_input'" class="node-port node-port-in" cx="0" :cy="nodeHeight / 2" r="7" aria-hidden="true" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" @click.stop="!controlsLocked && finishConnection(node)" />
+                <circle v-if="node.type !== 'audio_output'" class="node-port node-port-out" :cx="nodeWidth" :cy="nodeHeight / 2" r="7" aria-hidden="true" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" @click.stop="!controlsLocked && startConnection(node)" />
                 <text v-if="nodeIssue(node)" class="node-error-mark" x="176" y="24" aria-hidden="true">!</text>
               </g>
             </svg>
@@ -375,11 +441,12 @@ onUnmounted(() => {
           <div class="inspector-topline"><span class="section-kicker">INSPECTOR</span><span class="workflow-dirty-state">{{ store.dirty ? '未保存' : '已同步' }}</span></div>
           <h3 id="workflow-inspector-title">{{ selected ? nodeLabel(selected) : '选择一个节点' }}</h3>
           <template v-if="selected">
-            <p class="inspector-type">{{ selected.type === 'audio_input' ? '音频输入 · 只绑定当前焦点音频' : '音频输出 · 由后端复制生成' }}</p>
+            <p class="inspector-type">{{ selected.type === 'audio_input' ? '音频输入 · 只绑定当前焦点音频' : selected.type === 'preprocess' ? '音频预处理 · 每个节点生成独立产物，源文件始终保留' : '音频输出 · 复制直接上游字节与媒体类型' }}</p>
             <div class="workflow-field"><span>节点 ID</span><code>{{ selected.id }}</code></div>
-            <button class="primary-button inspector-edit" type="button" :disabled="store.saving || !!store.activeRun" @click="openNode(selected)">编辑节点设置</button>
-            <button v-if="selected.type === 'audio_output'" class="text-button inspector-delete" type="button" :disabled="store.saving || !!store.activeRun" @click="removeSelected">删除输出节点</button>
+            <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">编辑节点设置</button>
+            <button v-if="selected.type !== 'audio_input'" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">删除{{ selected.type === 'preprocess' ? '预处理' : '输出' }}节点</button>
             <p v-if="selected.type === 'audio_input'" class="inspector-help">输入只使用当前音频 {{ props.audioName }}，不提供路径输入。</p>
+            <p v-else-if="selected.type === 'preprocess'" class="inspector-help">{{ readPreprocessConfig(selected.config).provider === 'mock' ? 'Mock 只复制上游原字节，用于验证链路，不实际转换采样率或声道。' : 'FFmpeg 由服务端固定配置调用并输出独立 WAV。' }} 无论是否勾选保留源文件，源文件都不会删除或覆盖。</p>
           </template>
           <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>选择画布中的输入或输出节点，查看设置和执行状态。</p></div>
           <dl class="workflow-inspector-meta"><div><dt>工作流版本</dt><dd>{{ store.document?.workflow_revision ?? '—' }}</dd></div><div><dt>文档修订</dt><dd>{{ store.document?.revision ?? '—' }}</dd></div><div><dt>当前音频</dt><dd>{{ props.audioName }}</dd></div></dl>
@@ -390,7 +457,7 @@ onUnmounted(() => {
 
       <section class="workflow-run-panel" aria-labelledby="workflow-run-title">
         <div class="workflow-run-heading"><div><span class="section-kicker">RUN &amp; HISTORY</span><h3 id="workflow-run-title">运行与产物</h3><p>任务启动时固定工作流快照；编辑不会改变已启动或历史运行。</p></div><div class="workflow-run-actions"><button v-if="store.activeRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelWorkflow">{{ store.actionLoading ? '提交取消…' : '取消运行' }}</button><button v-else class="primary-button" type="button" :disabled="!canRun" @click="runWorkflow">{{ store.actionLoading ? '正在启动…' : store.dirty ? '保存后可运行' : '运行节点工作流' }}</button></div></div>
-        <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ runStatusLabel(store.run?.status) }}</span><span v-if="store.run">运行 {{ store.run.id }} · 版本 {{ store.run.workflow_revision }} · 创建 {{ dateLabel(store.run.created_at) }} · {{ store.runMatchesDraft ? '快照与当前画布一致' : '历史快照，不映射当前画布状态' }}</span><span v-else>尚无运行。保存后使用当前音频创建一个直通运行。</span></div>
+        <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ runStatusLabel(store.run?.status) }}</span><span v-if="store.run">运行 {{ store.run.id }} · 版本 {{ store.run.workflow_revision }} · 创建 {{ dateLabel(store.run.created_at) }} · {{ store.runMatchesDraft ? '快照与当前画布一致' : '历史快照，不映射当前画布状态' }}</span><span v-else>尚无运行。保存后使用当前音频创建音频分支运行。</span></div>
         <div v-if="store.runLoading" class="workflow-loading small" role="status">正在读取运行详情…</div>
         <div v-else-if="store.runError" class="workflow-run-error" role="alert">{{ store.runError }}</div>
         <div v-if="store.run" class="workflow-run-nodes">
@@ -399,7 +466,7 @@ onUnmounted(() => {
             <p v-if="node.error">{{ node.error.message }}</p>
             <p v-else-if="node.artifact">快照产物 · {{ sizeLabel(node.artifact.size_bytes) }}</p>
             <p v-else>尚无节点产物。</p>
-            <template v-if="node.node_type === 'audio_output' && node.status === 'completed'">
+            <template v-if="node.node_type !== 'audio_input' && node.status === 'completed'">
               <p class="workflow-output-state" :class="`is-${outputCheckState(node.node_id)}`">{{ outputCheckState(node.node_id) === 'checking' ? '正在检查产物文件…' : outputCheckState(node.node_id) === 'missing' ? '产物缺失，不可下载。' : outputCheckState(node.node_id) === 'failed' ? '产物检查失败，可重试。' : '产物可用。' }}</p>
               <button v-if="canDownloadOutput(node.node_id)" class="secondary-button compact-button" type="button" @click="download(node.node_id)">下载 {{ node.artifact?.filename }}</button>
               <button v-else-if="outputCheckState(node.node_id) === 'failed'" class="secondary-button compact-button" type="button" @click="retryOutputChecks">重试检查</button>
@@ -412,12 +479,19 @@ onUnmounted(() => {
 
     <div v-if="settingsOpen && selected" class="modal-backdrop" role="presentation" @click.self="closeSettings">
       <section class="config-modal workflow-settings-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-settings-title">
-        <div class="config-modal-header"><div><span class="section-kicker">{{ selected.type === 'audio_input' ? 'INPUT NODE' : 'OUTPUT NODE' }}</span><h3 id="workflow-settings-title">{{ selected.type === 'audio_input' ? '音频输入设置' : '音频输出设置' }}</h3><p>只修改此节点的下次保存内容；运行中的任务使用固定快照。</p></div><button class="modal-close" type="button" aria-label="关闭节点设置" @click="closeSettings">×</button></div>
+        <div class="config-modal-header"><div><span class="section-kicker">{{ selected.type === 'audio_input' ? 'INPUT NODE' : selected.type === 'preprocess' ? 'PREPROCESS NODE' : 'OUTPUT NODE' }}</span><h3 id="workflow-settings-title">{{ selected.type === 'audio_input' ? '音频输入设置' : selected.type === 'preprocess' ? '音频预处理设置' : '音频输出设置' }}</h3><p>只修改此节点的下次保存内容；运行中的任务使用固定快照。</p></div><button class="modal-close" type="button" aria-label="关闭节点设置" @click="closeSettings">×</button></div>
         <form class="config-modal-form" @submit.prevent="commitSettings">
-          <label v-if="selected.type === 'audio_output'" class="config-field workflow-wide-field" for="workflow-filename-stem"><span>输出文件名（不含扩展名）</span><input id="workflow-filename-stem" v-model="filenameDraft" type="text" maxlength="120" :disabled="store.saving || !!store.activeRun" placeholder="audio-copy" /><small>后端生成安全文件名并补上源音频扩展名；这里不是本机路径。</small></label>
+          <div v-if="selected.type === 'preprocess'" class="modal-field-grid">
+            <label class="config-field" for="workflow-preprocess-provider"><span>Provider</span><select id="workflow-preprocess-provider" v-model="providerDraft" :disabled="controlsLocked"><option value="mock">Mock · 验证链路</option><option value="ffmpeg">FFmpeg · 生成独立 WAV</option></select></label>
+            <label class="config-field" for="workflow-sample-rate"><span>采样率（Hz）</span><input id="workflow-sample-rate" v-model="sampleRateDraft" type="number" min="8000" max="192000" step="1" inputmode="numeric" :disabled="controlsLocked" /></label>
+            <label class="config-field" for="workflow-channels"><span>声道</span><select id="workflow-channels" v-model.number="channelsDraft" :disabled="controlsLocked"><option :value="1">单声道</option><option :value="2">双声道</option></select></label>
+            <label class="modal-check workflow-wide-field"><input v-model="preserveOriginalDraft" type="checkbox" :disabled="controlsLocked" />保留源文件（始终保留）</label>
+          </div>
+          <div v-if="selected.type === 'preprocess'" class="workflow-preprocess-note"><strong>{{ providerDraft === 'mock' ? 'Mock 只验证链路' : 'FFmpeg 真实转换' }}</strong><p>{{ providerDraft === 'mock' ? '复制直接上游文件的原始字节，不实际转换采样率或声道；采样率与声道设置仅用于验证配置快照。' : '由服务端配置的 FFmpeg 生成独立 WAV；不接受自定义命令、附加参数或路径。' }}</p><p>无论此选项是否勾选，源文件都会保留。FFmpeg 预处理产物固定为 WAV/WAV 媒体类型；Mock 预处理及输出节点沿用直接上游的字节、后缀和媒体类型。</p></div>
+          <label v-if="selected.type === 'audio_output'" class="config-field workflow-wide-field" for="workflow-filename-stem"><span>输出文件名（不含扩展名）</span><input id="workflow-filename-stem" v-model="filenameDraft" type="text" maxlength="128" :disabled="controlsLocked" placeholder="audio-copy" /><small>最多 128 个字符；后端生成安全文件名并按直接上游的媒体类型补扩展名。这里不是本机路径。</small></label>
           <p v-if="selected.type === 'audio_input'" class="inspector-help">输入节点只绑定当前焦点音频「{{ props.audioName }}」，不接受路径输入。</p>
           <p v-if="settingsError" class="settings-feedback settings-error" role="alert">{{ settingsError }}</p>
-          <div class="config-modal-footer"><span>{{ store.dirty ? '有未保存修改' : '当前节点已同步' }}</span><div><button class="secondary-button" type="button" @click="closeSettings">取消</button><button class="primary-button" type="submit" :disabled="store.saving || !!store.activeRun">应用节点设置</button></div></div>
+          <div class="config-modal-footer"><span>{{ store.dirty ? '有未保存修改' : '当前节点已同步' }}</span><div><button class="secondary-button" type="button" @click="closeSettings">取消</button><button class="primary-button" type="submit" :disabled="controlsLocked">应用节点设置</button></div></div>
         </form>
       </section>
     </div>

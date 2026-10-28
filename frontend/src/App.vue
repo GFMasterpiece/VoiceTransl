@@ -564,7 +564,7 @@ onUnmounted(() => {
         <template v-else-if="detail.project">
           <nav class="workspace-mode-switch" aria-label="工作区模式">
             <button type="button" :class="{ 'is-active': workspaceMode === 'pipeline' }" :aria-pressed="workspaceMode === 'pipeline'" @click="switchWorkspaceMode('pipeline')">五阶段流程</button>
-            <button type="button" :class="{ 'is-active': workspaceMode === 'workflow' }" :aria-pressed="workspaceMode === 'workflow'" :disabled="!detail.activeAudioId || detail.loading" @click="switchWorkspaceMode('workflow')">节点工作流 <span>首版</span></button>
+            <button type="button" :class="{ 'is-active': workspaceMode === 'workflow' }" :aria-pressed="workspaceMode === 'workflow'" :disabled="!detail.activeAudioId || detail.loading" @click="switchWorkspaceMode('workflow')">节点工作流 <span>音频分支</span></button>
           </nav>
           <WorkflowEditor v-if="workspaceMode === 'workflow' && detail.activeAudioId" :key="`${detail.project.id}/${detail.activeAudioId}`" ref="workflowEditor" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || '当前音频'" @show-pipeline="switchWorkspaceMode('pipeline')" />
           <template v-else>

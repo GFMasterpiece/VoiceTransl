@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .pipeline_config import PreprocessConfig
 
 WORKFLOW_SCHEMA_VERSION = "1.0"
 DEFAULT_FILENAME_STEM = "audio-copy"
@@ -14,6 +16,7 @@ MAX_WORKFLOW_EDGES = 64
 NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 EDGE_ID_PATTERN = NODE_ID_PATTERN
 PORT_NAME = "audio"
+PREPROCESS_NODE_TYPE = "preprocess"
 
 
 class WorkflowRunStatus(StrEnum):
@@ -232,13 +235,24 @@ def _valid_filename_stem(value: object) -> tuple[bool, str | None]:
 def normalize_workflow_graph(
     nodes: list[WorkflowNode], edges: list[WorkflowEdge]
 ) -> tuple[list[WorkflowNode], list[WorkflowEdge]]:
-    """Apply contract defaults without hiding invalid user configuration."""
+    """Apply executable defaults without hiding invalid user configuration."""
 
     normalized: list[WorkflowNode] = []
     for node in nodes:
         config = dict(node.config)
         if node.type == "audio_output" and set(config).issubset({"filename_stem"}):
             config.setdefault("filename_stem", DEFAULT_FILENAME_STEM)
+        elif node.type == PREPROCESS_NODE_TYPE and set(config).issubset(
+            {"provider", "sample_rate", "channels", "preserve_original"}
+        ):
+            try:
+                config = PreprocessConfig.model_validate(config, strict=True).model_dump(
+                    mode="json"
+                )
+            except ValidationError:
+                # Keep submitted values visible to graph validation. Defaults
+                # must never turn an invalid request into a valid graph.
+                pass
         normalized.append(node.model_copy(update={"config": config}, deep=True))
     return normalized, [edge.model_copy(deep=True) for edge in edges]
 
@@ -310,6 +324,40 @@ def validate_workflow_graph(
                         node_id=node.id,
                     )
                 )
+        elif node.type == PREPROCESS_NODE_TYPE:
+            unexpected = set(node.config) - {
+                "provider",
+                "sample_rate",
+                "channels",
+                "preserve_original",
+            }
+            if unexpected:
+                issues.append(
+                    _issue(
+                        "INVALID_NODE_CONFIG",
+                        "preprocess 只支持 provider、sample_rate、channels、preserve_original",
+                        node_id=node.id,
+                    )
+                )
+            else:
+                try:
+                    config = PreprocessConfig.model_validate(node.config, strict=True)
+                except ValidationError as error:
+                    detail = error.errors()[0]
+                    field = ".".join(str(part) for part in detail.get("loc", ()))
+                    message = (
+                        f"preprocess 配置无效: {field or 'config'} {detail.get('msg', '')}"
+                    ).strip()
+                    issues.append(_issue("INVALID_NODE_CONFIG", message, node_id=node.id))
+                else:
+                    if config.provider not in {"mock", "ffmpeg"}:
+                        issues.append(
+                            _issue(
+                                "INVALID_NODE_CONFIG",
+                                "preprocess.provider 只能是 mock 或 ffmpeg",
+                                node_id=node.id,
+                            )
+                        )
         else:
             issues.append(
                 _issue(
@@ -355,19 +403,19 @@ def validate_workflow_graph(
                     edge_id=edge.id,
                 )
             )
-        if source is not None and source.type == "audio_output":
+        if source is not None and source.type not in {"audio_input", PREPROCESS_NODE_TYPE}:
             issues.append(
                 _issue(
                     "INVALID_EDGE_DIRECTION",
-                    "audio_output 不能作为连接源",
+                    "只有 audio_input 或 preprocess 可以作为连接源",
                     edge_id=edge.id,
                 )
             )
-        if target is not None and target.type == "audio_input":
+        if target is not None and target.type not in {PREPROCESS_NODE_TYPE, "audio_output"}:
             issues.append(
                 _issue(
                     "INVALID_EDGE_DIRECTION",
-                    "audio_input 不能作为连接目标",
+                    "只有 preprocess 或 audio_output 可以作为连接目标",
                     edge_id=edge.id,
                 )
             )
@@ -387,6 +435,20 @@ def validate_workflow_graph(
                     node_id=node.id,
                 )
             )
+    for node in nodes:
+        if node.id not in node_by_id or node.type not in {
+            PREPROCESS_NODE_TYPE,
+            "audio_output",
+        }:
+            continue
+        if len(incoming[node.id]) != 1:
+            issues.append(
+                _issue(
+                    "INVALID_NODE_INPUT_COUNT",
+                    f"{node.type} 必须恰好有一条输入连接",
+                    node_id=node.id,
+                )
+            )
     for node in input_nodes:
         if node.id in outgoing and not outgoing[node.id]:
             issues.append(
@@ -397,12 +459,7 @@ def validate_workflow_graph(
                 )
             )
     for node in nodes:
-        if (
-            node.id in node_by_id
-            and not incoming.get(node.id)
-            and not outgoing.get(node.id)
-            and node.type in {"audio_input", "audio_output"}
-        ):
+        if node.id in node_by_id and not incoming.get(node.id) and not outgoing.get(node.id):
             issues.append(_issue("UNCONNECTED_NODE", "节点没有连接", node_id=node.id))
 
     # Kahn's algorithm reports cycles without relying on recursion depth.
@@ -418,33 +475,64 @@ def validate_workflow_graph(
             indegree[edge.target] -= 1
             if indegree[edge.target] == 0:
                 queue.append(edge.target)
-    if node_by_id and visited != len(node_by_id):
+    graph_has_cycle = bool(node_by_id and visited != len(node_by_id))
+    if graph_has_cycle:
         already_reported = any(issue.code == "CYCLE" for issue in issues)
         if not already_reported:
             issues.append(_issue("CYCLE", "工作流不能包含环"))
 
+    if len(input_nodes) != 1 or not output_nodes or graph_has_cycle:
+        return issues
+
+    input_id = input_nodes[0].id
+    reachable_from_input: set[str] = set()
+    pending = [input_id]
+    while pending:
+        node_id = pending.pop()
+        if node_id in reachable_from_input:
+            continue
+        reachable_from_input.add(node_id)
+        pending.extend(
+            edge.target for edge in outgoing.get(node_id, []) if edge.target in node_by_id
+        )
+    for node in nodes:
+        if node.id in node_by_id and node.id not in reachable_from_input:
+            issues.append(
+                _issue(
+                    "UNREACHABLE_NODE",
+                    "节点必须从唯一 audio_input 可达",
+                    node_id=node.id,
+                )
+            )
+
+    can_reach_output: set[str] = set(output.id for output in output_nodes)
+    pending = list(can_reach_output)
+    while pending:
+        node_id = pending.pop()
+        for edge in incoming.get(node_id, []):
+            if edge.source in node_by_id and edge.source not in can_reach_output:
+                can_reach_output.add(edge.source)
+                pending.append(edge.source)
+    for node in nodes:
+        if (
+            node.id in node_by_id
+            and node.type != "audio_output"
+            and node.id not in can_reach_output
+        ):
+            issues.append(
+                _issue(
+                    "NODE_HAS_NO_OUTPUT",
+                    "非输出节点必须能到达 audio_output",
+                    node_id=node.id,
+                )
+            )
     return issues
 
 
 def workflow_semantic_digest(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> str:
     # Defaults are part of the executable contract, but unknown configuration
     # must remain visible so validation cannot be bypassed by normalization.
-    normalized_nodes = [
-        node.model_copy(
-            update={
-                "config": (
-                    {**node.config, "filename_stem": DEFAULT_FILENAME_STEM}
-                    if node.type == "audio_output"
-                    and "filename_stem" not in node.config
-                    and not set(node.config) - {"filename_stem"}
-                    else node.config
-                )
-            },
-            deep=True,
-        )
-        for node in nodes
-    ]
-    normalized_edges = edges
+    normalized_nodes, normalized_edges = normalize_workflow_graph(nodes, edges)
     payload = {
         "nodes": sorted(
             (

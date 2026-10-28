@@ -2,12 +2,42 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { API_BASE_URL } from './projectDetail'
 
-export type NodeType = 'audio_input' | 'audio_output'
+export type NodeType = 'audio_input' | 'preprocess' | 'audio_output'
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled' | 'interrupted'
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted'
 export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_ROW_GAP = 28
+
+export type PreprocessProvider = 'mock' | 'ffmpeg'
+export type PreprocessChannels = 1 | 2
+
+export interface PreprocessNodeConfig {
+  provider: PreprocessProvider
+  sample_rate: number
+  channels: PreprocessChannels
+  preserve_original: boolean
+}
+
+export const DEFAULT_PREPROCESS_CONFIG: Readonly<PreprocessNodeConfig> = Object.freeze({
+  provider: 'mock',
+  sample_rate: 16000,
+  channels: 1,
+  preserve_original: true,
+})
+
+export function defaultPreprocessConfig(): PreprocessNodeConfig {
+  return { ...DEFAULT_PREPROCESS_CONFIG }
+}
+
+export function readPreprocessConfig(config: Record<string, unknown>): PreprocessNodeConfig {
+  return {
+    provider: config.provider === 'ffmpeg' ? 'ffmpeg' : 'mock',
+    sample_rate: typeof config.sample_rate === 'number' ? config.sample_rate : DEFAULT_PREPROCESS_CONFIG.sample_rate,
+    channels: config.channels === 2 ? 2 : 1,
+    preserve_original: typeof config.preserve_original === 'boolean' ? config.preserve_original : DEFAULT_PREPROCESS_CONFIG.preserve_original,
+  }
+}
 
 export interface WorkflowNode {
   id: string
@@ -147,12 +177,33 @@ export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInp
   })) as WorkflowDocumentInput
 }
 
+function canonicalNodeConfig(node: WorkflowNode): Record<string, unknown> {
+  const config = { ...node.config }
+  if (node.type === 'preprocess') {
+    if (config.provider === undefined) config.provider = DEFAULT_PREPROCESS_CONFIG.provider
+    if (config.sample_rate === undefined) config.sample_rate = DEFAULT_PREPROCESS_CONFIG.sample_rate
+    if (config.channels === undefined) config.channels = DEFAULT_PREPROCESS_CONFIG.channels
+    if (config.preserve_original === undefined) config.preserve_original = DEFAULT_PREPROCESS_CONFIG.preserve_original
+  } else if (node.type === 'audio_output' && config.filename_stem === undefined) {
+    config.filename_stem = 'audio-copy'
+  }
+  return config
+}
+
+function stableObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableObject)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, stableObject(item)]))
+}
+
 export function executionSignature(value: WorkflowDocumentInput): string {
   return JSON.stringify({
     nodes: value.nodes.map((node) => ({
+      config: stableObject(canonicalNodeConfig(node)),
       id: node.id,
       type: node.type,
-      config: node.config,
     })).sort((left, right) => left.id.localeCompare(right.id)),
     edges: value.edges.map((edge) => ({
       source: edge.source,
@@ -230,68 +281,140 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
   const outputs = value.nodes.filter((node) => node.type === 'audio_output')
   if (inputs.length !== 1) issues.push({ code: 'INPUT_COUNT', message: `需要恰好一个音频输入节点，当前为 ${inputs.length} 个`, node_id: null })
   if (!outputs.length) issues.push({ code: 'OUTPUT_MISSING', message: '至少需要一个音频输出节点', node_id: null })
+
   const ids = new Set<string>()
   const nodeTypes = new Map<string, NodeType>()
+  const supportedTypes = new Set<NodeType>(['audio_input', 'preprocess', 'audio_output'])
   for (const node of value.nodes) {
-    if (ids.has(node.id)) issues.push({ code: 'DUPLICATE_NODE', message: `节点 ID 重复：${node.id}`, node_id: node.id })
+    if (ids.has(node.id)) {
+      issues.push({ code: 'DUPLICATE_NODE', message: `节点 ID 重复：${node.id}`, node_id: node.id })
+      continue
+    }
     ids.add(node.id)
     nodeTypes.set(node.id, node.type)
+    if (!supportedTypes.has(node.type)) {
+      issues.push({ code: 'UNKNOWN_NODE_TYPE', message: `不支持的节点类型：${node.type}`, node_id: node.id })
+    }
   }
+
   const edgeIds = new Set<string>()
+  const incoming = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
+  const outgoing = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
   for (const edge of value.edges) {
     if (edgeIds.has(edge.id)) issues.push({ code: 'DUPLICATE_EDGE', message: `连线 ID 重复：${edge.id}`, edge_id: edge.id })
     edgeIds.add(edge.id)
     if (!ids.has(edge.source)) issues.push({ code: 'UNKNOWN_SOURCE', message: `连线起点不存在：${edge.source}`, edge_id: edge.id })
     if (!ids.has(edge.target)) issues.push({ code: 'UNKNOWN_TARGET', message: `连线终点不存在：${edge.target}`, edge_id: edge.id })
-  }
-  for (const output of outputs) {
-    const incoming = value.edges.filter((edge) => edge.target === output.id)
-    if (incoming.length !== 1) issues.push({ code: 'OUTPUT_INPUT_COUNT', message: `输出节点“${output.id}”需要恰好一条音频输入，当前为 ${incoming.length} 条`, node_id: output.id })
-  }
-  for (const edge of value.edges) {
+    if (ids.has(edge.source)) outgoing.get(edge.source)!.push(edge)
+    if (ids.has(edge.target)) incoming.get(edge.target)!.push(edge)
     const sourceType = nodeTypes.get(edge.source)
     const targetType = nodeTypes.get(edge.target)
-    if (sourceType && targetType && (sourceType !== 'audio_input' || targetType !== 'audio_output')) {
-      issues.push({ code: 'INVALID_DIRECTION', message: '只允许音频输入节点连接到音频输出节点', edge_id: edge.id })
+    if (sourceType && targetType && (!['audio_input', 'preprocess'].includes(sourceType) || !['preprocess', 'audio_output'].includes(targetType))) {
+      issues.push({ code: 'INVALID_DIRECTION', message: '只允许音频输入或预处理节点连接到预处理或音频输出节点', edge_id: edge.id })
     }
     if (edge.source === edge.target) issues.push({ code: 'SELF_LOOP', message: '节点不能连接到自身', edge_id: edge.id })
-    if (edge.source_port !== 'audio' || edge.target_port !== 'audio') issues.push({ code: 'INVALID_PORT', message: '首版连线端口必须是 audio', edge_id: edge.id })
+    if (edge.source_port !== 'audio' || edge.target_port !== 'audio') issues.push({ code: 'INVALID_PORT', message: '连线端口必须是 audio', edge_id: edge.id })
   }
-  const outgoing = new Map(value.nodes.map((node) => [node.id, [] as string[]]))
-  for (const edge of value.edges) {
-    if (outgoing.has(edge.source)) outgoing.get(edge.source)!.push(edge.target)
-  }
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const cyclic = new Set<string>()
-  function visit(nodeId: string) {
-    if (visiting.has(nodeId)) { cyclic.add(nodeId); return }
-    if (visited.has(nodeId)) return
-    visiting.add(nodeId)
-    for (const next of outgoing.get(nodeId) || []) visit(next)
-    visiting.delete(nodeId)
-    visited.add(nodeId)
-  }
-  for (const node of value.nodes) visit(node.id)
-  if (cyclic.size) {
-    for (const nodeId of cyclic) issues.push({ code: 'CYCLE', message: '工作流不能包含循环连线', node_id: nodeId })
-  }
-  const connected = new Set<string>()
-  for (const edge of value.edges) { connected.add(edge.source); connected.add(edge.target) }
+
   for (const node of value.nodes) {
-    if (!connected.has(node.id)) issues.push({ code: 'ISOLATED_NODE', message: `节点“${node.id}”尚未连接到工作流`, node_id: node.id })
+    const inbound = incoming.get(node.id) || []
+    const outbound = outgoing.get(node.id) || []
+    if (node.type === 'preprocess' && inbound.length !== 1) {
+      issues.push({ code: 'PREPROCESS_INPUT_COUNT', message: `预处理节点“${node.id}”需要恰好一条音频输入，当前为 ${inbound.length} 条`, node_id: node.id })
+    }
+    if (node.type === 'audio_output' && inbound.length !== 1) {
+      issues.push({ code: 'OUTPUT_INPUT_COUNT', message: `输出节点“${node.id}”需要恰好一条音频输入，当前为 ${inbound.length} 条`, node_id: node.id })
+    }
+    if (node.type === 'audio_input' && inbound.length) {
+      issues.push({ code: 'INPUT_SOURCE_REQUIRED', message: '音频输入节点不能有入边', node_id: node.id })
+    }
+    if (node.type === 'audio_output' && outbound.length) {
+      issues.push({ code: 'OUTPUT_SINK_REQUIRED', message: '音频输出节点不能有出边', node_id: node.id })
+    }
+    if (!inbound.length && !outbound.length) {
+      issues.push({ code: 'ISOLATED_NODE', message: `节点“${node.id}”尚未连接到工作流`, node_id: node.id })
+    }
   }
-  for (const output of outputs) {
-    const stem = output.config?.filename_stem
-    if (typeof stem !== 'string' || !stem.trim() || stem === '.' || stem === '..' || /[\\/\u0000-\u001f]/.test(stem) || stem.length > 120) {
-      issues.push({ code: 'INVALID_FILENAME_STEM', message: '输出文件名必须是无路径的安全文件名主体', node_id: output.id })
+
+  const outgoingTargets = new Map(value.nodes.map((node) => [node.id, outgoing.get(node.id)!.map((edge) => edge.target)]))
+  const visitFromInput = new Set<string>()
+  function visit(nodeId: string) {
+    if (visitFromInput.has(nodeId)) return
+    visitFromInput.add(nodeId)
+    for (const target of outgoingTargets.get(nodeId) || []) visit(target)
+  }
+  if (inputs.length === 1) {
+    visit(inputs[0].id)
+    for (const node of value.nodes) {
+      if (!visitFromInput.has(node.id)) issues.push({ code: 'UNREACHABLE_FROM_INPUT', message: `节点“${node.id}”无法从音频输入到达`, node_id: node.id })
+    }
+  }
+
+  const reachesOutput = new Set(outputs.map((node) => node.id))
+  const reverseQueue = outputs.map((node) => node.id)
+  while (reverseQueue.length) {
+    const nodeId = reverseQueue.shift()!
+    for (const edge of incoming.get(nodeId) || []) {
+      if (reachesOutput.has(edge.source)) continue
+      reachesOutput.add(edge.source)
+      reverseQueue.push(edge.source)
+    }
+  }
+  for (const node of value.nodes) {
+    if (node.type !== 'audio_output' && !reachesOutput.has(node.id)) {
+      issues.push({ code: 'OUTPUT_UNREACHABLE', message: `节点“${node.id}”无法到达任何音频输出`, node_id: node.id })
+    }
+  }
+
+  const indegree = new Map(value.nodes.map((node) => [node.id, incoming.get(node.id)!.length]))
+  const queue = value.nodes.filter((node) => indegree.get(node.id) === 0).map((node) => node.id)
+  let visited = 0
+  while (queue.length) {
+    const nodeId = queue.shift()!
+    visited += 1
+    for (const target of outgoingTargets.get(nodeId) || []) {
+      const degree = (indegree.get(target) || 0) - 1
+      indegree.set(target, degree)
+      if (degree === 0) queue.push(target)
+    }
+  }
+  if (value.nodes.length && visited !== value.nodes.length) {
+    issues.push({ code: 'CYCLE', message: '工作流不能包含循环连线', node_id: null })
+  }
+
+  for (const node of value.nodes) {
+    const keys = Object.keys(node.config || {})
+    if (node.type === 'audio_input') {
+      if (keys.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: '音频输入节点不需要配置字段', node_id: node.id })
+    } else if (node.type === 'audio_output') {
+      const unexpected = keys.filter((key) => key !== 'filename_stem')
+      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `音频输出只支持 filename_stem，未知字段：${unexpected.join(', ')}`, node_id: node.id })
+      const stem = node.config?.filename_stem ?? 'audio-copy'
+      const reserved = typeof stem === 'string' && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)
+      if (typeof stem !== 'string' || !stem.trim() || stem !== stem.trim() || stem === '.' || stem === '..' || stem.endsWith('.') || reserved || stem.includes(String.fromCharCode(92)) || /[\/<>:"|?*\u0000-\u001f\u007f]/.test(stem) || stem.length > 128) {
+        issues.push({ code: 'INVALID_FILENAME_STEM', message: '输出文件名必须是无路径的安全文件名主体', node_id: node.id })
+      }
+    } else if (node.type === 'preprocess') {
+      const allowed = new Set(['provider', 'sample_rate', 'channels', 'preserve_original'])
+      const unexpected = keys.filter((key) => !allowed.has(key))
+      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `预处理配置包含未知字段：${unexpected.join(', ')}`, node_id: node.id })
+      const provider = node.config.provider ?? DEFAULT_PREPROCESS_CONFIG.provider
+      if (provider !== 'mock' && provider !== 'ffmpeg') issues.push({ code: 'INVALID_PREPROCESS_PROVIDER', message: '预处理 Provider 只能是 mock 或 ffmpeg', node_id: node.id })
+      const sampleRate = node.config.sample_rate ?? DEFAULT_PREPROCESS_CONFIG.sample_rate
+      if (typeof sampleRate !== 'number' || !Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
+        issues.push({ code: 'INVALID_SAMPLE_RATE', message: '采样率必须是 8000–192000 之间的整数', node_id: node.id })
+      }
+      const channels = node.config.channels ?? DEFAULT_PREPROCESS_CONFIG.channels
+      if (channels !== 1 && channels !== 2) issues.push({ code: 'INVALID_CHANNELS', message: '声道数只能是 1 或 2', node_id: node.id })
+      const preserveOriginal = node.config.preserve_original ?? DEFAULT_PREPROCESS_CONFIG.preserve_original
+      if (typeof preserveOriginal !== 'boolean') issues.push({ code: 'INVALID_PRESERVE_ORIGINAL', message: '保留源文件选项必须是布尔值', node_id: node.id })
     }
   }
   return issues
 }
 
 export function nextNodeId(type: NodeType, nodes: WorkflowNode[]): string {
-  const prefix = type === 'audio_input' ? 'input' : 'output'
+  const prefix = type === 'audio_input' ? 'input' : type === 'preprocess' ? 'preprocess' : 'output'
   let index = 1
   while (nodes.some((node) => node.id === `${prefix}-${index}`)) index += 1
   return `${prefix}-${index}`
@@ -304,22 +427,23 @@ export function nextEdgeId(edges: WorkflowEdge[]): string {
 }
 
 export function nodeLabel(node: WorkflowNode): string {
-  return node.type === 'audio_input' ? '音频输入' : '音频输出'
+  if (node.type === 'audio_input') return '音频输入'
+  if (node.type === 'preprocess') return '音频预处理'
+  return '音频输出'
 }
 
 export function nextNodePosition(type: NodeType, nodes: WorkflowNode[]): WorkflowNode['position'] {
-  if (type === 'audio_output') {
-    const outputs = nodes.filter((node) => node.type === 'audio_output')
-    if (outputs.length) {
-      return {
-        x: outputs[outputs.length - 1].position.x,
-        y: Math.max(...outputs.map((node) => node.position.y)) + WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP,
-      }
-    }
-    const input = nodes.find((node) => node.type === 'audio_input')
-    return { x: 420, y: input?.position.y ?? 120 }
-  }
-  return { x: 96, y: 176 }
+  const sameType = nodes.filter((node) => node.type === type)
+  const columnX = type === 'audio_input' ? 96 : type === 'preprocess' ? 286 : sameType[0]?.position.x ?? 500
+  let candidateY = sameType.length
+    ? Math.max(...sameType.map((node) => node.position.y)) + WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
+    : nodes.find((node) => node.type === 'audio_input')?.position.y ?? 176
+  const overlaps = (y: number) => nodes.some((node) => (
+    Math.abs(node.position.x - columnX) < WORKFLOW_NODE_WIDTH
+    && Math.abs(node.position.y - y) < WORKFLOW_NODE_HEIGHT
+  ))
+  while (overlaps(candidateY)) candidateY += WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
+  return { x: columnX, y: candidateY }
 }
 
 function summarizeRun(value: WorkflowRun): WorkflowRunSummary {
@@ -419,13 +543,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function markDirty() {
+    validateSequence += 1
+    validating.value = false
     validationIssues.value = []
     notice.value = ''
   }
 
   async function validate(): Promise<WorkflowIssue[]> {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || validating.value) return []
+    if (!id || !aid || stopped || validating.value || activeRun.value) return []
     const token = sessionGeneration
     const sequence = ++validateSequence
     validating.value = true
@@ -500,7 +626,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function save() {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || saving.value || loading.value || validating.value) return null
+    if (!id || !aid || stopped || saving.value || loading.value || validating.value || activeRun.value) return null
     const token = sessionGeneration
     const sequence = ++saveSequence
     const draftSnapshot = cloneDocument(draft.value)
@@ -676,7 +802,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const current = run.value
     if (!current || current.id !== runId) return
     const completed = current.nodes.filter((node) => (
-      node.node_type === 'audio_output' && node.status === 'completed'
+      ['preprocess', 'audio_output'].includes(node.node_type) && node.status === 'completed'
     ))
     outputs.value = {}
     outputChecks.value = {}
@@ -759,25 +885,25 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function addNode(type: NodeType) {
-    if (stopped || loading.value) return
+    if (stopped || loading.value || activeRun.value) return
     const nodes = draft.value.nodes
     if (type === 'audio_input' && nodes.some((node) => node.type === 'audio_input')) {
-      error.value = '首版只允许一个音频输入节点。'
+      error.value = '工作流只允许一个音频输入节点。'
       return
     }
-    const input = nodes.find((node) => node.type === 'audio_input')
     const id = nextNodeId(type, nodes)
     const node: WorkflowNode = {
       id,
       type,
-      config: type === 'audio_input' ? {} : { filename_stem: 'audio-copy' },
+      config: type === 'audio_input'
+        ? {}
+        : type === 'preprocess'
+          ? { ...defaultPreprocessConfig() }
+          : { filename_stem: 'audio-copy' },
       position: nextNodePosition(type, nodes),
     }
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
-    if (type === 'audio_output' && input) {
-      draft.value.edges.push({ id: nextEdgeId(draft.value.edges), source: input.id, source_port: 'audio', target: id, target_port: 'audio' })
-    }
     selectNode(id)
     markDirty()
   }
@@ -786,7 +912,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (stopped || activeRun.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node || node.type === 'audio_input') {
-      error.value = '首版保留唯一的音频输入节点，请删除输出节点或清空画布。'
+      error.value = '工作流保留唯一的音频输入节点，请删除预处理或音频输出节点。'
       return
     }
     draft.value.nodes = draft.value.nodes.filter((item) => item.id !== id)
@@ -796,6 +922,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function updateNode(id: string, patch: Partial<Pick<WorkflowNode, 'config' | 'position'>>) {
+    if (stopped || activeRun.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node) return
     if (patch.config !== undefined) node.config = patch.config
@@ -804,21 +931,42 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function connect(source: string, target: string) {
+    if (stopped || activeRun.value) return false
     const from = draft.value.nodes.find((node) => node.id === source)
     const to = draft.value.nodes.find((node) => node.id === target)
-    if (!from || !to || from.type !== 'audio_input' || to.type !== 'audio_output') {
-      error.value = '首版只支持音频输入连接到音频输出。'
+    if (!from || !to || !['audio_input', 'preprocess'].includes(from.type) || !['preprocess', 'audio_output'].includes(to.type)) {
+      error.value = '只允许音频输入或预处理节点连接到预处理或音频输出节点。'
+      return false
+    }
+    if (source === target) {
+      error.value = '节点不能连接到自身。'
       return false
     }
     const exists = draft.value.edges.some((edge) => edge.source === source && edge.target === target)
     if (exists) return false
+    const outgoing = new Map(draft.value.nodes.map((node) => [node.id, [] as string[]]))
+    for (const edge of draft.value.edges) outgoing.get(edge.source)?.push(edge.target)
+    const pending = [target]
+    const visited = new Set<string>()
+    while (pending.length) {
+      const nodeId = pending.shift()!
+      if (nodeId === source) {
+        error.value = '该连线会形成循环，不能连接。'
+        return false
+      }
+      if (visited.has(nodeId)) continue
+      visited.add(nodeId)
+      pending.push(...(outgoing.get(nodeId) || []))
+    }
     draft.value.edges = draft.value.edges.filter((edge) => edge.target !== target)
     draft.value.edges.push({ id: nextEdgeId(draft.value.edges), source, source_port: 'audio', target, target_port: 'audio' })
+    error.value = ''
     markDirty()
     return true
   }
 
   function disconnect(edgeId: string) {
+    if (stopped || activeRun.value) return
     draft.value.edges = draft.value.edges.filter((edge) => edge.id !== edgeId)
     markDirty()
   }

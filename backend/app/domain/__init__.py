@@ -14,6 +14,7 @@ from .provider_profile import ProviderProfile, ProviderProfilesDocument
 from .transcript import Segment, Transcript
 from .workflow import (
     DEFAULT_FILENAME_STEM,
+    PREPROCESS_NODE_TYPE,
     WorkflowArtifact,
     WorkflowDocument,
     WorkflowEdge,
@@ -60,6 +61,7 @@ __all__ = [
     "TranslationConfig",
     "default_pipeline_config",
     "DEFAULT_FILENAME_STEM",
+    "PREPROCESS_NODE_TYPE",
     "WorkflowArtifact",
     "WorkflowDocument",
     "WorkflowEdge",

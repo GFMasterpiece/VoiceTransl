@@ -26,7 +26,7 @@
 - 分层职责、Pipeline 持久化、恢复和安全：`docs/architecture.md`。
 - 项目/音频资源、目录、API 与兼容性：`docs/voicetransl_multi_audio_project.md`。
 - 先配置再运行的前端交互：`docs/frontend_workflow.md`。
-- 已落地的音频直通节点图：`docs/architecture.md` 第 7 节及 `spec/workflow-audio-mvp.md`；不要把完整编辑器草案描述为已完成。
+- 已落地的音频节点图与预处理：`docs/architecture.md` 第 7 节、`spec/workflow-audio-mvp.md` 和 `spec/workflow-preprocess.md`；不要把完整编辑器草案描述为已完成。
 - 本地 ASR 与翻译 Provider：`docs/crispasr_provider.md`、`docs/translation_providers.md`。
 - 可复用连接配置：`docs/provider_profiles.md`。
 - 已完成里程碑和后续方向：`docs/roadmap.md`。计划项不代表已实现，不能描述为当前可用能力。
@@ -39,7 +39,7 @@
 - 一个项目包含一个或多个音频；每个音频拥有独立任务、进度、字幕、输出和不可变的运行配置快照。
 - 项目提供公共默认配置，音频可以独立覆盖；共享配置不合并时间轴。
 - HTTP 服务及领域模型使用 FastAPI 和 Pydantic。
-- 旧 Pipeline 包含 `preprocess`、`asr`、`alignment`、`translation`、`export` 五阶段；各阶段结束后保存产物和任务状态。独立节点模式目前仅支持音频输入/输出直通，不自动迁移旧配置。
+- 旧 Pipeline 包含 `preprocess`、`asr`、`alignment`、`translation`、`export` 五阶段；各阶段结束后保存产物和任务状态。独立节点模式支持音频输入、Mock/FFmpeg 预处理与音频输出，可直出、串联或分支，不自动迁移旧配置。
 - WebSocket 只用于通知，REST 与文件才是真实状态来源。
 - 新项目默认使用 Mock Provider；真实 Provider 需后端配置可用：
   - 预处理：`mock` 或本地 `ffmpeg`。
@@ -57,7 +57,7 @@
 - 多文件选择/拖放及上传队列创建一个包含多音频的项目；失败项可在同项目单独重试，不重建成功资源，上传不自动启动任务。
 - 工作区可选择一个、多个或全部音频，配置节点、应用配置并启动独立任务；各音频可单独查看、恢复及取消。
 - 翻译配置弹窗只处理 `base_url` 和 `api_key_env` 等非密钥字段，真实密钥留在后端环境变量中。
-- 节点工作流支持画布编辑、校验/保存、当前音频运行/取消及历史下载；图按项目保存，运行保存不可变快照，通过 REST 轮询。尚无处理节点、视频/文本图输出、指定节点重跑或历史清理。
+- 节点工作流支持画布编辑、独立预处理设置、校验/保存、当前音频运行/取消及历史下载；图按项目保存，运行保存不可变快照，通过 REST 轮询。仅已接入预处理，尚无 ASR/翻译节点、视频/文本图输出、指定节点重跑或历史清理。
 
 ## 后端不变量
 

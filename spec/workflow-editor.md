@@ -1,12 +1,12 @@
 # 可视化节点工作流编辑器
 
-> 状态：Draft（已确认方向见下文；完整编辑器的节点、调度和重跑等契约仍需细化）。音频直通子集已单独实施，见 [workflow-audio-mvp.md](workflow-audio-mvp.md)。
+> 状态：Draft（已确认方向见下文；完整编辑器的节点、调度和重跑等契约仍需细化）。音频直通与预处理子集已单独实施，见 [workflow-audio-mvp.md](workflow-audio-mvp.md) 和 [workflow-preprocess.md](workflow-preprocess.md)。
 
 ## 目标
 
 最终的 VoiceTransl 应提供类似 ComfyUI 的节点图编辑体验：用户能在画布上配置工作流节点及连接，主动设定处理路径，并独立配置各节点。ComfyUI 是交互范例，不是要求复制其全部功能。
 
-当前保留固定五阶段，并有独立的音频输入/输出直通图；处理节点尚未迁入。当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
+当前保留固定五阶段，并有独立的音频输入/预处理/输出图；预处理支持 Mock/FFmpeg，ASR、对齐和翻译节点尚未迁入。当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
 
 ## 已对齐的方向
 
