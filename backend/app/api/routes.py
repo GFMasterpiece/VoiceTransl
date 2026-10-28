@@ -88,6 +88,7 @@ def audio_request(request, pid, aid):
         )
     jobs = SimpleNamespace(
         running=partial(state.jobs.running, audio_id=aid),
+        running_workflow=partial(state.jobs.running_workflow, audio_id=aid),
         start=partial(state.jobs.start, audio_id=aid),
         cancel=partial(state.jobs.cancel, audio_id=aid),
         _lock=partial(state.jobs._lock, audio_id=aid),
@@ -480,6 +481,16 @@ async def run(pid: str, body: RunRequest, request: Request):
                     "error": {"code": "JOB_ALREADY_RUNNING", "message": "任务正在运行或排队中"}
                 },
             )
+        if str(error) == "AUDIO_BUSY":
+            raise HTTPException(
+                409,
+                detail={
+                    "error": {
+                        "code": "AUDIO_BUSY",
+                        "message": "该音频已有节点工作流正在运行或排队",
+                    }
+                },
+            )
         raise HTTPException(
             500,
             detail={
@@ -504,6 +515,16 @@ async def run(pid: str, body: RunRequest, request: Request):
 async def cancel(pid: str, request: Request):
     state = deps(request)
     get_project(state, pid)
+    if state.jobs.running_workflow(pid):
+        raise HTTPException(
+            409,
+            detail={
+                "error": {
+                    "code": "AUDIO_BUSY_WORKFLOW",
+                    "message": "节点工作流正在使用该音频，请从工作流运行中取消",
+                }
+            },
+        )
     if not state.jobs.cancel(pid):
         raise HTTPException(
             409, detail={"error": {"code": "JOB_NOT_RUNNING", "message": "任务未运行"}}

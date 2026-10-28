@@ -1,6 +1,6 @@
 # VoiceTransl 功能规格
 
-`spec/` 只存放尚未实现或尚需确认、但需要明确范围和验收条件的功能要求。当前实现与稳定契约仍以 `docs/` 和代码为准；规格草案不是现有功能说明。
+`spec/` 存放需要明确范围和验收条件的功能要求；已验收的里程碑保留为 Implemented，供追溯范围与验收记录。当前使用说明与架构仍以 `docs/` 和代码为准；规格草案不是现有功能说明。
 
 ## 状态
 
@@ -16,6 +16,7 @@
 | 规格 | 状态 | 主题 |
 | --- | --- | --- |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 实现 ComfyUI 风格的可视化节点编排和节点独立配置 |
+| [首个音频直通里程碑](workflow-audio-mvp.md) | Implemented | 已验收输入/输出图编辑、版本化保存及独立运行历史；不含处理节点与重跑 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 在现有音频处理流程中接入首个云端语音识别 Provider |
 
 整体产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，阶段与进度见 [`../docs/roadmap.md`](../docs/roadmap.md)。规格获批和实现后才把稳定行为沉淀为 `docs/` 契约；不要在两处重复维护完整细节。

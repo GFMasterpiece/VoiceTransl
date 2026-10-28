@@ -1,12 +1,12 @@
 # 可视化节点工作流编辑器
 
-> 状态：Draft（用户确认总体方向；具体图语义和首版范围尚未确认）
+> 状态：Draft（已确认方向见下文；完整编辑器的节点、调度和重跑等契约仍需细化）。音频直通子集已单独实施，见 [workflow-audio-mvp.md](workflow-audio-mvp.md)。
 
 ## 目标
 
 最终的 VoiceTransl 应提供类似 ComfyUI 的节点图编辑体验：用户能在画布上配置工作流节点及连接，主动设定处理路径，并独立配置各节点。ComfyUI 是交互范例，不是要求复制其全部功能。
 
-当前前端仍展示固定的 `preprocess → asr → alignment → translation → export` 五阶段；当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
+当前保留固定五阶段，并有独立的音频输入/输出直通图；处理节点尚未迁入。当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
 
 ## 已对齐的方向
 
@@ -55,7 +55,7 @@
 
 节点执行快照和缓存指纹的具体格式仍待确认；产物保留与清理遵循下述已确认策略。
 
-这项能力超出当前“每个音频只保存一个当前 Job”的实现，需要设计可追溯的工作流修订、运行记录和节点产物存储；当前行为见 [`../docs/architecture.md`](../docs/architecture.md)。
+音频直通里程碑已建立工作流修订、独立运行历史及逐节点文件，但尚无缓存指纹、上游复用或指定节点重跑；旧五阶段仍仅维护当前 Job。当前行为见 [`../docs/architecture.md`](../docs/architecture.md)。
 
 ## 工作流保存与版本（已确认）
 

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from .api.local_asr_settings import router as local_asr_router
 from .api.routes import router
+from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
 from .application.local_asr_models import LocalASRModels
 from .application.local_asr_settings import LocalASRSettings
@@ -45,6 +46,7 @@ def create_app(data_dir=None):
         # Scan only when the server actually starts. Constructing an app for
         # tests or tooling must not mark a live job from another server.
         store.mark_interrupted()
+        store.mark_workflow_runs_interrupted()
         try:
             yield
         finally:
@@ -101,6 +103,7 @@ def create_app(data_dir=None):
     app.state.events = events
     app.state.jobs = jobs
     app.include_router(router)
+    app.include_router(workflow_router)
     app.include_router(local_asr_router)
     return app
 

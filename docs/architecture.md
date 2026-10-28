@@ -8,7 +8,7 @@
 
 - Vue WebUI 通过 REST 查询/操作资源，通过 WebSocket 接收通知；FastAPI 负责请求校验、路由和错误转换，不直接运行模型。
 - `domain/` 定义领域模型；`storage/` 的 ProjectStore 负责项目状态的读写、路径校验和恢复扫描。
-- `application/` 的 JobManager 管理任务、取消信号及全局并发；PipelineRunner 管理阶段顺序、状态迁移和恢复。
+- `application/` 的 JobManager 管理任务、取消信号及全局并发；PipelineRunner 管理旧五阶段顺序、状态迁移和恢复，WorkflowRunner 执行首版音频直通节点图。
 - Stage 调用 Provider/Exporter 并通过存储层保存产物；Provider 只实现算法或外部服务能力，不直接修改 Job/项目状态。
 - 当前使用单进程、单 Uvicorn worker 和进程内异步任务，全局并发默认 1；不同音频可以独立排队，同一音频不能同时运行或排队两个任务。
 - 阻塞型模型调用不能占用事件循环，应通过子进程或线程执行。数据库、外部 Worker、多进程调度不属于当前架构。
@@ -18,12 +18,12 @@
 - 文件系统是唯一持久状态来源。一个项目对应独立目录，包含一个或多个音频；各音频拥有自己的当前 Job、字幕、进度和输出，不共享时间轴。
 - 项目公共默认配置与音频覆盖的优先级、主音频 `aud_primary` 的旧接口兼容规则，以多音频项目契约为准；不再采用“一项目一任务”的限制。
 - 新任务保存不可变 `job.config_snapshot`；引用的 Provider Profile 保存到非密钥 `provider_profiles_snapshot`。恢复任务沿用原快照，重新处理创建新 Job ID 和新快照。
-- 当前每个音频仅维护一个当前任务，不承诺历史任务归档。重新处理不应被表述为保留完整历史版本。
+- 旧 Pipeline 每个音频仅维护一个当前 Job，不承诺旧任务历史归档；新增节点工作流另存运行历史，不能混淆两套行为。
 - 服务配置按代码默认值、YAML、环境变量的顺序覆盖。真实 API Key 仅由后端从指定环境变量读取，不进入项目文件、Profile、快照或前端。
 
 ## 3. Pipeline 与产物
 
-阶段顺序固定为 `preprocess → asr → alignment → translation → export`：
+旧 Pipeline 阶段顺序固定为 `preprocess → asr → alignment → translation → export`：
 
 | 阶段 | 当前音频范围内的主要产物 |
 | --- | --- |
@@ -60,5 +60,15 @@
 ## 6. 当前能力边界
 
 预处理支持 Mock/FFmpeg，ASR 支持 Mock/本地 CrispASR，时间轴对齐仍为 Mock/fallback；HTTP 翻译支持 OpenAI-compatible Chat Completions、OpenAI Responses 和 Anthropic Messages。Profile 的 CRUD 与任务快照已实现，但实际云端 ASR 和 Profile 管理界面尚未接通。
+
+## 7. 节点工作流首版
+
+- 与旧 Pipeline 并存，只支持一个 `audio_input` 向一个或多个 `audio_output` 扇出。输出逐个复制原音频字节为独立普通文件，不转码、不生成字幕；不是通用 DAG 执行器。
+- 每项目保存 `workflow.json` 和不可变的 `workflow-revisions/{revision:08d}.json`。`revision` 用于乐观锁；`workflow_revision` 用于执行版本。纯布局、节点/边数组排序、边 ID 的变化不提升执行版本。未保存时返回默认图（版本 0），第一次保存建立版本 1。
+- 每音频独立保存 `workflow-runs/{rid}/run.json` 与 `nodes/{node_id}/{filename}`；主音频放项目根目录，其他音频放 `audios/{aid}/` 下。运行包含不可变图/配置快照，成功输出包含大小、SHA256 和下载地址，不覆盖旧 `job.json` 或旧产物。
+- API 在项目范围提供 `/workflow` 读取/保存、`/workflow/validate` 校验，在音频范围提供 `/workflow-runs` 创建/分页查询，以及运行详情、取消、逐节点输出元数据/下载。完整字段及错误码见[已验收的里程碑契约](../spec/workflow-audio-mvp.md)。
+- 新旧任务共用 JobManager 注册表、音频锁和全局并发限制，同音频不能重叠；任一活动任务阻止项目删除。旧取消接口不能取消图运行，须用图运行自己的取消接口。
+- 复制在线程中分块执行，校验字节数、计算 SHA256，同目录临时文件同步后原子发布。成功节点立即落盘；分支失败不阻止其他输出，整体可为 `partial`。拒绝危险文件名、目录穿越和源/产物路径符号链接。
+- 当前图运行通过 REST 轮询，不新增 WebSocket 事件。退出/重启将未完成图运行标为 `interrupted`，不自动恢复；可按当前图新建运行。历史默认保留，但尚无指定节点重跑、结果复用、空间统计或清理入口。
 
 各 Provider 的使用、限制和安全规则见 [CrispASR](crispasr_provider.md)、[全局本地 ASR 设置](voicetransl_global_settings.md)、[翻译 Provider](translation_providers.md) 与 [Provider Profile](provider_profiles.md)。测试命令及交付要求统一维护在 [AGENTS.md](../AGENTS.md)。

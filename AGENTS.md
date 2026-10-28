@@ -26,6 +26,7 @@
 - 分层职责、Pipeline 持久化、恢复和安全：`docs/architecture.md`。
 - 项目/音频资源、目录、API 与兼容性：`docs/voicetransl_multi_audio_project.md`。
 - 先配置再运行的前端交互：`docs/frontend_workflow.md`。
+- 已落地的音频直通节点图：`docs/architecture.md` 第 7 节及 `spec/workflow-audio-mvp.md`；不要把完整编辑器草案描述为已完成。
 - 本地 ASR 与翻译 Provider：`docs/crispasr_provider.md`、`docs/translation_providers.md`。
 - 可复用连接配置：`docs/provider_profiles.md`。
 - 已完成里程碑和后续方向：`docs/roadmap.md`。计划项不代表已实现，不能描述为当前可用能力。
@@ -38,7 +39,7 @@
 - 一个项目包含一个或多个音频；每个音频拥有独立任务、进度、字幕、输出和不可变的运行配置快照。
 - 项目提供公共默认配置，音频可以独立覆盖；共享配置不合并时间轴。
 - HTTP 服务及领域模型使用 FastAPI 和 Pydantic。
-- Pipeline 包含 `preprocess`、`asr`、`alignment`、`translation`、`export` 五阶段；各阶段结束后保存产物和任务状态。
+- 旧 Pipeline 包含 `preprocess`、`asr`、`alignment`、`translation`、`export` 五阶段；各阶段结束后保存产物和任务状态。独立节点模式目前仅支持音频输入/输出直通，不自动迁移旧配置。
 - WebSocket 只用于通知，REST 与文件才是真实状态来源。
 - 新项目默认使用 Mock Provider；真实 Provider 需后端配置可用：
   - 预处理：`mock` 或本地 `ffmpeg`。
@@ -56,17 +57,19 @@
 - 多文件选择/拖放及上传队列创建一个包含多音频的项目；失败项可在同项目单独重试，不重建成功资源，上传不自动启动任务。
 - 工作区可选择一个、多个或全部音频，配置节点、应用配置并启动独立任务；各音频可单独查看、恢复及取消。
 - 翻译配置弹窗只处理 `base_url` 和 `api_key_env` 等非密钥字段，真实密钥留在后端环境变量中。
+- 节点工作流支持画布编辑、校验/保存、当前音频运行/取消及历史下载；图按项目保存，运行保存不可变快照，通过 REST 轮询。尚无处理节点、视频/文本图输出、指定节点重跑或历史清理。
 
 ## 后端不变量
 
 - 项目和任务 JSON 包含 `schema_version`；存储路径使用项目相对 POSIX 路径；状态 JSON 原子写入。
 - Provider 不直接修改项目/任务状态；翻译 Provider 不改变片段 ID、原文及时间范围。
 - 不静默覆盖源文件或人工编辑的字幕。
-- 中断任务保持可见，并可从未完成阶段继续。
+- 旧 Pipeline 中断任务保持可见，并可从未完成阶段继续；节点工作流中断记录保留但尚不支持恢复，只能创建新运行。
 - 同一音频不能同时运行两个任务；不同音频在全局并发限制下独立运行或排队。
 - 任一音频运行、取消中或已提交排队时，删除项目返回 `PROJECT_BUSY`；全部音频均不忙碌时才可删除项目及其产物。
 - 完成后的重新处理必须创建新 Job ID 和配置快照，不能修改或恢复旧的已完成任务。
 - 已开始的任务始终使用自身配置快照，不受后来修改的可编辑配置影响。
+- 节点运行不覆盖旧 `job.json`；其历史和独立输出按运行/节点隔离。新旧执行共用音频忙碌边界与全局并发限制。
 
 ## 开发与验证
 

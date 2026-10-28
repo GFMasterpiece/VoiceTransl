@@ -14,7 +14,17 @@ from ..domain import (
     ProviderProfile,
     ProviderProfilesDocument,
     Transcript,
+    WorkflowDocument,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowNodeStatus,
+    WorkflowRun,
+    WorkflowRunStatus,
     default_pipeline_config,
+    default_workflow,
+    normalize_workflow_graph,
+    validate_workflow_graph,
+    workflow_semantic_digest,
 )
 from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
 from .atomic import atomic_write_bytes, atomic_write_json, atomic_write_text
@@ -29,6 +39,10 @@ class TranscriptProtectedError(ValueError):
 
 
 class SourceUploadTooLarge(ValueError):
+    pass
+
+
+class WorkflowRevisionConflict(RuntimeError):
     pass
 
 
@@ -56,6 +70,248 @@ class FileSystemProjectStore:
         if audio_id == PRIMARY_AUDIO_ID:
             return PrimaryAudioProjectStore(self, project_id)
         return AudioProjectStore(self, project_id, audio_id)
+
+    def _workflow_path(self, project_id: str) -> Path:
+        path = self.project_dir(project_id) / "workflow.json"
+        if path.is_symlink():
+            raise ValueError("workflow must not be a symlink")
+        return path
+
+    def _workflow_history_dir(self, project_id: str) -> Path:
+        return self._project_subdir(project_id, "workflow-revisions")
+
+    def load_workflow(self, project_id: str) -> WorkflowDocument:
+        project = self.load_project(project_id)
+        path = self._workflow_path(project_id)
+        if not path.exists():
+            return default_workflow(project_id, project.updated_at)
+        document = WorkflowDocument.model_validate_json(path.read_text(encoding="utf-8"))
+        if document.project_id != project_id:
+            raise ValueError("invalid workflow ownership")
+        self._repair_workflow_history(document)
+        return document
+
+    def _repair_workflow_history(self, document: WorkflowDocument) -> None:
+        """Restore a history slot that was not published after a stopped save."""
+
+        history_path = self._workflow_history_dir(document.project_id) / (
+            f"{document.revision:08d}.json"
+        )
+        if history_path.is_symlink():
+            raise ValueError("workflow revision history must not be a symlink")
+        if history_path.exists():
+            return
+        atomic_write_json(history_path, document.model_dump(mode="json"))
+
+    def save_workflow(
+        self,
+        project_id: str,
+        current: WorkflowDocument,
+        *,
+        expected_revision: int,
+        nodes: list[WorkflowNode],
+        edges: list[WorkflowEdge],
+    ) -> WorkflowDocument:
+        revision_path = self._workflow_path(project_id)
+        if current.project_id != project_id:
+            raise ValueError("invalid workflow ownership")
+        if current.revision != expected_revision:
+            raise WorkflowRevisionConflict
+
+        nodes, edges = normalize_workflow_graph(nodes, edges)
+        issues = validate_workflow_graph(nodes, edges)
+        if issues:
+            raise ValueError("invalid workflow")
+        updated = WorkflowDocument(
+            project_id=project_id,
+            revision=current.revision,
+            workflow_revision=current.workflow_revision,
+            updated_at=current.updated_at,
+            nodes=nodes,
+            edges=edges,
+        )
+        if revision_path.exists() and updated.model_dump(
+            exclude={"updated_at"}
+        ) == current.model_dump(exclude={"updated_at"}):
+            return current
+
+        semantic_changed = workflow_semantic_digest(
+            current.nodes, current.edges
+        ) != workflow_semantic_digest(nodes, edges)
+        updated.revision = current.revision + 1
+        updated.workflow_revision = current.workflow_revision + int(
+            semantic_changed or current.revision == 0
+        )
+        updated.updated_at = datetime.now(timezone.utc)
+        history_path = self._workflow_history_dir(project_id) / (f"{updated.revision:08d}.json")
+        payload = updated.model_dump(mode="json")
+        if history_path.is_symlink():
+            raise ValueError("workflow revision history must not be a symlink")
+        if history_path.exists():
+            existing = WorkflowDocument.model_validate_json(
+                history_path.read_text(encoding="utf-8")
+            )
+            if existing.model_dump(exclude={"updated_at"}) != (
+                updated.model_dump(exclude={"updated_at"})
+            ):
+                raise ValueError("workflow revision history is immutable")
+        # Current is authoritative. If the process stops before the history
+        # write, load_workflow repairs that revision from the committed current
+        # document on the next access.
+        atomic_write_json(revision_path, payload)
+        self._touch_project(project_id)
+        if not history_path.exists():
+            atomic_write_json(history_path, payload)
+        return updated
+
+    def workflow_run_root(self, project_id: str, audio_id: str) -> Path:
+        self.audio(project_id, audio_id)
+        if audio_id == PRIMARY_AUDIO_ID:
+            root = self.project_dir(project_id) / "workflow-runs"
+        else:
+            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs"
+        if root.is_symlink():
+            raise ValueError("workflow runs directory must not be a symlink")
+        root.mkdir(parents=True, exist_ok=True)
+        resolved = root.resolve()
+        boundary = (
+            self.project_dir(project_id)
+            if audio_id == PRIMARY_AUDIO_ID
+            else self.scope(project_id, audio_id).audio_dir().resolve()
+        )
+        if resolved.parent != boundary and boundary not in resolved.parents:
+            raise ValueError("workflow runs directory escapes audio boundary")
+        return root
+
+    @staticmethod
+    def _validate_workflow_run_id(run_id: str) -> None:
+        if (
+            not run_id.startswith("wfr_")
+            or len(run_id) != 36
+            or any(char not in "0123456789abcdef" for char in run_id[4:])
+        ):
+            raise ValueError("invalid workflow run id")
+
+    def workflow_run_dir(self, project_id: str, audio_id: str, run_id: str) -> Path:
+        self._validate_workflow_run_id(run_id)
+        root = self.workflow_run_root(project_id, audio_id)
+        path = root / run_id
+        if path.is_symlink():
+            raise ValueError("workflow run directory must not be a symlink")
+        if path.resolve().parent != root.resolve():
+            raise ValueError("workflow run directory escapes runs root")
+        return path
+
+    def create_workflow_run(self, run: WorkflowRun) -> Path:
+        directory = self.workflow_run_dir(run.project_id, run.audio_id, run.id)
+        directory.mkdir(parents=False, exist_ok=False)
+        atomic_write_json(directory / "run.json", run.model_dump(mode="json"))
+        self._touch_project(run.project_id)
+        return directory
+
+    def save_workflow_run(self, run: WorkflowRun) -> Path:
+        directory = self.workflow_run_dir(run.project_id, run.audio_id, run.id)
+        if not directory.is_dir():
+            raise ProjectNotFound(run.id)
+        path = directory / "run.json"
+        if path.is_symlink():
+            raise ValueError("workflow run state must not be a symlink")
+        atomic_write_json(path, run.model_dump(mode="json"))
+        self._touch_project(run.project_id)
+        return directory
+
+    def load_workflow_run(self, project_id: str, audio_id: str, run_id: str) -> WorkflowRun:
+        directory = self.workflow_run_dir(project_id, audio_id, run_id)
+        path = directory / "run.json"
+        if path.is_symlink() or not path.is_file():
+            raise ProjectNotFound(run_id)
+        run = WorkflowRun.model_validate_json(path.read_text(encoding="utf-8"))
+        if run.project_id != project_id or run.audio_id != audio_id or run.id != run_id:
+            raise ValueError("invalid workflow run ownership")
+        return run
+
+    def list_workflow_runs(
+        self, project_id: str, audio_id: str, *, limit: int, offset: int
+    ) -> tuple[list[WorkflowRun], int]:
+        self.audio(project_id, audio_id)
+        if audio_id == PRIMARY_AUDIO_ID:
+            root = self.project_dir(project_id) / "workflow-runs"
+        else:
+            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs"
+        if not root.is_dir() or root.is_symlink():
+            return [], 0
+        runs = []
+        for directory in root.iterdir():
+            if directory.is_symlink() or not directory.is_dir():
+                continue
+            try:
+                run = self.load_workflow_run(project_id, audio_id, directory.name)
+            except (OSError, ValueError):
+                continue
+            runs.append(run)
+        runs.sort(key=lambda run: (run.created_at, run.id), reverse=True)
+        return runs[offset : offset + limit], len(runs)
+
+    def workflow_artifact_path(
+        self,
+        project_id: str,
+        audio_id: str,
+        run_id: str,
+        node_id: str,
+        filename: str,
+    ) -> Path:
+        if not node_id or node_id in {".", ".."} or "/" in node_id or "\\" in node_id:
+            raise ValueError("invalid workflow node id")
+        if not filename or filename in {".", ".."} or "/" in filename or "\\" in filename:
+            raise ValueError("invalid workflow artifact filename")
+        directory = self.workflow_run_dir(project_id, audio_id, run_id)
+        node_dir = directory / "nodes" / node_id
+        for candidate in (directory / "nodes", node_dir):
+            if candidate.is_symlink():
+                raise ValueError("workflow artifact directory must not be a symlink")
+        path = node_dir / filename
+        if path.is_symlink():
+            raise ValueError("workflow artifact must not be a symlink")
+        if node_dir.resolve().parent != (directory / "nodes").resolve():
+            raise ValueError("workflow artifact path escapes node directory")
+        return path
+
+    def mark_workflow_runs_interrupted(self) -> None:
+        for _, project in self._published_projects():
+            for audio in project.audios:
+                try:
+                    if audio.id == PRIMARY_AUDIO_ID:
+                        root = self.project_dir(project.id) / "workflow-runs"
+                    else:
+                        root = self.scope(project.id, audio.id).audio_dir() / "workflow-runs"
+                    if not root.is_dir() or root.is_symlink():
+                        continue
+                    for directory in root.iterdir():
+                        if directory.is_symlink() or not directory.is_dir():
+                            continue
+                        try:
+                            run = self.load_workflow_run(project.id, audio.id, directory.name)
+                        except (OSError, ValueError):
+                            continue
+                        if run.status not in {
+                            WorkflowRunStatus.PENDING,
+                            WorkflowRunStatus.RUNNING,
+                            WorkflowRunStatus.CANCELLING,
+                        }:
+                            continue
+                        run.status = WorkflowRunStatus.INTERRUPTED
+                        run.finished_at = datetime.now(timezone.utc)
+                        for node in run.nodes:
+                            if node.status in {
+                                WorkflowNodeStatus.PENDING,
+                                WorkflowNodeStatus.RUNNING,
+                            }:
+                                node.status = WorkflowNodeStatus.INTERRUPTED
+                                node.finished_at = run.finished_at
+                        directory_path = self.workflow_run_dir(project.id, audio.id, run.id)
+                        atomic_write_json(directory_path / "run.json", run.model_dump(mode="json"))
+                except Exception:
+                    continue
 
     async def append_audio(self, project_id, audio, job, upload, max_bytes):
         # Stage a complete resource before publishing its metadata membership.
@@ -107,7 +363,7 @@ class FileSystemProjectStore:
         if root not in path.parents:
             raise ValueError("invalid project path")
         candidate = root / project_id
-        if candidate.exists() and candidate.is_symlink():
+        if candidate.is_symlink():
             raise ValueError("project path must not be a symlink")
         return path
 
@@ -136,6 +392,16 @@ class FileSystemProjectStore:
         return resolved
 
     def source_path(self, project_id: str, relative_path: str) -> Path:
+        # Resolving first is necessary to detect escapes, but resolving also
+        # hides symlinks.  Walk the un-resolved path explicitly so a source
+        # link cannot silently point at another authorized-looking file.
+        project_root = self.project_dir(project_id).resolve()
+        raw_parts = Path(relative_path).parts
+        current = project_root
+        for part in raw_parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("source path must not contain symlinks")
         path = self.resolve_project_path(project_id, relative_path)
         source_root = self._source_dir(project_id).resolve()
         if source_root not in path.parents or not path.is_file():
@@ -148,7 +414,7 @@ class FileSystemProjectStore:
     def _project_subdir(self, project_id: str, name: str) -> Path:
         project_dir = self.project_dir(project_id).resolve()
         child = project_dir / name
-        if child.exists() and child.is_symlink():
+        if child.is_symlink():
             raise ValueError(f"{name} directory must not be a symlink")
         child.mkdir(parents=True, exist_ok=True)
         resolved = child.resolve()

@@ -2,15 +2,20 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useProjectsStore, type Project } from './stores/projects'
 import { useProjectDetailStore, type Stage, type StageName } from './stores/projectDetail'
+import { useWorkflowStore } from './stores/workflow'
 import { useUploadQueue, type UploadPolicy, type UploadStatus } from './composables/useUploadQueue'
 import GlobalSettingsModal from './components/GlobalSettingsModal.vue'
 import AsrConfigFields from './components/AsrConfigFields.vue'
+import WorkflowEditor from './components/WorkflowEditor.vue'
 
 type View = 'list' | 'create' | 'detail'
 
 const store = useProjectsStore()
 const detail = useProjectDetailStore()
+const workflowStore = useWorkflowStore()
 const view = ref<View>('list')
+const workspaceMode = ref<'pipeline' | 'workflow'>('pipeline')
+const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
 const globalSettingsOpen = ref(false)
 const projectName = ref('')
 const sourceLanguage = ref('ja')
@@ -307,6 +312,10 @@ function cancelCreate() {
 }
 
 function showCreate() {
+  if (workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(showCreate, { resetPipeline: false })
+    return
+  }
   if (!guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
   if (uploadItems.value.some((item) => item.status !== 'created') && !window.confirm('新建项目会清空当前未完成的上传队列。已上传音频会保留在原项目中，继续新建吗？')) return
   upload.clear()
@@ -317,12 +326,21 @@ function showCreate() {
 }
 
 function returnUploadQueue() {
+  if (workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(returnUploadQueue, { resetPipeline: false })
+    return
+  }
   if (!guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
   detail.stop()
   view.value = 'create'
 }
 
 async function openProject(id: string, audioId?: string) {
+  if (workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(() => { void openProject(id, audioId) }, { resetPipeline: false })
+    return
+  }
+  workspaceMode.value = 'pipeline'
   if (!guardUploadNavigation()) return
   closeStageConfig(true)
   view.value = 'detail'
@@ -338,6 +356,10 @@ async function openProject(id: string, audioId?: string) {
 }
 
 function addProjectAudio() {
+  if (workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(addProjectAudio, { resetPipeline: false })
+    return
+  }
   if (!detail.project || !guardUploadNavigation() || (configModalOpen.value && !closeStageConfig())) return
   if (uploadItems.value.length && !window.confirm('替换当前上传队列，向此项目添加音频吗？已上传的音频会保留。')) return
   upload.clear()
@@ -349,6 +371,11 @@ function addProjectAudio() {
 }
 
 async function focusAudio(id: string) {
+  if (workspaceMode.value === 'workflow') {
+    if (detail.actionLoading || detail.configSaving || id === detail.activeAudioId) return
+    guardWorkflowNavigation(() => { void switchAudioKeepingWorkflow(id) }, { resetPipeline: false })
+    return
+  }
   if (detail.actionLoading || detail.configSaving || id === detail.activeAudioId) return
   if (configModalOpen.value && !closeStageConfig()) return
   if (detail.configDirty && !window.confirm('当前音频有未保存配置，切换后会放弃修改。继续切换吗？')) return
@@ -356,7 +383,18 @@ async function focusAudio(id: string) {
   selectedStage.value = detail.job?.current_stage || 'preprocess'
 }
 
+async function switchAudioKeepingWorkflow(id: string) {
+  const target = detail.audios.find((audio) => audio.id === id)
+  if (!target) return
+  await detail.selectAudio(id)
+  if (detail.activeAudioId === id) workspaceMode.value = 'workflow'
+}
+
 function showList() {
+  if (view.value === 'detail' && workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(showList)
+    return
+  }
   if (!guardUploadNavigation()) return
   if (configModalOpen.value && !closeStageConfig()) return
   detail.stop()
@@ -374,6 +412,54 @@ function toggleExportFormat(format: string) {
   detail.markConfigDirty()
 }
 
+function switchWorkspaceMode(mode: 'pipeline' | 'workflow') {
+  if (mode === 'workflow' && (!detail.project || !detail.activeAudioId || detail.loading)) return
+  if (mode === 'pipeline' && workspaceMode.value === 'workflow') {
+    guardWorkflowNavigation(() => {}, { resetPipeline: false })
+    return
+  }
+  if (mode === 'pipeline' && configModalOpen.value && !closeStageConfig()) return
+  workspaceMode.value = mode
+}
+
+function guardWorkflowNavigation(action: () => void, { resetPipeline = true } = {}) {
+  if (workflowStore.activeRun) {
+    workflowStore.error = '节点运行尚未结束，请等待完成或取消后再离开。'
+    return
+  }
+  const leaveWorkflow = () => {
+    workflowStore.stop()
+    workspaceMode.value = 'pipeline'
+    if (resetPipeline) detail.stop()
+  }
+  if (workspaceMode.value !== 'workflow') {
+    action()
+    return
+  }
+  const proceed = () => {
+    leaveWorkflow()
+    action()
+  }
+  if (workflowEditor.value) {
+    workflowEditor.value.requestClose(proceed)
+    return
+  }
+  if (workflowStore.dirty && !window.confirm('放弃未保存的节点工作流修改并离开？')) return
+  if (workflowStore.dirty) workflowStore.discardDraft()
+  proceed()
+}
+
+function switchWorkflowAudio(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const audioId = select.value
+  if (audioId === detail.activeAudioId) return
+  if (workflowStore.activeRun) {
+    select.value = detail.activeAudioId || ''
+    return
+  }
+  void focusAudio(audioId)
+}
+
 async function runJob() {
   try {
     const resume = ['failed', 'cancelled', 'interrupted'].includes(detail.job?.status || '')
@@ -387,10 +473,21 @@ async function cancelJob() {
 }
 
 async function deleteProject(id: string, name: string) {
+  if (workspaceMode.value === 'workflow' && detail.project?.id === id) {
+    guardWorkflowNavigation(() => { void deleteProject(id, name) })
+    return
+  }
   if (!window.confirm(`确定删除项目“${name}”吗？这会移除项目内全部音频、字幕和输出文件。`)) return
   try {
     await store.deleteProject(id)
-    if (detail.project?.id === id) showList()
+    if (detail.project?.id === id) {
+      if (workspaceMode.value === 'workflow') {
+        workflowStore.stop()
+        workspaceMode.value = 'pipeline'
+      }
+      detail.stop()
+      showList()
+    }
   } catch (reason) {
     store.error = reason instanceof Error ? reason.message : '项目删除失败'
   }
@@ -462,9 +559,15 @@ onUnmounted(() => {
       </section>
 
       <section v-else class="workspace">
-        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><button class="secondary-button danger-button" type="button" :disabled="detail.anyRunning || detail.actionLoading" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.loading || detail.actionLoading || detail.configLocked || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理当前音频' : detail.job?.status === 'pending' ? '开始当前音频' : '继续当前音频' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消当前音频' }}</button></div></div>
+        <div class="workspace-header"><button class="back-button" type="button" @click="showList">← 返回项目列表</button><div class="workspace-actions"><label v-if="workspaceMode === 'workflow'" class="workflow-audio-picker"><span>当前节点音频</span><select :value="detail.activeAudioId || ''" :disabled="detail.actionLoading || detail.configSaving || !!workflowStore.activeRun" aria-label="切换节点工作流音频" @change="switchWorkflowAudio"><option v-for="audio in detail.audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option></select></label><button class="secondary-button danger-button" type="button" :disabled="detail.anyRunning || detail.actionLoading || !!workflowStore.activeRun" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">删除项目</button><template v-if="workspaceMode === 'pipeline'"><button v-if="!detail.isRunning" class="primary-button" type="button" :disabled="detail.loading || detail.actionLoading || detail.configLocked || !detail.configValid || detail.configLoading || detail.configSaving" @click="runJob"><span v-if="detail.actionLoading" class="button-loader" aria-hidden="true"></span>{{ detail.job?.status === 'completed' ? '重新处理当前音频' : detail.job?.status === 'pending' ? '开始当前音频' : '继续当前音频' }}</button><button v-if="detail.isRunning" class="secondary-button danger-button" type="button" :disabled="detail.actionLoading" @click="cancelJob">{{ detail.actionLoading ? '取消中…' : '取消当前音频' }}</button></template></div></div>
         <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         <template v-else-if="detail.project">
+          <nav class="workspace-mode-switch" aria-label="工作区模式">
+            <button type="button" :class="{ 'is-active': workspaceMode === 'pipeline' }" :aria-pressed="workspaceMode === 'pipeline'" @click="switchWorkspaceMode('pipeline')">五阶段流程</button>
+            <button type="button" :class="{ 'is-active': workspaceMode === 'workflow' }" :aria-pressed="workspaceMode === 'workflow'" :disabled="!detail.activeAudioId || detail.loading" @click="switchWorkspaceMode('workflow')">节点工作流 <span>首版</span></button>
+          </nav>
+          <WorkflowEditor v-if="workspaceMode === 'workflow' && detail.activeAudioId" :key="`${detail.project.id}/${detail.activeAudioId}`" ref="workflowEditor" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || '当前音频'" @show-pipeline="switchWorkspaceMode('pipeline')" />
+          <template v-else>
           <section class="audio-library" aria-labelledby="audio-library-title">
             <div class="panel-heading"><div><span class="section-kicker">AUDIO LIBRARY</span><h3 id="audio-library-title">项目音频 · {{ detail.audios.length }} 条</h3><p class="audio-library-note">点击文件名查看详情；勾选控制应用配置和开始处理的范围。</p></div><button class="secondary-button" type="button" :disabled="detail.actionLoading || detail.configSaving" @click="addProjectAudio">添加音频</button></div>
             <div class="audio-selection-bar"><label class="check-option"><input type="checkbox" :checked="!!detail.audios.length && detail.selectedAudioIds.length === detail.audios.length" :indeterminate="detail.selectedAudioIds.length > 0 && detail.selectedAudioIds.length < detail.audios.length" :disabled="detail.actionLoading || detail.configSaving" @change="detail.selectAll(($event.target as HTMLInputElement).checked)" /><span>全选</span></label><span>已选 {{ detail.selectedAudioIds.length }} / {{ detail.audios.length }} 条</span><button class="text-button" type="button" :disabled="detail.loading || detail.actionLoading" @click="detail.fetchAudios()">刷新状态</button></div>
@@ -520,6 +623,7 @@ onUnmounted(() => {
               </form>
             </section>
           </div>
+          </template>
         </template>
       </section>
     </main>
