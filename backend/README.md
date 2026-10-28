@@ -61,10 +61,10 @@ Projects are stored in `data/projects/<project-id>/` (or the directory set by
 source/transcript/output artifacts, and `logs/pipeline.log`. The server
 diagnostic log is `data/voicetransl.log` beside the `projects/` directory.
 
-The detailed backend design, state transitions, storage invariants, event
-semantics, and frozen v0.1 decisions are documented in
-[`docs/voicetransl_v0.1_minimum_implementation.md`](../docs/voicetransl_v0.1_minimum_implementation.md),
-especially section 23.
+Layer boundaries, pipeline persistence, recovery, and security are documented in
+[`docs/architecture.md`](../docs/architecture.md). Current multi-audio resources,
+directory layout, APIs, and main-audio compatibility are documented in
+[`docs/voicetransl_multi_audio_project.md`](../docs/voicetransl_multi_audio_project.md).
 
 Optional HTTP translation providers and their environment-only API key
 configuration are documented in

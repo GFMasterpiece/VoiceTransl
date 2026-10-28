@@ -29,3 +29,9 @@ _xxl_data
 project/config.yaml
 separate/
 crispasr
+/data/
+/scripts/
+.codex/
+.agents/
+.pytest_cache/
+.ruff_cache

@@ -1,6 +1,6 @@
 # VoiceTransl 多音频项目契约
 
-本文是当前项目/音频资源模型的来源，优先于 v0.1 的单音频假设与此前 v0.2 的“一个文件创建一个项目”设计。v0.1 的五阶段 Pipeline、Provider、原子写入和状态机规则继续适用；前端交互见 [v0.2 工作流](voicetransl_v0.2_frontend_workflow.md)。
+本文是当前项目/音频资源、目录与 API 的契约，不采用“一个项目一个任务”或“每个上传文件创建独立项目”的旧假设。五阶段 Pipeline、Provider 职责、原子写入与恢复规则见[架构约定](architecture.md)，交互见[前端工作流](frontend_workflow.md)。
 
 ## 1. 资源与作用范围
 
