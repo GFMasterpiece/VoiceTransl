@@ -153,6 +153,7 @@ A change is complete only when affected tests pass, the API behavior matches the
 - Keep CrispASR setup and HTTP translation protocol details in their dedicated
   provider documents instead of duplicating them here.
 - Update relevant documentation when changing a frozen architecture decision, file format, or API contract.
+- 工作结束前检查是否需要同步文档：若改动影响用户可见行为、API、配置、数据格式、架构约定、限制或开发流程，必须更新对应文档；纯内部重构或不改变行为的测试修复无需改文档。若确认无需更新，在最终报告中简要说明。
 - Keep detailed implementation information in code or dedicated documentation instead of expanding this file unnecessarily.
 
 ## Agent workflow
