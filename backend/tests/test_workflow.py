@@ -32,6 +32,7 @@ async def create_project(client: AsyncClient, payload: bytes | None = None) -> t
     response = await client.post(
         "/api/v1/projects",
         files={"file": ("source.wav", payload, "audio/wav")},
+        data={"source_language": "ja", "target_language": "zh-CN"},
     )
     assert response.status_code == 201, response.text
     project = response.json()["project"]
@@ -312,6 +313,7 @@ async def test_workflow_run_is_audio_scoped_and_shares_legacy_busy_state(tmp_pat
             response = await client.post(
                 f"/api/v1/projects/{pid}/audios",
                 files={"file": ("second.wav", tiny_wav(), "audio/wav")},
+                data={"source_language": "ja"},
             )
             assert response.status_code == 201
             other_aid = response.json()["audio"]["id"]
@@ -436,7 +438,12 @@ async def test_workflow_output_removal_and_symlink_are_stable_404(tmp_path):
 
         outside = tmp_path / "outside.wav"
         outside.write_bytes(b"outside")
-        path.symlink_to(outside)
+        try:
+            path.symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         response = await client.get(
             f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/output/download"
         )
@@ -488,9 +495,14 @@ async def test_dangling_runs_symlink_and_source_symlink_are_rejected(tmp_path):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aid = await create_project(client)
         project_dir = store.project_dir(pid)
-        (project_dir / "workflow-runs").symlink_to(
-            tmp_path / "not-created", target_is_directory=True
-        )
+        try:
+            (project_dir / "workflow-runs").symlink_to(
+                tmp_path / "not-created", target_is_directory=True
+            )
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         with pytest.raises(ValueError):
             store.workflow_run_root(pid, aid)
         (project_dir / "workflow-runs").unlink()
@@ -500,7 +512,12 @@ async def test_dangling_runs_symlink_and_source_symlink_are_rejected(tmp_path):
         outside = tmp_path / "outside.wav"
         outside.write_bytes(tiny_wav())
         source.unlink()
-        source.symlink_to(outside)
+        try:
+            source.symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         with pytest.raises(ValueError):
             scope.source_path(pid, store.audio(pid, aid).source.path)
 
@@ -739,3 +756,42 @@ async def test_unexpected_runner_error_persists_stable_failure_state(tmp_path, m
         assert run["nodes"]
         assert {node["status"] for node in run["nodes"]} == {"blocked"}
         assert all(node["error"]["type"] == "DEPENDENCY_BLOCKED" for node in run["nodes"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_code", "status", "message"),
+    [
+        (
+            "ASR_BACKEND_UNSUPPORTED",
+            422,
+            "所选 ASR 后端暂不支持，请重新选择可用后端",
+        ),
+        (
+            "ASR_BACKEND_DISCOVERY_FAILED",
+            503,
+            "当前无法读取本地 ASR 能力，请稍后重试",
+        ),
+    ],
+)
+async def test_workflow_asr_start_errors_have_specific_api_status(
+    tmp_path, monkeypatch, error_code, status, message
+):
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, aid = await create_project(client)
+        document = await get_default_workflow(client, pid)
+
+        async def fail(*_args, **_kwargs):
+            raise RuntimeError(error_code)
+
+        monkeypatch.setattr(app.state.jobs, "start_workflow", fail)
+        response = await client.post(
+            f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs",
+            json={"workflow_revision": document["workflow_revision"]},
+        )
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == error_code
+    assert response.json()["error"]["message"] == message
+    assert str(tmp_path) not in response.text

@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from ..application.platform_process import spawn_contained, terminate_contained
 from ..domain import PreprocessConfig
 
 
@@ -22,16 +23,21 @@ class PreprocessError(RuntimeError):
 Runner = Callable[[list[str]], Any | Awaitable[Any]]
 
 
-def _run_ffmpeg(command: list[str]) -> subprocess.CompletedProcess[str]:
+async def _run_ffmpeg(command: list[str]) -> subprocess.CompletedProcess[str]:
     # FFmpeg output is not part of the API contract. Discard both streams so a
     # faulty or verbose child cannot accumulate unbounded output in memory.
-    return subprocess.run(
+    process = await spawn_contained(
         command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
+    try:
+        return_code = await process.wait()
+        return subprocess.CompletedProcess(command, int(return_code or 0), b"", b"")
+    except BaseException:
+        await terminate_contained(process)
+        raise
 
 
 class FFmpegPreprocessProvider:
@@ -70,7 +76,7 @@ class FFmpegPreprocessProvider:
             str(output),
         ]
         try:
-            result = await asyncio.to_thread(self.runner, command)
+            result = self.runner(command)
             if inspect.isawaitable(result):
                 result = await result
         except FileNotFoundError as exc:

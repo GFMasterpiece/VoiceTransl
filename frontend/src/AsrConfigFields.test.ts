@@ -23,14 +23,22 @@ function refresh() { root!.querySelector<HTMLButtonElement>('.asr-catalog-headin
 async function choose(value = 'Qwen3-ASR-0.6B.gguf') { picker().value = value; picker().dispatchEvent(new Event('change', { bubbles: true })); await nextTick() }
 function expectNoPrivatePaths() { for (const prefix of ['/home/', '/Users/', 'C:\\Users\\']) expect(root!.outerHTML).not.toContain(prefix) }
 
-async function mount(override?: (url: string, init?: RequestInit) => Promise<Response>, values = initialConfig, locked = false) {
+async function mount(
+  override?: (url: string, init?: RequestInit) => Promise<Response>,
+  values = initialConfig,
+  locked = false,
+  backendDetails: { id: string; label: string; task: string }[] = [
+    { id: 'qwen3', label: 'Qwen3 ASR', task: 'asr' },
+    { id: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B', task: 'asr' },
+  ],
+) {
   const fetch = vi.fn(override || (() => Promise.resolve(response(catalog))))
   vi.stubGlobal('fetch', fetch)
   const config = ref(structuredClone(values))
   const audioKey = ref('p1/a1')
   const isLocked = ref(locked)
   const changes = vi.fn((patch: Partial<PipelineConfig['asr']>) => { config.value = { ...config.value, ...patch } })
-  const Harness = defineComponent({ components: { AsrConfigFields }, setup() { return { config, audioKey, isLocked, changes } }, template: '<AsrConfigFields :config="config" :audio-key="audioKey" :locked="isLocked" @change="changes" />' })
+  const Harness = defineComponent({ components: { AsrConfigFields }, setup() { return { config, audioKey, isLocked, backendDetails, changes } }, template: '<AsrConfigFields :config="config" :audio-key="audioKey" :locked="isLocked" :backend-details="backendDetails" @change="changes" />' })
   root = document.createElement('div'); document.body.append(root)
   app = createApp(Harness); app.mount(root); await settle()
   return { fetch, config, audioKey, isLocked, changes }
@@ -59,8 +67,46 @@ describe('local ASR model discovery configuration', () => {
     expect(changes).toHaveBeenCalledWith({ model: 'Qwen3-ASR-0.6B.gguf', backend: 'qwen3' })
     expect(config.value).toEqual({ ...initialConfig, model: 'Qwen3-ASR-0.6B.gguf', backend: 'qwen3' })
     expect(picker().value).toBe('Qwen3-ASR-0.6B.gguf')
-    expect(root!.textContent).toContain('Qwen3 ASR（通用）')
+    expect(root!.textContent).toContain('qwen3')
     expect(fetch.mock.calls).toHaveLength(1)
+  })
+
+  it('only offers ASR-classified backends, excluding TTS and LLM entries', async () => {
+    await mount(() => Promise.resolve(response({ ...catalog, backends: ['qwen3-1.7b', 'bark-tts', 'helper-llm'], items: [{ ...catalog.items[0], backend: 'qwen3-1.7b' }] })), initialConfig, false, [
+      { id: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B', task: 'asr' },
+      { id: 'bark-tts', label: 'Bark TTS', task: 'tts' },
+      { id: 'helper-llm', label: 'Helper LLM', task: 'llm' },
+    ])
+    const backendSelect = root!.querySelectorAll<HTMLSelectElement>('select')[1]
+    expect(Array.from(backendSelect.options).map((option) => option.value)).toEqual(['qwen3-1.7b'])
+    expect(root!.textContent).not.toContain('Bark TTS')
+    expect(root!.textContent).not.toContain('Helper LLM')
+    expect(picker().disabled).toBe(false)
+  })
+
+  it('shows a classified new ASR backend with its matching model', async () => {
+    await mount(() => Promise.resolve(response({
+      ...catalog,
+      backends: ['future-asr'],
+      items: [{ ...catalog.items[0], backend: 'future-asr' }],
+    })), { ...initialConfig, backend: 'future-asr' }, false, [{ id: 'future-asr', label: 'Future ASR', task: 'asr' }])
+    const backendSelect = root!.querySelectorAll<HTMLSelectElement>('select')[1]
+    expect(Array.from(backendSelect.options).map((option) => option.value)).toEqual(['future-asr'])
+    expect(backendSelect.disabled).toBe(false)
+    expect(picker().disabled).toBe(false)
+  })
+
+  it('blocks new backend and model selection when no ASR task classification is available', async () => {
+    await mount(undefined, initialConfig, false, [
+      { id: 'qwen3', label: 'Qwen3', task: 'tts' },
+      { id: 'qwen3-1.7b', label: 'Qwen3 1.7B', task: 'llm' },
+    ])
+    const backendSelect = root!.querySelectorAll<HTMLSelectElement>('select')[1]
+    expect(backendSelect.disabled).toBe(true)
+    expect(Array.from(backendSelect.options).map((option) => option.value)).toEqual(['qwen3-1.7b'])
+    expect(picker().disabled).toBe(true)
+    expect(root!.textContent).toContain('服务端未提供 ASR 任务分类')
+    expect(root!.textContent).not.toContain('Bark TTS')
   })
 
   it('retains the manual fields and original language behavior while Mock needs no catalog service', async () => {
@@ -186,6 +232,22 @@ describe('local ASR model discovery configuration', () => {
     expect(root!.textContent).toContain('当前目录没有发现模型')
     expect(config.value).toEqual(initialConfig)
     expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('does not let a prior CrispASR request restore the catalog after switching to Mock and back', async () => {
+    const first = deferred<Response>()
+    const second = deferred<Response>()
+    const { config, fetch } = await mount(vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise))
+    config.value = { ...initialConfig, provider: 'mock' }; await settle()
+    config.value = { ...initialConfig, provider: 'crispasr' }; await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    first.resolve(response(catalog)); await settle()
+    expect(root!.querySelector('#asr-discovered-model')).toBeNull()
+    expect(root!.textContent).toContain('正在检查当前生效目录')
+    second.resolve(response({ ...catalog, items: [] })); await settle()
+    expect(root!.textContent).toContain('当前目录没有发现模型')
   })
 
   it('aborts a previous audio request and an unmounted modal request', async () => {

@@ -53,7 +53,7 @@ async function mountApp() {
   const fetch = vi.fn((url: string, init?: RequestInit) => {
     if (url.includes('/settings/local-asr')) return Promise.resolve(response(init?.method === 'POST' ? check : original))
     if (url.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 1024 }))
-    return Promise.resolve(response({ items: [project] }))
+    return Promise.resolve(response({ items: [project], total: 1, limit: 20, offset: 0 }))
   })
   vi.stubGlobal('fetch', fetch)
   const pinia = createPinia()
@@ -322,6 +322,11 @@ describe('application settings integration', () => {
     const picker = root!.querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(picker, 'files', { configurable: true, value: [new File(['x'], 'upload.wav')] })
     picker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    const source = root!.querySelector<HTMLInputElement>('#source-language')!
+    source.value = 'ja'; source.dispatchEvent(new Event('input', { bubbles: true }))
+    const target = root!.querySelector<HTMLInputElement>('#target-language')!
+    target.value = 'zh-CN'; target.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
     expect(root!.querySelector<HTMLInputElement>('#source-language')!.disabled).toBe(true)
     await openGlobal()

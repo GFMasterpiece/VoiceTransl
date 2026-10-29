@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .api.capabilities import router as capabilities_router
 from .api.local_asr_settings import router as local_asr_router
 from .api.routes import router
 from .api.workflow import router as workflow_router
@@ -14,6 +15,7 @@ from .application import EventBus, JobManager
 from .application.local_asr_models import LocalASRModels
 from .application.local_asr_settings import LocalASRSettings
 from .config import load_settings
+from .domain.schema import SCHEMA_VERSION, SchemaVersionError
 from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
 
@@ -25,7 +27,9 @@ def create_app(data_dir=None):
     settings = load_settings(config_path)
     if data_dir is not None:
         settings.data_dir = Path(data_dir)
-    configure_logging(settings.log_level, settings.data_dir)
+    # An injected data root is used by embedded callers and isolated tests;
+    # avoid binding a process-global log handler to that shorter-lived root.
+    configure_logging(settings.log_level, settings.data_dir if data_dir is None else None)
     store = FileSystemProjectStore(settings.data_dir)
     events = EventBus()
     jobs = JobManager(
@@ -55,6 +59,23 @@ def create_app(data_dir=None):
     app = FastAPI(title="VoiceTransl API", version="0.1.0", lifespan=lifespan)
     logger = logging.getLogger("voicetransl.api")
 
+    def schema_version_response() -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "UNSUPPORTED_SCHEMA_VERSION",
+                    "message": (f"不支持该数据版本，当前仅支持 schema_version {SCHEMA_VERSION!r}"),
+                    "details": None,
+                }
+            },
+        )
+
+    @app.exception_handler(SchemaVersionError)
+    async def schema_version_error(_request: Request, exc: SchemaVersionError):
+        logger.warning("Unsupported schema version for %s: %r", exc.document, exc.version)
+        return schema_version_response()
+
     @app.exception_handler(HTTPException)
     async def http_error(_request: Request, exc: HTTPException):
         # Keep the documented error contract at the response root instead of
@@ -69,6 +90,10 @@ def create_app(data_dir=None):
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, exc: RequestValidationError):
+        for error in exc.errors():
+            context = error.get("ctx")
+            if isinstance(context, dict) and isinstance(context.get("error"), SchemaVersionError):
+                return schema_version_response()
         details = [
             {
                 "loc": list(error.get("loc", ())),
@@ -103,6 +128,7 @@ def create_app(data_dir=None):
     app.state.events = events
     app.state.jobs = jobs
     app.include_router(router)
+    app.include_router(capabilities_router)
     app.include_router(workflow_router)
     app.include_router(local_asr_router)
     return app

@@ -355,7 +355,12 @@ async def test_provider_rejects_model_and_executable_symlinks(tmp_path):
     binary, models, audio = setup_files(tmp_path)
     outside = tmp_path / "outside.gguf"
     outside.write_bytes(b"outside")
-    (models / "link.gguf").symlink_to(outside)
+    try:
+        (models / "link.gguf").symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks for this security test")
+        raise
     provider = CrispASRProvider(
         binary,
         models,
@@ -367,7 +372,12 @@ async def test_provider_rejects_model_and_executable_symlinks(tmp_path):
     assert error.value.code == "ASR_MODEL_NOT_FOUND"
 
     linked_binary = tmp_path / "linked-crispasr"
-    linked_binary.symlink_to(binary)
+    try:
+        linked_binary.symlink_to(binary)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks for this security test")
+        raise
     provider = CrispASRProvider(linked_binary, models, ASRConfig(provider="crispasr"))
     with pytest.raises(CrispASRError) as error:
         await provider.transcribe(audio, project())

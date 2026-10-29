@@ -193,16 +193,151 @@ describe('audio workspace scope and switching', () => {
 describe('projects store', () => {
   it('loads projects and clears loading state on success', async () => {
     setActivePinia(createPinia())
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [project] }))
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [project], total: 1, limit: 20, offset: 0 }))
     vi.stubGlobal('fetch', fetchMock)
     const store = useProjectsStore()
 
     await store.fetchProjects()
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects')
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects?limit=20&offset=0')
     expect(store.projects).toEqual([project])
     expect(store.loading).toBe(false)
     expect(store.error).toBe('')
+  })
+
+  it('loads paginated projects and navigates first, middle, last and empty pages', async () => {
+    setActivePinia(createPinia())
+    const pages: Record<string, unknown> = {
+      '0': { items: [project], total: 45, limit: 20, offset: 0 },
+      '20': { items: [{ ...project, id: 'project-21' }], total: 45, limit: 20, offset: 20 },
+      '40': { items: [{ ...project, id: 'project-41' }], total: 45, limit: 20, offset: 40 },
+      '60': { items: [], total: 45, limit: 20, offset: 60 },
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      return Promise.resolve(jsonResponse(pages[url.searchParams.get('offset') || '0']))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    await store.fetchProjects()
+    expect(store.total).toBe(45)
+    expect(store.pageCount).toBe(3)
+    expect(store.hasPrevious).toBe(false)
+    expect(store.hasNext).toBe(true)
+    await store.nextPage()
+    expect(store.offset).toBe(20)
+    await store.nextPage()
+    expect(store.offset).toBe(40)
+    expect(store.hasNext).toBe(false)
+    await store.fetchProjects(60)
+    expect(store.projects).toEqual([])
+    expect(store.total).toBe(45)
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      '/api/v1/projects?limit=20&offset=0',
+      '/api/v1/projects?limit=20&offset=20',
+      '/api/v1/projects?limit=20&offset=40',
+      '/api/v1/projects?limit=20&offset=60',
+    ])
+  })
+
+  it('ignores an older page response that resolves after a newer request', async () => {
+    setActivePinia(createPinia())
+    let resolveOld!: (value: Response) => void
+    let resolveNew!: (value: Response) => void
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveOld = resolve }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveNew = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    const oldRequest = store.fetchProjects(0)
+    const newRequest = store.fetchProjects(20)
+    resolveNew(jsonResponse({ items: [{ ...project, id: 'new-page' }], total: 40, limit: 20, offset: 20 }))
+    await newRequest
+    resolveOld(jsonResponse({ items: [{ ...project, id: 'old-page' }], total: 40, limit: 20, offset: 0 }))
+    await oldRequest
+    expect(store.offset).toBe(20)
+    expect(store.projects.map((item) => item.id)).toEqual(['new-page'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('does not let an older failed page request overwrite a newer successful page', async () => {
+    setActivePinia(createPinia())
+    let rejectOld!: (reason: Error) => void
+    let resolveNew!: (value: Response) => void
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((_, reject) => { rejectOld = reject }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveNew = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    const oldRequest = store.fetchProjects(0)
+    const newRequest = store.fetchProjects(20)
+    resolveNew(jsonResponse({ items: [{ ...project, id: 'fresh' }], total: 40, limit: 20, offset: 20 }))
+    await newRequest
+    rejectOld(new Error('stale failure'))
+    await oldRequest
+    expect(store.error).toBe('')
+    expect(store.projects.map((item) => item.id)).toEqual(['fresh'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('invalidates an in-flight page before create and reloads the authoritative page', async () => {
+    setActivePinia(createPinia())
+    let resolveOld!: (value: Response) => void
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce(jsonResponse({ project: { ...project, id: 'new' }, job: makeJob() }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ ...project, id: 'new' }], total: 1, limit: 20, offset: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    const pendingList = store.fetchProjects(0)
+    await store.createProject(new File(['x'], 'x.wav'), 'new', 'ja', 'mock', 'zh-CN')
+    resolveOld(jsonResponse({ items: [{ ...project, id: 'old' }], total: 1, limit: 20, offset: 0 }))
+    await pendingList
+    expect(store.projects.map((item) => item.id)).toEqual(['new'])
+    expect(store.error).toBe('')
+  })
+
+  it('moves to the previous page when deleting the only item on the last page', async () => {
+    setActivePinia(createPinia())
+    const responses = [
+      { items: [{ ...project, id: 'last-item' }], total: 21, limit: 20, offset: 20 },
+      { items: [project], total: 20, limit: 20, offset: 0 },
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return Promise.resolve(jsonResponse(null, 204))
+      return Promise.resolve(jsonResponse(responses.shift()))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    await store.fetchProjects(20)
+    await store.deleteProject('last-item')
+    expect(store.offset).toBe(0)
+    expect(store.projects.map((item) => item.id)).toEqual(['project-1'])
+  })
+
+  it('refills the current page after deleting one item when more projects remain', async () => {
+    setActivePinia(createPinia())
+    const responses = [
+      { items: [{ ...project, id: 'a' }, { ...project, id: 'b' }], total: 5, limit: 2, offset: 2 },
+      { items: [{ ...project, id: 'c' }, { ...project, id: 'd' }], total: 4, limit: 2, offset: 2 },
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => init?.method === 'DELETE' ? Promise.resolve(jsonResponse(null, 204)) : Promise.resolve(jsonResponse(responses.shift())))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    await store.fetchProjects(2)
+    await store.deleteProject('a')
+    expect(store.projects.map((item) => item.id)).toEqual(['c', 'd'])
+    expect(store.total).toBe(4)
+  })
+
+  it('rejects an incomplete paginated response without replacing the current page', async () => {
+    setActivePinia(createPinia())
+    const store = useProjectsStore()
+    store.projects = [project]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ items: [project] })))
+    await store.fetchProjects()
+    expect(store.projects).toEqual([project])
+    expect(store.error).toContain('响应不完整')
   })
 
   it('surfaces the backend error message when fetching projects fails', async () => {
@@ -221,7 +356,9 @@ describe('projects store', () => {
   it('creates a project with the expected multipart form and prepends it', async () => {
     setActivePinia(createPinia())
     const created = { ...project, id: 'created-project' }
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ project: created }))
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST'
+      ? Promise.resolve(jsonResponse({ project: created }))
+      : Promise.resolve(jsonResponse({ items: [created], total: 1, limit: 20, offset: 0 })))
     vi.stubGlobal('fetch', fetchMock)
     const store = useProjectsStore()
     store.projects.push(project)
@@ -238,7 +375,8 @@ describe('projects store', () => {
     expect(form.get('name')).toBe('New voice')
     expect(form.get('source_language')).toBe('zh')
     expect(form.get('preset')).toBe('custom')
-    expect(store.projects).toEqual([created, project])
+    expect(store.projects).toEqual([created])
+    expect(store.total).toBe(1)
     expect(store.creating).toBe(false)
   })
 

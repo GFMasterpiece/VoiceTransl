@@ -42,13 +42,19 @@ async def test_upload_policy_matches_configured_upload_validation(
         accepted = await client.post(
             "/api/v1/projects",
             files={"file": (f"sample.{extension.upper()}", b"a" * policy["max_upload_bytes"])},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         assert accepted.status_code == 201
-        unsupported = await client.post("/api/v1/projects", files={"file": ("sample.txt", b"a")})
+        unsupported = await client.post(
+            "/api/v1/projects",
+            files={"file": ("sample.txt", b"a")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
+        )
         assert unsupported.status_code == 415
         oversized = await client.post(
             "/api/v1/projects",
             files={"file": (f"sample.{extension}", b"a" * (policy["max_upload_bytes"] + 1))},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         assert oversized.status_code == 413
         assert len(app.state.store.list_projects()) == 1
@@ -59,7 +65,9 @@ async def test_upload_policy_reads_active_settings_without_writing(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         assert created.status_code == 201
         app.state.settings.allowed_extensions = ["flac"]

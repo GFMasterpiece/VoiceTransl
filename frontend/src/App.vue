@@ -7,6 +7,7 @@ import { useUploadQueue, type UploadPolicy, type UploadStatus } from './composab
 import GlobalSettingsModal from './components/GlobalSettingsModal.vue'
 import AsrConfigFields from './components/AsrConfigFields.vue'
 import WorkflowEditor from './components/WorkflowEditor.vue'
+import { fetchCapabilities } from './workflow/capabilities'
 
 type View = 'list' | 'create' | 'detail'
 
@@ -17,9 +18,16 @@ const view = ref<View>('list')
 const workspaceMode = ref<'pipeline' | 'workflow'>('pipeline')
 const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
 const globalSettingsOpen = ref(false)
+const exportFormats = ref<readonly { value: string; label: string }[]>([])
+const exportNamingModes = ref<readonly { value: string; label: string }[]>([])
+const exportCapabilitiesLoaded = ref(false)
+const asrBackendDetails = ref<readonly { id: string; label: string; task: string }[]>([])
+const currentExportNaming = computed(() => detail.config?.export.naming || '')
+const capabilityError = ref('')
 const projectName = ref('')
-const sourceLanguage = ref('ja')
-const upload = useUploadQueue((file, name, language) => store.createProject(file, name, language), (id, file, language) => store.addAudio(id, file, language))
+const sourceLanguage = ref('')
+const targetLanguage = ref('')
+const upload = useUploadQueue((file, name, language, target) => store.createProject(file, name, language, 'mock', target), (id, file, language) => store.addAudio(id, file, language))
 const { items: uploadItems, busy: uploadBusy, feedback: uploadFeedback, policy: uploadPolicy, validCount, readyCount, createdCount, failedCount, pendingCount } = upload
 const policyLoading = ref(false)
 const policyError = ref('')
@@ -117,6 +125,8 @@ const configModalSnapshot = ref<ReturnType<typeof cloneConfig> | null>(null)
 const configModalInitialSerialized = ref('')
 const configModalWasDirty = ref(false)
 const configModalStageMeta = computed(() => stageList.find((item) => item.key === configModalStage.value) || stageList[0])
+const additionalParametersText = ref('{}')
+const additionalParametersError = ref('')
 
 function cloneConfig() {
   return detail.config ? JSON.parse(JSON.stringify(detail.config)) as NonNullable<typeof detail.config> : null
@@ -144,6 +154,8 @@ function openStageConfig(key: StageName) {
   configModalSnapshot.value = cloneConfig()
   configModalInitialSerialized.value = serializeConfig()
   configModalWasDirty.value = detail.configDirty
+  additionalParametersText.value = JSON.stringify(detail.config.translation.additional_parameters || {}, null, 2)
+  additionalParametersError.value = ''
   configModalOpen.value = true
 }
 
@@ -167,6 +179,7 @@ function closeStageConfig(force = false) {
 }
 
 async function saveStageConfig() {
+  if (configModalStage.value === 'translation' && additionalParametersError.value) return
   try {
     await detail.saveConfig()
     closeStageConfig(true)
@@ -179,6 +192,22 @@ function updateAsrConfig(patch: Partial<NonNullable<typeof detail.config>['asr']
   if (!detail.config || detail.configLocked) return
   Object.assign(detail.config.asr, patch)
   detail.markConfigDirty()
+}
+
+function updateAdditionalParameters() {
+  if (!detail.config || detail.configLocked) return
+  try {
+    const parsed = JSON.parse(additionalParametersText.value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      additionalParametersError.value = '附加参数必须是 JSON 对象，例如 {"top_p": 0.9}。'
+      return
+    }
+    detail.config.translation.additional_parameters = parsed as Record<string, unknown>
+    additionalParametersError.value = ''
+    detail.markConfigDirty()
+  } catch {
+    additionalParametersError.value = '附加参数不是有效 JSON，尚未写入配置。'
+  }
 }
 
 function syncTranslationTarget() {
@@ -296,7 +325,10 @@ function stageIcon(key: StageName) {
 }
 
 async function submitProject() {
-  await upload.submit({ name: projectName.value, language: sourceLanguage.value })
+  if (!sourceLanguage.value.trim()) { upload.feedback.value = '请选择或输入源语言。'; return }
+  if (!upload.targetProjectId.value && !targetLanguage.value.trim()) { upload.feedback.value = '请选择或输入目标语言。'; return }
+  await upload.submit({ name: projectName.value, language: sourceLanguage.value, targetLanguage: targetLanguage.value })
+  if (!createdCount.value && !failedCount.value && upload.feedback.value) return
   if (createdCount.value && !failedCount.value && !uploadItems.value.some((item) => item.status === 'invalid') && upload.targetProjectId.value) await openProject(upload.targetProjectId.value)
 }
 
@@ -320,7 +352,8 @@ function showCreate() {
   if (uploadItems.value.some((item) => item.status !== 'created') && !window.confirm('新建项目会清空当前未完成的上传队列。已上传音频会保留在原项目中，继续新建吗？')) return
   upload.clear()
   projectName.value = ''
-  sourceLanguage.value = 'ja'
+  sourceLanguage.value = ''
+  targetLanguage.value = ''
   detail.stop()
   view.value = 'create'
 }
@@ -366,6 +399,7 @@ function addProjectAudio() {
   upload.setTarget(detail.project.id, detail.project.name)
   projectName.value = detail.project.name
   sourceLanguage.value = detail.activeAudio?.source.language || detail.project.source.language
+  targetLanguage.value = detail.config?.target_language || detail.project.source.language
   detail.stop()
   view.value = 'create'
 }
@@ -401,6 +435,24 @@ function showList() {
   view.value = 'list'
   detail.error = ''
   void store.fetchProjects()
+}
+
+function setFilenameTemplate(event: Event) {
+  if (!detail.config || detail.configLocked) return
+  const value = (event.target as HTMLInputElement).value
+  detail.config.export.filename_template = value.trim() ? value : null
+  detail.markConfigDirty()
+}
+
+function textValue(event: Event) {
+  return (event.target as HTMLSelectElement).value
+}
+
+function setExportNaming(value: string) {
+  if (!detail.config || detail.configLocked) return
+  if (!exportNamingModes.value.some((mode) => mode.value === value)) return
+  detail.config.export.naming = value
+  detail.markConfigDirty()
 }
 
 function toggleExportFormat(format: string) {
@@ -494,6 +546,16 @@ async function deleteProject(id: string, name: string) {
 }
 
 onMounted(() => {
+  void fetchCapabilities().then((caps) => {
+    exportFormats.value = caps.export.formats
+    exportNamingModes.value = caps.export.namingModes
+    exportCapabilitiesLoaded.value = true
+    asrBackendDetails.value = caps.asr.backendDetails
+    capabilityError.value = ''
+  }).catch((reason) => {
+    exportCapabilitiesLoaded.value = true
+    capabilityError.value = reason instanceof Error ? reason.message : '能力目录读取失败，导出选项不可用。'
+  })
   void store.fetchProjects()
   void loadUploadPolicy()
   window.addEventListener('beforeunload', guardUnload)
@@ -522,6 +584,7 @@ onUnmounted(() => {
         <div v-if="store.loading && !store.projects.length" class="empty-state skeleton-state"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
         <div v-else-if="!store.projects.length" class="empty-state"><div class="empty-icon" aria-hidden="true">◌</div><h3>还没有项目</h3><p>上传音频后，项目会显示在这里。</p><button class="secondary-button" type="button" @click="showCreate">创建第一个项目</button></div>
         <div v-else class="project-grid"><article v-for="project in store.projects" :key="project.id" class="project-card" role="button" tabindex="0" @click="openProject(project.id)" @keydown.enter="openProject(project.id)"><div class="project-card-head"><span class="audio-icon" aria-hidden="true">♫</span><button class="project-delete" type="button" aria-label="删除项目" @click.stop="deleteProject(project.id, project.name)">删除</button><span class="project-date">{{ formatDate(project.updated_at) }}</span></div><h3>{{ project.name }}</h3><p class="project-file" :title="project.source.original_name">{{ project.source.original_name }}</p><div class="project-meta"><span>{{ project.source.language.toUpperCase() }}</span><span>{{ projectAudioCount(project) }} 条音频 · {{ formatSize(projectAudioSize(project)) }}</span><span class="project-preset">{{ project.preset }}</span></div></article></div>
+        <nav v-if="store.total > store.limit || store.offset > 0" class="pagination-bar" aria-label="项目分页"><button class="secondary-button compact-button" type="button" :disabled="store.loading || !store.hasPrevious" @click="store.previousPage()">上一页</button><span>第 {{ Math.floor(store.offset / store.limit) + 1 }} / {{ store.pageCount }} 页 · 共 {{ store.total }} 个项目</span><button class="secondary-button compact-button" type="button" :disabled="store.loading || !store.hasNext" @click="store.nextPage()">下一页</button></nav>
       </section>
 
       <section v-else-if="view === 'create'" class="create-layout">
@@ -530,14 +593,13 @@ onUnmounted(() => {
           <div class="form-heading"><span class="section-kicker">SOURCE</span><h3>项目资料</h3></div>
           <label class="field-label" for="project-name">项目名称 <span>{{ upload.targetProjectId.value ? '上传到现有项目' : '所有音频共用，可选' }}</span></label>
           <input id="project-name" v-model="projectName" class="text-input" type="text" :disabled="uploadBusy || !!upload.targetProjectId.value" placeholder="留空时使用第一个有效文件名" />
-          <label class="field-label" for="source-language">源语言</label>
-          <select id="source-language" v-model="sourceLanguage" class="text-input" :disabled="uploadBusy"><option value="ja">日语</option><option value="en">英语</option><option value="zh">中文</option><option value="ko">韩语</option></select>
+          <div class="modal-field-grid"><label class="config-field" for="source-language"><span>源语言 *</span><input id="source-language" v-model="sourceLanguage" class="text-input" list="language-codes" placeholder="请选择或输入语言代码，例如 ja" autocomplete="off" :disabled="uploadBusy || !!upload.targetProjectId.value" /><small>必须显式选择；接受 BCP 47 风格代码，如 ja、en、zh-CN。</small></label><label class="config-field" for="target-language"><span>目标语言 *</span><input id="target-language" v-model="targetLanguage" class="text-input" list="language-codes" placeholder="请选择或输入语言代码，例如 zh-CN" autocomplete="off" :disabled="uploadBusy || !!upload.targetProjectId.value" :title="upload.targetProjectId.value ? '添加到现有项目时继承项目目标语言' : ''" /><small v-if="upload.targetProjectId.value">添加到现有项目时继承项目目标语言，仅源语言按此音频独立设置。</small><small v-else>必须与源语言不同。</small></label></div><datalist id="language-codes"><option value="ja">日语</option><option value="en">英语</option><option value="zh-CN">中文（简体）</option><option value="ko">韩语</option></datalist>
           <label class="field-label" for="audio-picker">音频文件</label>
           <button id="audio-picker" class="upload-zone" type="button" :disabled="uploadBusy" @click="chooseFile" @dragover.prevent @drop="handleDrop"><span class="upload-icon" aria-hidden="true">↑</span><span><strong>{{ uploadItems.length ? '继续添加音频' : '点击选择一个或多个音频' }}</strong><small>支持多文件拖放</small></span></button>
           <p v-if="uploadPolicy" class="file-hint">{{ uploadPolicy.allowed_extensions.map((extension) => extension.toUpperCase()).join(' / ') }} · 每个文件最多 {{ formatSize(uploadPolicy.max_upload_bytes) }}</p>
           <p v-else-if="policyLoading" class="file-hint" role="status">正在获取后端上传限制…</p>
           <div v-if="policyError" class="upload-policy-error" role="alert"><span>{{ policyError }}</span><button class="text-button" type="button" :disabled="policyLoading || uploadBusy" @click="loadUploadPolicy">重试加载限制</button></div>
-          <p v-if="uploadFeedback" class="upload-feedback" role="status">{{ uploadFeedback }}</p>
+          <p v-if="uploadFeedback" class="upload-feedback" :class="{ 'settings-error': !readyCount || upload.feedback }" role="status">{{ uploadFeedback }}</p>
           <section v-if="uploadItems.length" class="upload-queue" aria-labelledby="upload-queue-title">
             <div class="upload-queue-heading"><h4 id="upload-queue-title">{{ validCount }} 个有效 / {{ uploadItems.length }} 个已选</h4><button class="text-button" type="button" :disabled="uploadBusy" @click="clearUploadQueue">清空队列</button></div>
             <p class="upload-summary" role="status" aria-live="polite">{{ createdCount }} 条已上传 · {{ pendingCount }} 条待完成 · {{ failedCount }} 条上传失败 · {{ uploadItems.length - validCount }} 个校验失败</p>
@@ -614,10 +676,10 @@ onUnmounted(() => {
               <div v-if="detail.configLocked" class="modal-lock-note"><span aria-hidden="true">▣</span>任务运行、取消或排队中，字段只读。当前任务结束后可修改下次处理配置。</div>
               <form v-if="detail.config" class="config-modal-form" @submit.prevent="saveStageConfig">
                 <template v-if="configModalStage === 'preprocess'"><div class="modal-field-grid"><label class="config-field"><span>处理 Provider</span><select v-model="detail.config.preprocess.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="ffmpeg">FFmpeg（真实音频）</option></select></label><label class="config-field"><span>采样率</span><select v-model.number="detail.config.preprocess.sample_rate" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="8000">8 kHz</option><option :value="16000">16 kHz</option><option :value="44100">44.1 kHz</option><option :value="48000">48 kHz</option></select></label><label class="config-field"><span>声道数</span><select v-model.number="detail.config.preprocess.channels" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option :value="1">单声道</option><option :value="2">双声道</option></select></label></div><label class="check-option modal-check"><input v-model="detail.config.preprocess.preserve_original" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>保留原始音频，便于后续重新处理</span></label></template>
-                <AsrConfigFields v-else-if="configModalStage === 'asr'" :key="`${detail.project?.id}/${detail.activeAudioId}`" :audio-key="`${detail.project?.id}/${detail.activeAudioId}`" :config="detail.config.asr" :locked="detail.configLocked" @change="updateAsrConfig" />
+                <AsrConfigFields v-else-if="configModalStage === 'asr'" :key="`${detail.project?.id}/${detail.activeAudioId}`" :audio-key="`${detail.project?.id}/${detail.activeAudioId}`" :config="detail.config.asr" :locked="detail.configLocked" :backend-details="asrBackendDetails" @change="updateAsrConfig" />
                 <template v-else-if="configModalStage === 'alignment'"><label class="check-option modal-check"><input v-model="detail.config.alignment.enabled" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>启用时间轴对齐</span></label><div class="modal-field-grid"><label class="config-field"><span>对齐 Provider</span><input v-model="detail.config.alignment.provider" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>对齐模型</span><input v-model="detail.config.alignment.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>失败回退策略</span><select v-model="detail.config.alignment.fallback" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="keep_asr_timestamps">保留识别时间轴</option><option value="fail_job">让任务失败</option></select></label></div></template>
-                <template v-else-if="configModalStage === 'translation'"><div class="modal-field-grid"><label class="config-field"><span>协议 Provider</span><select v-model="detail.config.translation.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="openai_chat">OpenAI-compatible Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label><label class="config-field"><span>模型</span><input v-model="detail.config.translation.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>目标语言</span><select v-model="detail.config.target_language" :disabled="detail.configLocked" @change="syncTranslationTarget"><option value="zh-CN">中文（简体）</option><option value="en">英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label><label class="config-field"><span>批量大小</span><input v-model.number="detail.config.translation.batch_size" type="number" min="1" max="128" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>温度</span><input v-model.number="detail.config.translation.temperature" type="number" min="0" max="2" step="0.1" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>请求超时（秒）</span><input v-model.number="detail.config.translation.timeout_seconds" type="number" min="1" max="3600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label></div><label class="config-field modal-wide-field"><span>接口地址（可选）</span><input v-model="detail.config.translation.base_url" type="url" placeholder="例如：https://api.openai.com/v1" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>API Key 环境变量名</span><input v-model="detail.config.translation.api_key_env" placeholder="例如：OPENAI_API_KEY（不会保存密钥值）" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>翻译指令（可选）</span><textarea v-model="detail.config.translation.instructions" rows="4" placeholder="告诉模型术语、语气或格式要求" :disabled="detail.configLocked" @input="detail.markConfigDirty"></textarea></label></template>
-                <template v-else><div class="modal-field-grid"><label class="config-field modal-wide-field"><span>文件命名方式</span><select v-model="detail.config.export.naming" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="language">按语言命名</option><option value="original">沿用源文件名</option></select></label></div><div class="format-picker"><span>导出格式</span><label v-for="format in ['srt', 'vtt', 'lrc']" :key="format" class="format-option"><input type="checkbox" :checked="detail.config.export.formats.includes(format)" :disabled="detail.configLocked" @change="toggleExportFormat(format)" /><span>{{ format.toUpperCase() }}</span></label></div><label class="check-option modal-check"><input v-model="detail.config.export.bilingual" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>导出双语字幕</span></label></template>
+                <template v-else-if="configModalStage === 'translation'"><div class="modal-field-grid"><label class="config-field"><span>协议 Provider</span><select v-model="detail.config.translation.provider" :disabled="detail.configLocked" @change="detail.markConfigDirty"><option value="mock">Mock（演示）</option><option value="openai_chat">OpenAI-compatible Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label><label class="config-field"><span>模型</span><input v-model="detail.config.translation.model" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>目标语言</span><select v-model="detail.config.target_language" :disabled="detail.configLocked" @change="syncTranslationTarget"><option value="zh-CN">中文（简体）</option><option value="en">英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label><label class="config-field"><span>批量大小</span><input v-model.number="detail.config.translation.batch_size" type="number" min="1" max="128" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field"><span>附加参数（JSON，默认 {}）</span><textarea v-model="additionalParametersText" rows="3" :disabled="detail.configLocked" placeholder='例如 {"top_p": 0.9}' @input="updateAdditionalParameters"></textarea><small v-if="additionalParametersError" class="settings-error">{{ additionalParametersError }}</small><small>默认不发送 temperature、response_format 等可选参数；核心字段与认证字段不可覆盖。</small></label><label class="config-field"><span>请求超时（秒）</span><input v-model.number="detail.config.translation.timeout_seconds" type="number" min="1" max="3600" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label></div><label class="config-field modal-wide-field"><span>接口地址（可选）</span><input v-model="detail.config.translation.base_url" type="url" placeholder="例如：https://api.openai.com/v1" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>API Key 环境变量名</span><input v-model="detail.config.translation.api_key_env" placeholder="例如：OPENAI_API_KEY（不会保存密钥值）" :disabled="detail.configLocked" @input="detail.markConfigDirty" /></label><label class="config-field modal-wide-field"><span>翻译指令（可选）</span><textarea v-model="detail.config.translation.instructions" rows="4" placeholder="告诉模型术语、语气或格式要求" :disabled="detail.configLocked" @input="detail.markConfigDirty"></textarea></label></template>
+                <template v-else><div class="modal-field-grid"><label class="config-field"><span>文件命名方式</span><select :value="currentExportNaming" :disabled="detail.configLocked || !exportNamingModes.length" @change="setExportNaming(textValue($event))"><option v-if="currentExportNaming && !exportNamingModes.some((mode) => mode.value === currentExportNaming)" :value="currentExportNaming">{{ currentExportNaming }}（当前值，不可新选）</option><option v-for="mode in exportNamingModes" :key="mode.value" :value="mode.value">{{ mode.label }}</option></select></label><label class="config-field modal-wide-field"><span>自定义命名模板（可选）</span><input :value="detail.config.export.filename_template || ''" type="text" maxlength="128" placeholder="例如：{source_language}-{target_language}-{kind}-{format}" :disabled="detail.configLocked" @input="setFilenameTemplate" /><small>支持 {source_language}、{target_language}、{kind}、{format}；自定义时不按语言命名模式命名。</small></label></div><p v-if="capabilityError || (exportCapabilitiesLoaded && !exportNamingModes.length)" class="settings-feedback settings-error" role="alert">{{ capabilityError || '服务端未提供导出命名方式；为保留现有配置，命名方式暂不可新选。' }}</p><div class="format-picker" v-if="exportFormats.length"><span>导出格式</span><label v-for="format in exportFormats" :key="format.value" class="format-option"><input type="checkbox" :checked="detail.config.export.formats.includes(format.value)" :disabled="detail.configLocked" @change="toggleExportFormat(format.value)" /><span>{{ format.label }}</span></label></div><label class="check-option modal-check"><input v-model="detail.config.export.bilingual" type="checkbox" :disabled="detail.configLocked" @change="detail.markConfigDirty" /><span>导出双语字幕</span></label></template>
                 <ul v-if="detail.configErrors.length" class="config-errors modal-errors"><li v-for="message in detail.configErrors" :key="message">{{ message }}</li></ul>
                 <div class="config-modal-footer"><span>{{ hasModalChanges() ? '有未保存修改' : '当前节点配置已保存' }}</span><div><button class="secondary-button" type="button" @click="closeStageConfig()">取消</button><button class="primary-button" type="submit" :disabled="detail.configLocked || !hasModalChanges() || detail.configSaving">{{ detail.configSaving ? '保存中…' : '保存节点配置' }}</button></div></div>
               </form>

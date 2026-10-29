@@ -1,8 +1,7 @@
 import asyncio
 import json
-import time
-from urllib.error import URLError
 
+import httpx
 import pytest
 from app.domain import JobStatus, Segment, TranslationConfig
 from app.main import create_app
@@ -46,12 +45,15 @@ async def test_protocol_adapters_build_requests_and_extract_official_responses(
         {"translations": [{"id": "seg_0", "translation": "译文"}]}, ensure_ascii=False
     )
 
-    def fake_http(url, headers, payload, timeout):
+    async def fake_http(url, headers, payload, timeout):
         calls.append((url, headers, payload, timeout))
         return response_for(provider, text)
 
+    context = TranslationContext()
+    if provider == "anthropic_messages":
+        context = TranslationContext(additional_parameters={"max_tokens": 4096})
     result = await HTTPTranslationProvider(make_config(provider), http_call=fake_http).translate(
-        make_segments(1), TranslationContext()
+        make_segments(1), context
     )
 
     assert result[0].translated_text == "译文"
@@ -65,7 +67,7 @@ async def test_protocol_adapters_build_requests_and_extract_official_responses(
     if provider == "anthropic_messages":
         assert calls[0][1]["x-api-key"] == "secret"
         assert "system" in calls[0][2]
-        assert calls[0][2]["temperature"] == 0.2
+        assert calls[0][2]["max_tokens"] == 4096
         assert calls[0][2]["messages"][0]["role"] == "user"
     else:
         assert calls[0][1]["authorization"] == "Bearer secret"
@@ -77,7 +79,7 @@ async def test_responses_adapter_accepts_nested_output_message_content(monkeypat
     monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
     text = json.dumps({"translations": [{"id": "seg_0", "translation": "译文"}]})
 
-    def fake_http(_url, _headers, _payload, _timeout):
+    async def fake_http(_url, _headers, _payload, _timeout):
         return {"output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}]}
 
     result = await HTTPTranslationProvider(
@@ -91,7 +93,7 @@ async def test_translation_batches_requests_and_preserves_segment_order(monkeypa
     monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
     calls = []
 
-    def fake_http(_url, _headers, payload, _timeout):
+    async def fake_http(_url, _headers, payload, _timeout):
         calls.append(payload)
         messages = payload.get("messages", payload.get("input"))
         items = json.loads(messages[-1]["content"])
@@ -134,7 +136,11 @@ async def test_translation_batches_requests_and_preserves_segment_order(monkeypa
 )
 async def test_translation_rejects_malformed_or_incomplete_response(monkeypatch, body):
     monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
-    provider = HTTPTranslationProvider(make_config("openai_chat"), http_call=lambda *_args: body)
+
+    async def fake_http(*_args):
+        return body
+
+    provider = HTTPTranslationProvider(make_config("openai_chat"), http_call=fake_http)
     with pytest.raises(TranslationProviderError) as error:
         await provider.translate(make_segments(1), TranslationContext())
     assert error.value.code == "TRANSLATION_INVALID_RESPONSE"
@@ -172,7 +178,9 @@ async def test_manager_persists_translation_initialization_error(
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         project_id = response.json()["project"]["id"]
         config = app.state.store.load_pipeline_config(project_id)
@@ -196,8 +204,12 @@ async def test_manager_persists_translation_initialization_error(
 async def test_translation_honors_cancellation_before_and_during_request(monkeypatch):
     monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
     cancel_event = asyncio.Event()
+
+    async def empty_http(*_args):
+        return {}
+
     provider = HTTPTranslationProvider(
-        make_config("openai_chat"), cancel_event=cancel_event, http_call=lambda *_args: {}
+        make_config("openai_chat"), cancel_event=cancel_event, http_call=empty_http
     )
     cancel_event.set()
     with pytest.raises(TranslationProviderError, match="翻译已取消"):
@@ -205,7 +217,7 @@ async def test_translation_honors_cancellation_before_and_during_request(monkeyp
 
     cancel_event.clear()
 
-    def fake_http(*_args):
+    async def fake_http(*_args):
         cancel_event.set()
         return response_for(
             "openai_chat", '{"translations": [{"id": "seg_0", "translation": "译文"}]}'
@@ -220,15 +232,17 @@ async def test_translation_honors_cancellation_before_and_during_request(monkeyp
 @pytest.mark.asyncio
 async def test_translation_maps_http_and_timeout_errors(monkeypatch):
     monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
-    provider = HTTPTranslationProvider(
-        make_config("openai_chat"), http_call=lambda *_args: (_ for _ in ()).throw(URLError("down"))
-    )
+
+    async def failing_http(*_args):
+        raise httpx.ConnectError("down")
+
+    provider = HTTPTranslationProvider(make_config("openai_chat"), http_call=failing_http)
     with pytest.raises(TranslationProviderError) as error:
         await provider.translate(make_segments(1), TranslationContext())
     assert error.value.code == "TRANSLATION_HTTP_ERROR"
 
-    def slow_http(*_args):
-        time.sleep(1.2)
+    async def slow_http(*_args):
+        await asyncio.sleep(1.2)
         return {}
 
     provider = HTTPTranslationProvider(
@@ -236,4 +250,112 @@ async def test_translation_maps_http_and_timeout_errors(monkeypatch):
     )
     with pytest.raises(TranslationProviderError) as error:
         await provider.translate(make_segments(1), TranslationContext())
+    assert error.value.code == "TRANSLATION_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_additional_parameters_are_optional_and_protected(monkeypatch):
+    monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
+    calls = []
+    text = '{"translations": [{"id": "seg_0", "translation": "译文"}]}'
+
+    async def fake_http(_url, _headers, payload, _timeout):
+        calls.append(payload)
+        return response_for("openai_chat", text)
+
+    context = TranslationContext(additional_parameters={"temperature": 0.1, "max_tokens": 128})
+    await HTTPTranslationProvider(make_config("openai_chat"), http_call=fake_http).translate(
+        make_segments(1), context
+    )
+    assert calls[0]["temperature"] == 0.1
+    assert calls[0]["max_tokens"] == 128
+    assert "response_format" not in calls[0]
+
+    calls.clear()
+    await HTTPTranslationProvider(make_config("openai_chat"), http_call=fake_http).translate(
+        make_segments(1), TranslationContext()
+    )
+    assert "temperature" not in calls[0]
+    assert "max_tokens" not in calls[0]
+    assert "response_format" not in calls[0]
+
+    for forbidden in ({"model": "other"}, {"Authorization": "x"}, {"api_key": "x"}):
+        with pytest.raises(ValueError):
+            TranslationConfig(additional_parameters=forbidden)
+    with pytest.raises(ValueError):
+        TranslationConfig(additional_parameters={"temperature": float("nan")})
+    with pytest.raises(ValueError):
+        TranslationConfig(additional_parameters={"nested": "x" * 70000})
+
+
+def test_legacy_temperature_migrates_to_additional_parameters():
+    config = TranslationConfig.model_validate({"temperature": 0.35})
+    assert config.additional_parameters == {"temperature": 0.35}
+    assert config.temperature == 0.35
+    default = TranslationConfig()
+    assert default.additional_parameters == {}
+
+
+@pytest.mark.asyncio
+async def test_async_http_cancel_closes_inflight_request(monkeypatch):
+    monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def handler(_request):
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    cancel_event = asyncio.Event()
+    calls = []
+
+    async def slow_call(url, headers, payload, timeout):
+        calls.append(url)
+        async with httpx.AsyncClient(transport=transport) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            return response.json()
+
+    provider = HTTPTranslationProvider(
+        make_config("openai_chat"), cancel_event=cancel_event, http_call=slow_call
+    )
+    task = asyncio.create_task(provider.translate(make_segments(1), TranslationContext()))
+    await asyncio.wait_for(started.wait(), 1)
+    cancel_event.set()
+    with pytest.raises(TranslationProviderError) as error:
+        await task
+    assert error.value.code == "TRANSLATION_CANCELLED"
+    await asyncio.wait_for(cancelled.wait(), 1)
+    assert calls
+
+
+@pytest.mark.asyncio
+async def test_async_http_timeout_reclaims_request(monkeypatch):
+    monkeypatch.setenv("TEST_TRANSLATION_KEY", "secret")
+    started = asyncio.Event()
+
+    async def handler(_request):
+        started.set()
+        await asyncio.sleep(30)
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+
+    async def slow_call(_url, _headers, _payload, _timeout):
+        async with httpx.AsyncClient(transport=transport) as client:
+            response = await client.post(_url, json=_payload)
+            return response.json()
+
+    provider = HTTPTranslationProvider(
+        make_config("openai_chat", timeout_seconds=1), http_call=slow_call
+    )
+    task = asyncio.create_task(provider.translate(make_segments(1), TranslationContext()))
+    await asyncio.wait_for(started.wait(), 1)
+    with pytest.raises(TranslationProviderError) as error:
+        await task
     assert error.value.code == "TRANSLATION_TIMEOUT"

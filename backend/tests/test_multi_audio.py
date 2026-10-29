@@ -16,7 +16,7 @@ async def upload(client, url="/api/v1/projects", language="ja", payload=b"first"
     response = await client.post(
         url,
         files={"file": ("same.wav", payload, "audio/wav")},
-        data={"source_language": language},
+        data={"source_language": language, "target_language": "zh-CN"},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -115,6 +115,8 @@ async def test_primary_audio_override_does_not_change_unselected_audio_default(t
         base = f"/api/v1/projects/{pid}"
         aid = (await upload(client, base + "/audios"))["audio"]["id"]
         default = (await client.get(base + f"/audios/{aid}/config")).json()
+        common_path = app.state.store.project_dir(pid) / "config.json"
+        common_before = common_path.read_bytes()
         selected = default_pipeline_config().model_dump(mode="json")
         selected["translation"]["model"] = "primary only"
         response = await client.put(base + f"/audios/{PRIMARY_AUDIO_ID}/config", json=selected)
@@ -122,7 +124,7 @@ async def test_primary_audio_override_does_not_change_unselected_audio_default(t
         assert (await client.get(base + f"/audios/{aid}/config")).json() == default
         assert (await client.get(base + "/config")).json() == default
         assert (app.state.store.project_dir(pid) / "primary-config.json").is_file()
-        assert not (app.state.store.project_dir(pid) / "config.json").exists()
+        assert common_path.read_bytes() == common_before
         await client.post(base + "/run", json={"resume": True})
         await asyncio.gather(*app.state.jobs.tasks.values())
         assert app.state.store.load_job(pid).config_snapshot.translation.model == "primary only"
@@ -203,7 +205,11 @@ async def test_append_limit_concurrency_and_unknown_audio_safety(tmp_path):
         assert len(app.state.store.load_project(pid).audios) == 4
         app.state.settings.max_upload_mb = 0
         assert (
-            await client.post(base + "/audios", files={"file": ("big.wav", b"x")})
+            await client.post(
+                base + "/audios",
+                files={"file": ("big.wav", b"x")},
+                data={"source_language": "ja"},
+            )
         ).status_code == 413
         root = app.state.store.project_dir(pid) / "audios"
         assert len(list(root.iterdir())) == 3
@@ -227,14 +233,24 @@ async def test_append_limit_concurrency_and_unknown_audio_safety(tmp_path):
             app.state.store.project_dir(pid) / "cache/preprocess.json"
         )
         linked = app.state.store.project_dir(pid) / "cache/linked-source.wav"
-        linked.symlink_to(scope.source_path(pid, uploaded[0]["audio"]["source"]["path"]))
+        try:
+            linked.symlink_to(scope.source_path(pid, uploaded[0]["audio"]["source"]["path"]))
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         with pytest.raises(ValueError):
             app.state.store.resolve_artifact_path(pid, "cache/linked-source.wav")
         with pytest.raises(ValueError):
             scope.resolve_output(pid, "../original.wav")
         directory = scope.audio_dir()
         (directory / "output").rmdir()
-        (directory / "output").symlink_to(app.state.store.project_dir(pid) / "output")
+        try:
+            (directory / "output").symlink_to(app.state.store.project_dir(pid) / "output")
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         with pytest.raises(ValueError):
             scope.resolve_output(pid, "zh.srt")
 
@@ -393,7 +409,10 @@ async def test_rerun_prunes_only_selected_audio_known_generated_outputs(tmp_path
         await client.put(base + f"/audios/{aid}/config", json=config)
         await client.post(base + f"/audios/{aid}/run", json={"resume": False})
         await asyncio.gather(*app.state.jobs.tasks.values())
-        assert {path.name for path in scope.list_outputs(pid)} == {"zh.vtt", "user-notes.txt"}
+        assert {path.name for path in scope.list_outputs(pid)} == {"zh.vtt"}
+        assert (scope.audio_dir() / "output" / "user-notes.txt").read_text(
+            encoding="utf-8"
+        ) == "keep"
         assert {path.name for path in app.state.store.list_outputs(pid)} == {
             "zh.srt",
             "ja-zh.srt",

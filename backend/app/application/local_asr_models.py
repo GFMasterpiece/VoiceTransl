@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import stat
 import struct
 import threading
@@ -15,8 +14,9 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from ..providers.crispasr import SUPPORTED_BACKENDS
 from .local_asr_settings import error
+from .platform_io import IS_WINDOWS, open_model_root, pread
+from .platform_process import spawn_contained, terminate_contained
 
 MAX_ENTRIES = 4096
 MAX_MODELS = 128
@@ -72,9 +72,14 @@ class GGUFReader:
     def read(self, count: int) -> bytes:
         self.guard(count)
         # A virtual cursor avoids repeated tell/seek syscalls for large tokenizer
-        # arrays. Exact pread ranges never prefetch tensor weights or mmap files
-        # that an administrator might truncate while a scan is in progress.
-        value = os.pread(self.descriptor, count, self.position)
+        # arrays. Exact positional reads never prefetch tensor weights or mmap
+        # files that an administrator might truncate during a scan.
+        read_at = getattr(self.file, "read_at", None)
+        value = (
+            read_at(count, self.position)
+            if read_at is not None
+            else pread(self.descriptor, count, self.position)
+        )
         if len(value) != count:
             raise MetadataInvalid("GGUF 元信息读取不完整")
         self.position += count
@@ -187,35 +192,13 @@ class GGUFReader:
         return architecture
 
 
-def _open_root(root: Path, flags: int) -> int:
-    """Anchor each canonical path component; ancestor swaps cannot follow links."""
-    descriptor = os.open(root.anchor, flags | os.O_DIRECTORY)
-    try:
-        for part in root.parts[1:]:
-            next_descriptor = os.open(part, flags | os.O_DIRECTORY, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = next_descriptor
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-
-def scan_models(root: Path, stop: threading.Event) -> dict:
+def _scan_posix(root: Path, stop: threading.Event) -> dict:
     deadline = time.monotonic() + SCAN_SECONDS
-    items = []
+    items: list[dict] = []
     truncated = False
     excluded = False
-    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
-    try:
-        root_fd = _open_root(root, flags)
-    except OSError as exc:
-        raise error(
-            503,
-            "LOCAL_ASR_MODEL_DIR_UNAVAILABLE",
-            "当前模型目录无法访问，请检查服务器设置和目录权限",
-        ) from exc
-    try:
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_DIRECTORY
+    with open_model_root(root) as root_fd:
         root_mode = os.fstat(root_fd).st_mode
         if not root_mode & 0o444 or not root_mode & 0o111:
             raise error(
@@ -243,7 +226,7 @@ def scan_models(root: Path, stop: threading.Event) -> dict:
                 break
             descriptor = None
             try:
-                descriptor = os.open(name, flags, dir_fd=root_fd)
+                descriptor = os.open(name, flags & ~os.O_DIRECTORY, dir_fd=root_fd)
                 info = os.fstat(descriptor)
                 if not stat.S_ISREG(info.st_mode):
                     excluded = True
@@ -278,32 +261,160 @@ def scan_models(root: Path, stop: threading.Event) -> dict:
             finally:
                 if descriptor is not None:
                     os.close(descriptor)
+    return {"items": items, "truncated": truncated, "excluded": excluded}
+
+
+def _scan_windows(root: Path, stop: threading.Event) -> dict:
+    deadline = time.monotonic() + SCAN_SECONDS
+    items: list[dict] = []
+    truncated = False
+    excluded = False
+    with open_model_root(root) as directory:
+        names = []
+        for index, name in enumerate(directory.scan_entries()):
+            if stop.is_set():
+                raise ScanStopped
+            if index >= MAX_ENTRIES or time.monotonic() >= deadline:
+                truncated = True
+                break
+            if not name.lower().endswith(".gguf"):
+                continue
+            if not SAFE_MODEL.fullmatch(name):
+                excluded = True
+                continue
+            names.append(name)
+        for name in sorted(names):
+            if stop.is_set():
+                raise ScanStopped
+            if len(items) >= MAX_MODELS or time.monotonic() >= deadline:
+                truncated = True
+                break
+            file = None
+            try:
+                file = directory.open_file(name)
+                size = os.fstat(file.fileno()).st_size
+                architecture = None
+                reason = None
+                try:
+                    architecture = GGUFReader(
+                        file, size, min(deadline, time.monotonic() + FILE_SECONDS), stop
+                    ).architecture()
+                except MetadataInvalid as exc:
+                    reason = str(exc)
+                    if isinstance(exc, MetadataLimit):
+                        truncated = True
+                backend = ARCHITECTURE_BACKENDS.get(architecture)
+                if reason is None and backend is None:
+                    reason = "尚无经过验证的架构与 ASR 后端匹配，请使用兼容模型或手动配置"
+                items.append(
+                    {
+                        "model": name,
+                        "backend": backend,
+                        "size_bytes": size,
+                        "architecture": architecture,
+                        "selectable": False,
+                        "reason": reason,
+                    }
+                )
+            except OSError:
+                excluded = True
+            finally:
+                if file is not None:
+                    file.close()
+    return {"items": items, "truncated": truncated, "excluded": excluded}
+
+
+def scan_models(root: Path, stop: threading.Event) -> dict:
+    try:
+        scanned = _scan_windows(root, stop) if IS_WINDOWS else _scan_posix(root, stop)
     except OSError as exc:
         raise error(
-            503, "LOCAL_ASR_MODEL_DIR_UNAVAILABLE", "当前模型目录读取失败，请检查权限后重试"
+            503,
+            "LOCAL_ASR_MODEL_DIR_UNAVAILABLE",
+            "当前模型目录无法访问，请检查服务器设置和目录权限",
         ) from exc
-    finally:
-        os.close(root_fd)
     warnings = []
-    if truncated:
+    if scanned["truncated"]:
         warnings.append("模型扫描达到数量、字节或时间限额，部分结果未完成")
-    if excluded:
+    if scanned["excluded"]:
         warnings.append("已忽略不安全名称、链接、非普通文件或无法读取的目录项")
-    return {"items": items, "truncated": truncated, "warnings": warnings}
+    return {
+        "items": scanned["items"],
+        "truncated": scanned["truncated"],
+        "warnings": warnings,
+    }
 
 
 async def _backend_process(executable: str):
-    return await asyncio.create_subprocess_exec(
-        executable,
-        "--list-backends-json",
+    return await spawn_contained(
+        [executable, "--list-backends-json"],
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
     )
 
 
-async def compiled_backends(executable: Path, factory, timeout: float) -> list[str]:
+ASR_CAPABILITIES = frozenset(
+    {
+        "timestamps-native",
+        "timestamps-ctc",
+        "word-timestamps",
+        "token-confidence",
+        "language-detect",
+    }
+)
+NON_ASR_CAPABILITIES = frozenset(
+    {"tts", "s2s", "separate", "pitch", "chords", "beats", "tab", "piano"}
+)
+
+
+def _backend_caps(item: dict) -> frozenset[str] | None:
+    caps = item.get("caps")
+    if caps is None:
+        return frozenset()
+    if (
+        not isinstance(caps, list)
+        or len(caps) > 128
+        or not all(isinstance(cap, str) and len(cap) <= 64 for cap in caps)
+    ):
+        raise ValueError("backend diagnostic capabilities invalid")
+    return frozenset(caps)
+
+
+def classify_backends(entries: list[dict]) -> list[dict[str, object]]:
+    details = []
+    for item in entries:
+        name = item["name"]
+        caps = _backend_caps(item)
+        if "task" in item:
+            task = item["task"]
+            if task not in {"asr", "tts", "translation", "music", "other"}:
+                task = "other"
+                reason = "CLI 任务类型无法识别"
+            else:
+                reason = None if task == "asr" else "CLI 显式任务类型不是 ASR"
+        elif caps & NON_ASR_CAPABILITIES:
+            task = "other"
+            reason = "CLI 能力标记包含非 ASR 任务"
+        elif caps & ASR_CAPABILITIES:
+            task = "asr"
+            reason = None
+        else:
+            task = "other"
+            reason = "CLI 未提供可确认的 ASR 能力标记"
+        details.append(
+            {
+                "id": name,
+                "label": name,
+                "task": task,
+                "reason": reason,
+                "caps": sorted(caps),
+            }
+        )
+    return sorted(details, key=lambda item: item["id"])
+
+
+async def compiled_backends(executable: Path, factory, timeout: float) -> list[dict[str, object]]:
     process = None
     tasks = []
 
@@ -334,14 +445,18 @@ async def compiled_backends(executable: Path, factory, timeout: float) -> list[s
                 isinstance(item, dict) and isinstance(item.get("name"), str) for item in entries
             ):
                 raise ValueError("backend diagnostic names invalid")
-            return sorted({item["name"] for item in entries} & SUPPORTED_BACKENDS)
+            names = {item["name"] for item in entries}
+            if len(names) != len(entries):
+                raise ValueError("backend diagnostic duplicate names")
+            invalid = [
+                name for name in names if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", name)
+            ]
+            if invalid:
+                raise ValueError("backend diagnostic identifier invalid")
+            return classify_backends(entries)
     finally:
         if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            await process.wait()
+            await terminate_contained(process)
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -385,14 +500,14 @@ class LocalASRModels:
                 if cancelled:
                     raise asyncio.CancelledError
             executable = {"ok": False, "version": None, "message": "当前 CrispASR 程序无法使用"}
-            backends = []
+            backend_details = []
             try:
                 path = self.settings._trusted_path(
                     self.settings.active["crispasr_executable"], executable=True
                 )
                 executable = await self.settings._version(path)
                 if executable["ok"]:
-                    backends = await compiled_backends(
+                    backend_details = await compiled_backends(
                         path, self.process_factory, self.settings.check_timeout
                     )
             except (OSError, ValueError, TimeoutError, RecursionError, HTTPException):
@@ -404,7 +519,9 @@ class LocalASRModels:
             for item in scanned["items"]:
                 if not executable["ok"]:
                     item["reason"] = item["reason"] or "当前 CrispASR 程序或编译后端不可用"
-                elif item["backend"] is not None and item["backend"] not in backends:
+                elif item["backend"] is not None and item["backend"] not in {
+                    entry["id"] for entry in backend_details if entry["task"] == "asr"
+                }:
                     item["reason"] = "当前 CrispASR 程序未编译此模型需要的后端"
                 item["selectable"] = item["reason"] is None and executable["ok"]
             return {
@@ -412,6 +529,7 @@ class LocalASRModels:
                 "executable": executable,
                 "model_dir": self.settings._display(root),
                 "restart_required": self.settings.get()["restart_required"],
-                "backends": backends,
+                "backends": [entry["id"] for entry in backend_details if entry["task"] == "asr"],
+                "backend_details": backend_details,
                 **scanned,
             }

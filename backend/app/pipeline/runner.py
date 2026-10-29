@@ -226,11 +226,15 @@ class PipelineRunner:
         if not artifact.exists():
             raise FileNotFoundError(state.artifact)
         if stage_name == "export":
-            required = output_names(context.config or PipelineConfig())
+            source_stem = context.project.source.original_name
+            required = output_names(context.config or PipelineConfig(), source_stem=source_stem)
             if not artifact.is_dir() or not all(
                 (artifact / filename).is_file() for filename in required
             ):
                 raise FileNotFoundError("export output is incomplete")
+            from ..storage.project_store import verify_export_manifest
+
+            verify_export_manifest(context.store, context.project.id, required)
         elif stage_name == "preprocess":
             try:
                 metadata = json.loads(artifact.read_text(encoding="utf-8"))

@@ -117,7 +117,9 @@ async def test_api_accepts_ffmpeg_preprocess_configuration(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         assert created.status_code == 201
         project_id = created.json()["project"]["id"]
@@ -143,7 +145,9 @@ async def test_ffmpeg_configuration_runs_provider_and_persists_metadata(tmp_path
     app.state.jobs.delay_ms = 0
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         project_id = created.json()["project"]["id"]
         config = (await client.get(f"/api/v1/projects/{project_id}/config")).json()

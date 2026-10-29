@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .enums import JobStatus, PipelineStageName, StageStatus
 from .pipeline_config import PipelineConfig
 from .project import PRIMARY_AUDIO_ID
 from .provider_profile import ProviderProfile
+from .schema import require_schema_version
 
 
 class StageState(BaseModel):
@@ -46,3 +47,12 @@ class Job(BaseModel):
     config_snapshot: PipelineConfig | None = None
     # Resolved, secret-free provider profiles used by this run.
     provider_profiles_snapshot: dict[str, ProviderProfile] = Field(default_factory=dict)
+    # Local capability identities are captured at queue time. Runtime paths
+    # remain external settings and are deliberately not persisted here.
+    asr_backend_ids: list[str] = Field(default_factory=list)
+    asr_capabilities: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "job")

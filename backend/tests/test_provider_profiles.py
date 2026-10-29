@@ -57,7 +57,9 @@ async def test_provider_profile_reference_is_snapshotted_and_protected_from_dele
             await client.post("/api/v1/provider-profiles", json=profile_payload())
         ).status_code == 201
         created = await client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         project_id = created.json()["project"]["id"]
         config = (await client.get(f"/api/v1/projects/{project_id}/config")).json()

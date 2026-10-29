@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .schema import require_schema_version
+
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _ENVIRONMENT_VARIABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -35,6 +37,11 @@ class ProviderProfile(BaseModel):
     enabled: bool = True
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "provider profile")
 
     @field_validator("id", "provider_type")
     @classmethod
@@ -70,6 +77,11 @@ class ProviderProfilesDocument(BaseModel):
 
     schema_version: str = "1.0"
     profiles: list[ProviderProfile] = Field(default_factory=list)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "provider profiles")
 
     @field_validator("profiles")
     @classmethod

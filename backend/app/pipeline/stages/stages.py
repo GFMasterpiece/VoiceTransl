@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from ...domain import PipelineConfig, PipelineStageName, Transcript
-from ...exporters import output_names, render_lrc, render_srt, render_vtt
+from ...exporters import export_files, render_export
 from ...providers import PreprocessProvider, TranslationContext
 
 
@@ -93,7 +93,9 @@ class TranslationStage(BaseStage):
                     glossary=config.translation.glossary if config else {},
                     instructions=config.translation.instructions if config else None,
                     batch_size=config.translation.batch_size if config else 8,
-                    temperature=config.translation.temperature if config else 0.2,
+                    additional_parameters=(
+                        config.translation.additional_parameters if config else {}
+                    ),
                 ),
             )
         except Exception as exc:
@@ -129,13 +131,8 @@ class ExportStage(BaseStage):
         out.mkdir(exist_ok=True)
         segs = c.transcript.segments
         config = c.config or PipelineConfig()
-        files = {}
-        for name in output_names(config):
-            bilingual = name.startswith("ja-zh.")
-            extension = name.rsplit(".", 1)[1]
-            renderer = {"srt": render_srt, "vtt": render_vtt, "lrc": render_lrc}[extension]
-            files[name] = renderer(segs) if extension == "lrc" else renderer(segs, bilingual)
-        for name, text in files.items():
-            c.store.save_output_text(c.project.id, name, text)
-        c.store.prune_generated_outputs(c.project.id, set(files))
+        source_stem = c.project.source.original_name
+        files = export_files(config, source_stem=source_stem)
+        payloads = {item.name: render_export(item, segs) for item in files}
+        c.store.save_export_outputs(c.project.id, payloads, files)
         c.artifacts[self.name.value] = out

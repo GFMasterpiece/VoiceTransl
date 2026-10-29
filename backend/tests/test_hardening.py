@@ -29,6 +29,7 @@ async def _create_project(client: AsyncClient) -> str:
     response = await client.post(
         "/api/v1/projects",
         files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+        data={"source_language": "ja", "target_language": "zh-CN"},
     )
     assert response.status_code == 201
     return response.json()["project"]["id"]
@@ -200,7 +201,12 @@ def test_store_rejects_project_directory_symlink(tmp_path: Path):
     real = tmp_path / "real-projects"
     real.mkdir()
     projects = tmp_path / "projects"
-    projects.symlink_to(real, target_is_directory=True)
+    try:
+        projects.symlink_to(real, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks for this security test")
+        raise
     with pytest.raises(ValueError):
         FileSystemProjectStore(tmp_path)
 
@@ -216,7 +222,12 @@ def test_store_rejects_source_directory_symlink(tmp_path: Path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (project_dir / "source").rmdir()
-    (project_dir / "source").symlink_to(outside, target_is_directory=True)
+    try:
+        (project_dir / "source").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks for this security test")
+        raise
     with pytest.raises(ValueError):
         store.save_source(project.id, "wav", b"x")
 
@@ -233,7 +244,12 @@ def test_store_rejects_artifact_directory_symlink(tmp_path: Path, subdir: str):
     outside = tmp_path / f"outside-{subdir}"
     outside.mkdir()
     (project_dir / subdir).rmdir()
-    (project_dir / subdir).symlink_to(outside, target_is_directory=True)
+    try:
+        (project_dir / subdir).symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks for this security test")
+        raise
     with pytest.raises(ValueError):
         if subdir == "cache":
             store.save_cache_json(project.id, "x.json", {})
@@ -336,7 +352,9 @@ def test_real_websocket_receives_events_and_cleans_subscription(tmp_path: Path):
     app.state.jobs.delay_ms = 1
     with TestClient(app) as client:
         project_id = client.post(
-            "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+            "/api/v1/projects",
+            files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         ).json()["project"]["id"]
         with client.websocket_connect(f"/api/v1/projects/{project_id}/events") as socket:
             assert socket.receive_json()["type"] == "job.snapshot"

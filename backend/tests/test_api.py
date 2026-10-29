@@ -12,7 +12,9 @@ async def test_upload_run_and_outputs():
         app = create_app(data_dir)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
-                "/api/v1/projects", files={"file": ("sample.wav", b"RIFF", "audio/wav")}
+                "/api/v1/projects",
+                files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+                data={"source_language": "ja", "target_language": "zh-CN"},
             )
             assert response.status_code == 201
             project_id = response.json()["project"]["id"]
@@ -42,6 +44,7 @@ async def test_upload_commits_complete_directory_and_validation_errors_are_norma
             response = await client.post(
                 "/api/v1/projects",
                 files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+                data={"source_language": "ja", "target_language": "zh-CN"},
             )
             assert response.status_code == 201
             project_id = response.json()["project"]["id"]
@@ -67,6 +70,7 @@ async def test_oversized_upload_leaves_no_project_directory():
             response = await client.post(
                 "/api/v1/projects",
                 files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+                data={"source_language": "ja", "target_language": "zh-CN"},
             )
             assert response.status_code == 413
             assert response.json()["error"]["code"] == "FILE_TOO_LARGE"

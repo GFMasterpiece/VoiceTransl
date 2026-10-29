@@ -8,6 +8,7 @@ async def create_project(client: AsyncClient) -> str:
     response = await client.post(
         "/api/v1/projects",
         files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+        data={"source_language": "ja", "target_language": "zh-CN"},
     )
     assert response.status_code == 201
     return response.json()["project"]["id"]

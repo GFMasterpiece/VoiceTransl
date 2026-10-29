@@ -1,12 +1,14 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from ..config import load_preset
 from ..domain import Job, JobError, JobStatus, PipelineConfig
 from ..domain.project import PRIMARY_AUDIO_ID
 from ..domain.workflow import (
+    ASRCapabilitySnapshot,
     WorkflowNodeError,
     WorkflowNodeRecord,
     WorkflowNodeStatus,
@@ -63,6 +65,7 @@ class JobManager:
         crispasr_model_dir="crispasr/models",
         crispasr_timeout_seconds=300,
         crispasr_process_factory=None,
+        crispasr_discovery_factory=None,
     ):
         self.store = store
         self.event_bus = event_bus
@@ -76,6 +79,7 @@ class JobManager:
         self.crispasr_model_dir = crispasr_model_dir
         self.crispasr_timeout_seconds = crispasr_timeout_seconds
         self.crispasr_process_factory = crispasr_process_factory
+        self.crispasr_discovery_factory = crispasr_discovery_factory
         self.tasks: dict[tuple[str, str], asyncio.Task] = AudioTaskMap()
         self.cancel_events: dict[tuple[str, str], asyncio.Event] = {}
         self.locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -102,6 +106,19 @@ class JobManager:
     def workflow_run(self, project_id, audio_id=PRIMARY_AUDIO_ID):
         return self.workflow_runs.get((project_id, audio_id))
 
+    async def _asr_discovery(self) -> list[dict[str, object]]:
+        try:
+            from .local_asr_models import _backend_process, compiled_backends
+
+            factory = self.crispasr_discovery_factory or _backend_process
+            return await compiled_backends(
+                Path(self.crispasr_executable),
+                factory,
+                5.0,
+            )
+        except Exception as exc:
+            raise RuntimeError("ASR_BACKEND_DISCOVERY_FAILED") from exc
+
     async def start_workflow(self, project_id, audio_id, workflow_revision):
         async with self.store.mutation_lock(project_id):
             async with self._lock(project_id, audio_id):
@@ -120,6 +137,31 @@ class JobManager:
                 issues = validate_workflow_graph(document.nodes, document.edges)
                 if issues:
                     raise ValueError("invalid workflow")
+                needs_asr = any(
+                    node.type == "asr" and (node.config.get("provider") or "mock") == "crispasr"
+                    for node in document.nodes
+                )
+                asr_capabilities = None
+                if needs_asr:
+                    discovered = await self._asr_discovery()
+                    asr_capabilities = ASRCapabilitySnapshot(
+                        backend_ids=[
+                            item["id"] for item in discovered if item.get("task") == "asr"
+                        ],
+                        capabilities={
+                            item["id"]: list(item.get("caps", []))
+                            for item in discovered
+                            if item.get("task") == "asr"
+                        },
+                    )
+                    requested = {
+                        str(node.config.get("backend"))
+                        for node in document.nodes
+                        if node.type == "asr"
+                        and (node.config.get("provider") or "mock") == "crispasr"
+                    }
+                    if not requested.issubset(set(asr_capabilities.backend_ids)):
+                        raise RuntimeError("ASR_BACKEND_UNSUPPORTED")
                 snapshot = workflow_snapshot(document)
                 # Queue-time capture: later runtime setting edits cannot alter
                 # an already accepted run.
@@ -137,6 +179,7 @@ class JobManager:
                     audio_id=audio_id,
                     workflow_revision=document.workflow_revision,
                     workflow=snapshot,
+                    asr_capabilities=asr_capabilities,
                     nodes=[
                         WorkflowNodeRecord(
                             node_id=node.id,
@@ -337,12 +380,36 @@ class JobManager:
                 if not profile.enabled:
                     raise ValueError(f"provider profile disabled: {profile_id}")
                 provider_profiles = {profile.id: profile.model_copy(deep=True)}
+            asr_backend_ids: list[str] = []
+            asr_capabilities: dict[str, list[str]] = {}
+            if snapshot.asr.provider == "crispasr":
+                previous_snapshot = previous.asr_backend_ids if pipeline_resume else []
+                previous_capabilities = previous.asr_capabilities if pipeline_resume else {}
+                if pipeline_resume and previous_snapshot:
+                    asr_backend_ids = list(previous_snapshot)
+                    asr_capabilities = {
+                        key: list(value) for key, value in previous_capabilities.items()
+                    }
+                else:
+                    discovered = await self._asr_discovery()
+                    asr_backend_ids = [
+                        str(item["id"]) for item in discovered if item.get("task") == "asr"
+                    ]
+                    asr_capabilities = {
+                        str(item["id"]): [str(cap) for cap in item.get("caps", [])]
+                        for item in discovered
+                        if item.get("task") == "asr"
+                    }
+                if snapshot.asr.backend not in asr_backend_ids:
+                    raise RuntimeError("ASR_BACKEND_UNSUPPORTED")
             job.status = JobStatus.PENDING
             job.cancel_requested = False
             job.error = None
             job.current_stage = None
             job.config_snapshot = snapshot
             job.provider_profiles_snapshot = provider_profiles
+            job.asr_backend_ids = asr_backend_ids
+            job.asr_capabilities = asr_capabilities
             store.save_job(job)
             ev = asyncio.Event()
             self.cancel_events[key] = ev
@@ -404,6 +471,8 @@ class JobManager:
                         if snapshot.asr.provider == "mock":
                             asr_provider = MockASRProvider(delay_ms)
                         elif snapshot.asr.provider == "crispasr":
+                            if snapshot.asr.backend not in job.asr_backend_ids:
+                                raise RuntimeError("ASR_BACKEND_UNSUPPORTED")
                             asr_provider = CrispASRProvider(
                                 self.crispasr_executable,
                                 self.crispasr_model_dir,

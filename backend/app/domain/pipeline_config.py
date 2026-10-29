@@ -1,7 +1,11 @@
+import json
+import math
 import re
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .schema import require_schema_version
 
 
 class _ConfigModel(BaseModel):
@@ -13,11 +17,6 @@ class PreprocessConfig(_ConfigModel):
     sample_rate: int = Field(default=16_000, ge=8_000, le=192_000)
     channels: int = Field(default=1, ge=1, le=2)
     preserve_original: bool = True
-
-
-SUPPORTED_ASR_BACKENDS = frozenset(
-    {"qwen3", "qwen3-1.7b", "whisper", "mega-asr", "voxtral", "voxtral4b", "granite"}
-)
 
 
 class ASRConfig(_ConfigModel):
@@ -46,6 +45,91 @@ class AlignmentConfig(_ConfigModel):
     fallback: str = Field(default="keep_asr_timestamps", min_length=1, max_length=64)
 
 
+MAX_ADDITIONAL_PARAMETER_DEPTH = 4
+MAX_ADDITIONAL_PARAMETER_ITEMS = 256
+MAX_ADDITIONAL_PARAMETER_BYTES = 65_536
+PROTECTED_TRANSLATION_PARAMETERS = frozenset(
+    {
+        "model",
+        "messages",
+        "input",
+        "system",
+        "url",
+        "auth",
+        "authorization",
+        "api_key",
+        "api-key",
+        "x-api-key",
+        "content-type",
+        "anthropic-version",
+        "base_url",
+        "api_key_env",
+        "headers",
+        "endpoint",
+        "token",
+    }
+)
+
+
+def _validate_additional_parameter(
+    value: object, *, depth: int = 0, items: list[int] | None = None
+) -> None:
+    if items is None:
+        items = [0]
+    if depth > MAX_ADDITIONAL_PARAMETER_DEPTH:
+        raise ValueError("translation additional_parameters nesting is too deep")
+    if value is None or isinstance(value, (bool, str)):
+        return
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("translation additional_parameters must contain finite numbers")
+        return
+    if isinstance(value, list):
+        for item in value:
+            items[0] += 1
+            if items[0] > MAX_ADDITIONAL_PARAMETER_ITEMS:
+                raise ValueError("translation additional_parameters is too large")
+            _validate_additional_parameter(item, depth=depth + 1, items=items)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError("translation additional_parameters keys must be non-empty strings")
+            items[0] += 1
+            if items[0] > MAX_ADDITIONAL_PARAMETER_ITEMS:
+                raise ValueError("translation additional_parameters is too large")
+            _validate_additional_parameter(item, depth=depth + 1, items=items)
+        return
+    raise ValueError("translation additional_parameters must be JSON-compatible")
+
+
+def validate_translation_parameters(value: dict[str, object]) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("translation additional_parameters must be an object")
+    _validate_additional_parameter(value)
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
+    if len(encoded) > MAX_ADDITIONAL_PARAMETER_BYTES:
+        raise ValueError("translation additional_parameters is too large")
+    for key in value:
+        folded = key.casefold()
+        sensitive = {"secret", "password", "credential", "api_key", "access_key", "private_key"}
+        if folded in PROTECTED_TRANSLATION_PARAMETERS or folded in sensitive:
+            raise ValueError(f"translation additional_parameters cannot set protected field: {key}")
+
+
+def merge_translation_parameters(core: dict, parameters: dict[str, object]) -> dict:
+    """Core protocol fields win; extra values are revalidated after model copies."""
+
+    validate_translation_parameters(parameters)
+    merged = {**parameters, **core}
+    validate_translation_parameters(
+        {key: value for key, value in merged.items() if key not in core}
+    )
+    return merged
+
+
 class TranslationConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
     base_url: str | None = Field(default=None, max_length=2_048)
@@ -53,28 +137,92 @@ class TranslationConfig(_ConfigModel):
     model: str = Field(default="mock", min_length=1, max_length=128)
     target_language: str = Field(default="zh-CN", min_length=1, max_length=32)
     batch_size: int = Field(default=8, ge=1, le=128)
-    temperature: float = Field(default=0.2, ge=0, le=2)
+    additional_parameters: dict[str, object] = Field(default_factory=dict)
+    # Legacy field kept only so same-version snapshots written before
+    # additional_parameters existed remain readable; it is migrated below.
+    temperature: float | None = Field(default=None, ge=0, le=2)
     glossary: dict[str, str] = Field(default_factory=dict)
     instructions: str | None = Field(default=None, max_length=4_000)
     timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+
+    @field_validator("additional_parameters")
+    @classmethod
+    def validate_additional_parameters(cls, value: dict[str, object]) -> dict[str, object]:
+        _validate_additional_parameter(value)
+        validate_translation_parameters(value)
+        return value
+
+    @model_validator(mode="after")
+    def migrate_legacy_temperature(self) -> Self:
+        if self.temperature is not None and "temperature" not in self.additional_parameters:
+            self.additional_parameters = {
+                **self.additional_parameters,
+                "temperature": self.temperature,
+            }
+        return self
+
+
+EXPORT_FORMATS = frozenset({"srt", "vtt", "lrc"})
+EXPORT_NAMING_MODES = ("language", "original")
+EXPORT_TEMPLATE_VARIABLES = frozenset({"source_language", "target_language", "kind", "format"})
 
 
 class ExportConfig(_ConfigModel):
     formats: list[str] = Field(default_factory=lambda: ["srt", "lrc"], min_length=1)
     bilingual: bool = True
-    naming: str = Field(default="language", min_length=1, max_length=64)
+    naming: Literal["language", "original"] = "language"
+    filename_template: str | None = Field(default=None, min_length=1, max_length=128)
+    filename_stem: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: list[str]) -> list[str]:
-        supported = {"srt", "vtt", "lrc"}
         normalized = [item.lower().lstrip(".") for item in value]
         if len(set(normalized)) != len(normalized):
             raise ValueError("export formats must not contain duplicates")
-        unsupported = sorted(set(normalized) - supported)
+        unsupported = sorted(set(normalized) - EXPORT_FORMATS)
         if unsupported:
             raise ValueError(f"unsupported export format: {unsupported[0]}")
         return normalized
+
+    @field_validator("filename_template")
+    @classmethod
+    def validate_filename_template(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value != value.strip() or "/" in value or "\\" in value:
+            raise ValueError("export filename_template must be a safe filename")
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("export filename_template contains control characters")
+        for match in re.finditer(r"\{([^{}]+)\}", value):
+            if match.group(1) not in EXPORT_TEMPLATE_VARIABLES:
+                raise ValueError(
+                    f"export filename_template has unsupported variable: {match.group(1)}"
+                )
+        if re.search(r"[{}]", re.sub(r"\{[^{}]+\}", "", value)):
+            raise ValueError("export filename_template has malformed placeholders")
+        if "{source_language}" not in value and "{target_language}" not in value:
+            raise ValueError("export filename_template must include a language variable")
+        if "{kind}" not in value:
+            raise ValueError("export filename_template must include {kind} to separate outputs")
+        return value
+
+    @field_validator("filename_stem")
+    @classmethod
+    def validate_filename_stem(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if (
+            value != value.strip()
+            or value in {".", ".."}
+            or value.endswith(".")
+            or "/" in value
+            or "\\" in value
+            or any(char in '<>:"|?*' for char in value)
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError("export filename_stem is unsafe")
+        return value
 
 
 class PipelineConfig(_ConfigModel):
@@ -86,6 +234,11 @@ class PipelineConfig(_ConfigModel):
     alignment: AlignmentConfig = Field(default_factory=AlignmentConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "pipeline config")
 
     @model_validator(mode="after")
     def validate_languages(self) -> Self:
@@ -115,26 +268,31 @@ class PipelineConfig(_ConfigModel):
         return self
 
 
-def default_pipeline_config(source_language: str = "ja") -> PipelineConfig:
+def default_pipeline_config(
+    source_language: str = "ja", *, target_language: str | None = None
+) -> PipelineConfig:
     """Return a safe mock configuration for new and legacy projects."""
 
+    target = target_language or ("zh-CN" if source_language.casefold() != "zh" else "en")
     return PipelineConfig(
         source_language=source_language,
-        target_language="zh-CN" if source_language.casefold() != "zh" else "en",
+        target_language=target,
         asr=ASRConfig(language=source_language),
-        translation=TranslationConfig(
-            target_language="zh-CN" if source_language.casefold() != "zh" else "en"
-        ),
+        translation=TranslationConfig(target_language=target),
     )
 
 
 __all__ = [
     "ASRConfig",
+    "EXPORT_FORMATS",
+    "EXPORT_NAMING_MODES",
+    "EXPORT_TEMPLATE_VARIABLES",
     "AlignmentConfig",
     "ExportConfig",
+    "EXPORT_FORMATS",
+    "EXPORT_NAMING_MODES",
     "PipelineConfig",
     "PreprocessConfig",
     "TranslationConfig",
     "default_pipeline_config",
-    "SUPPORTED_ASR_BACKENDS",
 ]

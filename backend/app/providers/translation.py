@@ -8,10 +8,11 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Callable
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
 
 from ..domain import Segment
+from ..domain.pipeline_config import merge_translation_parameters
 from .protocols import TranslationContext
 
 
@@ -78,16 +79,17 @@ class _ProtocolAdapter:
         raise NotImplementedError
 
 
+def _with_additional_parameters(payload: dict, parameters: dict[str, object]) -> dict:
+    return merge_translation_parameters(payload, parameters)
+
+
 class _ChatCompletionsAdapter(_ProtocolAdapter):
     def request(
         self, model: str, messages: list[dict[str, str]], context: TranslationContext
     ) -> dict:
-        return {
-            "model": model,
-            "messages": messages,
-            "temperature": context.temperature,
-            "response_format": {"type": "json_object"},
-        }
+        return _with_additional_parameters(
+            {"model": model, "messages": messages}, context.additional_parameters
+        )
 
     def extract_text(self, payload: dict) -> str:
         try:
@@ -107,7 +109,9 @@ class _ResponsesAdapter(_ProtocolAdapter):
     def request(
         self, model: str, messages: list[dict[str, str]], context: TranslationContext
     ) -> dict:
-        return {"model": model, "input": messages, "temperature": context.temperature}
+        return _with_additional_parameters(
+            {"model": model, "input": messages}, context.additional_parameters
+        )
 
     def extract_text(self, payload: dict) -> str:
         text = _json_text(payload.get("output_text")) or _json_text(payload.get("output"))
@@ -122,15 +126,15 @@ class _AnthropicAdapter(_ProtocolAdapter):
     ) -> dict:
         system = next((item["content"] for item in messages if item["role"] == "system"), None)
         user_messages = [item for item in messages if item["role"] != "system"]
-        payload = {
-            "model": model,
-            "max_tokens": 4_096,
-            "temperature": context.temperature,
-            "messages": user_messages,
-        }
+        if "max_tokens" not in context.additional_parameters:
+            raise TranslationProviderError(
+                "TRANSLATION_PARAMETER_REQUIRED",
+                "Anthropic Messages 需要配置附加参数 max_tokens",
+            )
+        payload = {"model": model, "messages": user_messages}
         if system:
             payload["system"] = system
-        return payload
+        return _with_additional_parameters(payload, context.additional_parameters)
 
     def extract_text(self, payload: dict) -> str:
         text = _json_text(payload.get("content"))
@@ -158,7 +162,7 @@ class HTTPTranslationProvider:
     ):
         self.config = config
         self.cancel_event = cancel_event
-        self.http_call = http_call or self._default_http_call
+        self.http_call = http_call
         self.adapter = ADAPTERS.get(config.provider)
         if self.adapter is None:
             raise TranslationProviderError(
@@ -177,17 +181,6 @@ class HTTPTranslationProvider:
     def _default_key_name(provider: str) -> str:
         return "ANTHROPIC_API_KEY" if provider == "anthropic_messages" else "OPENAI_API_KEY"
 
-    @staticmethod
-    def _default_http_call(url: str, headers: dict[str, str], payload: dict, timeout: int) -> dict:
-        request = Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured endpoint
-            return json.loads(response.read().decode("utf-8"))
-
     def _endpoint(self) -> str:
         return self.config.base_url.rstrip("/") + self.adapter.path
 
@@ -200,20 +193,72 @@ class HTTPTranslationProvider:
             }
         return {"content-type": "application/json", "authorization": f"Bearer {self.api_key}"}
 
+    async def _default_http_call(
+        self, url: str, headers: dict[str, str], payload: dict, timeout: int
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict):
+                raise TranslationProviderError(
+                    "TRANSLATION_INVALID_RESPONSE", "翻译服务响应格式无效"
+                )
+            return value
+
+    @staticmethod
+    async def _cancel_and_wait(task: asyncio.Task) -> None:
+        if task.done():
+            return
+        task.cancel()
+        # A repeated cancellation of the provider task must not skip waiting
+        # for the transport task to finish closing its connection. Keep the
+        # cleanup itself bounded so a broken transport cannot hang shutdown.
+        cleanup = asyncio.create_task(asyncio.wait({task}))
+        deadline = asyncio.get_running_loop().time() + 5
+        try:
+            while not cleanup.done():
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    task.cancel()
+                    break
+                try:
+                    await asyncio.wait_for(asyncio.shield(cleanup), remaining)
+                except asyncio.CancelledError:
+                    continue
+                except asyncio.TimeoutError:
+                    task.cancel()
+                    break
+        finally:
+            if not cleanup.done():
+                cleanup.cancel()
+            await asyncio.gather(cleanup, return_exceptions=True)
+
     async def _request(self, payload: dict) -> dict:
         if self.cancel_event and self.cancel_event.is_set():
             raise TranslationProviderError("TRANSLATION_CANCELLED", "翻译已取消")
+        call = self.http_call or self._default_http_call
+        request_task = asyncio.create_task(
+            call(self._endpoint(), self._headers(), payload, self.config.timeout_seconds)
+        )
+        cancel_task = asyncio.create_task(self.cancel_event.wait()) if self.cancel_event else None
+        has_result = False
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.http_call,
-                    self._endpoint(),
-                    self._headers(),
-                    payload,
-                    self.config.timeout_seconds,
-                ),
+            pending = {request_task}
+            if cancel_task is not None:
+                pending.add(cancel_task)
+            done, _ = await asyncio.wait(
+                pending,
                 timeout=self.config.timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            if not done:
+                raise asyncio.TimeoutError
+            if cancel_task is not None and cancel_task in done and cancel_task.result():
+                await self._cancel_and_wait(request_task)
+                raise TranslationProviderError("TRANSLATION_CANCELLED", "翻译已取消")
+            response = await request_task
+            has_result = True
             if self.cancel_event and self.cancel_event.is_set():
                 raise TranslationProviderError("TRANSLATION_CANCELLED", "翻译已取消")
             if not isinstance(response, dict):
@@ -222,15 +267,23 @@ class HTTPTranslationProvider:
                 )
             return response
         except asyncio.TimeoutError as exc:
+            await self._cancel_and_wait(request_task)
             raise TranslationProviderError("TRANSLATION_TIMEOUT", "翻译服务请求超时") from exc
         except asyncio.CancelledError:
+            if not has_result:
+                await self._cancel_and_wait(request_task)
             raise
         except TranslationProviderError:
             raise
-        except HTTPError as exc:
+        except httpx.HTTPError as exc:
             raise TranslationProviderError("TRANSLATION_HTTP_ERROR", "翻译服务请求失败") from exc
-        except (URLError, OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise TranslationProviderError("TRANSLATION_HTTP_ERROR", "翻译服务不可用") from exc
+        finally:
+            if not request_task.done():
+                await self._cancel_and_wait(request_task)
+            if cancel_task is not None:
+                await self._cancel_and_wait(cancel_task)
 
     async def translate(
         self, segments: list[Segment], context: TranslationContext

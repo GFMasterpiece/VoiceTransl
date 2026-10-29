@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { API_BASE_URL } from './projectDetail'
+import { computed as vueComputed } from 'vue'
+import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
+import { fetchCapabilities } from '../workflow/capabilities'
+import { createNodeRegistry } from '../workflow/nodeRegistry'
 
-export type NodeType = 'audio_input' | 'preprocess' | 'asr' | 'audio_output' | 'text_output'
-export type PortName = 'audio' | 'transcript' | 'text'
+export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = 'audio' | 'transcript'
 export type InputPortName = 'audio' | 'transcript'
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled' | 'interrupted'
@@ -55,8 +58,6 @@ export interface AsrNodeConfig {
   chunk_seconds: number
   provider_profile_id: null
 }
-
-export const ASR_BACKENDS = Object.freeze(['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'])
 
 export const DEFAULT_ASR_CONFIG: Readonly<AsrNodeConfig> = Object.freeze({
   provider: 'mock',
@@ -119,9 +120,9 @@ export interface WorkflowNode {
 export interface WorkflowEdge {
   id: string
   source: string
-  source_port: OutputPortName
+  source_port: PortName
   target: string
-  target_port: InputPortName
+  target_port: PortName
 }
 
 export interface WorkflowDocumentInput {
@@ -247,7 +248,10 @@ export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInp
   })) as WorkflowDocumentInput
 }
 
-function canonicalNodeConfig(node: WorkflowNode): Record<string, unknown> {
+function canonicalNodeConfig(node: WorkflowNode, registry?: NodeRegistry): Record<string, unknown> {
+  if (registry && !['preprocess', 'asr', 'text_output', 'audio_output'].includes(node.type)) {
+    return { ...registry.createDefaultConfig(node.type), ...(node.config || {}) }
+  }
   const config = { ...node.config }
   if (node.type === 'preprocess') {
     if (config.provider === undefined) config.provider = DEFAULT_PREPROCESS_CONFIG.provider
@@ -271,20 +275,18 @@ function canonicalNodeConfig(node: WorkflowNode): Record<string, unknown> {
   return config
 }
 
-export function outputPortForNode(type: NodeType): OutputPortName | null {
-  if (type === 'asr') return 'transcript'
-  if (type === 'audio_input' || type === 'preprocess') return 'audio'
-  return null
+export function outputPortForNode(type: NodeType, registry: NodeRegistry): OutputPortName | null {
+  const port = registry.outputPortForNode(type)
+  return port === 'audio' || port === 'transcript' ? port : null
 }
 
-export function inputPortForNode(type: NodeType): InputPortName | null {
-  if (type === 'text_output') return 'transcript'
-  if (type === 'preprocess' || type === 'asr' || type === 'audio_output') return 'audio'
-  return null
+export function inputPortForNode(type: NodeType, registry: NodeRegistry): InputPortName | null {
+  const port = registry.inputPortForNode(type)
+  return port === 'audio' || port === 'transcript' ? port : null
 }
 
-export function isTerminalNode(type: NodeType): boolean {
-  return type === 'audio_output' || type === 'text_output'
+export function isTerminalNode(type: NodeType, registry: NodeRegistry): boolean {
+  return registry.isTerminalNode(type)
 }
 
 export function isSafeFilenameStem(value: unknown): value is string {
@@ -303,10 +305,10 @@ function stableObject(value: unknown): unknown {
     .map(([key, item]) => [key, stableObject(item)]))
 }
 
-export function executionSignature(value: WorkflowDocumentInput): string {
+export function executionSignature(value: WorkflowDocumentInput, registry?: NodeRegistry): string {
   return JSON.stringify({
     nodes: value.nodes.map((node) => ({
-      config: stableObject(canonicalNodeConfig(node)),
+      config: stableObject(canonicalNodeConfig(node, registry)),
       id: node.id,
       type: node.type,
     })).sort((left, right) => left.id.localeCompare(right.id)),
@@ -401,7 +403,7 @@ export function createDefaultWorkflow(): WorkflowDocumentInput {
   }
 }
 
-export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>): WorkflowIssue[] {
+export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>, registry: NodeRegistry): WorkflowIssue[] {
   const issues: WorkflowIssue[] = []
   const keys = Object.keys(node.config || {})
   if (node.type === 'audio_input') {
@@ -430,8 +432,8 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
     const provider = node.config.provider === undefined ? DEFAULT_ASR_CONFIG.provider : node.config.provider
     if (provider !== 'mock' && provider !== 'crispasr') issues.push({ code: 'INVALID_ASR_PROVIDER', message: 'ASR Provider 只能是 mock 或 crispasr', node_id: node.id })
     const backend = node.config.backend === undefined ? DEFAULT_ASR_CONFIG.backend : node.config.backend
-    if (typeof backend !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(backend) || !ASR_BACKENDS.includes(backend)) {
-      issues.push({ code: 'INVALID_ASR_BACKEND', message: 'ASR 后端必须是后端支持的标识符', node_id: node.id })
+    if (typeof backend !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(backend)) {
+      issues.push({ code: 'INVALID_ASR_BACKEND', message: 'ASR 后端必须是安全的标识符；可用性以服务端能力目录为准', node_id: node.id })
     }
     const model = node.config.model === undefined ? DEFAULT_ASR_CONFIG.model : node.config.model
     if (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(model) || model.endsWith('.')) {
@@ -449,6 +451,8 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
     }
     const profile = node.config.provider_profile_id === undefined ? null : node.config.provider_profile_id
     if (profile !== null) issues.push({ code: 'INVALID_ASR_PROFILE', message: '本轮 ASR 节点不能引用 Provider Profile', node_id: node.id })
+  } else if (!['preprocess', 'audio_input', 'audio_output', 'text_output', 'asr'].includes(node.type)) {
+    for (const issue of registry.validateConfig(node.type, node.config)) issues.push({ ...issue, node_id: node.id })
   } else if (node.type === 'preprocess') {
     const allowed = new Set(['provider', 'sample_rate', 'channels', 'preserve_original'])
     const unexpected = keys.filter((key) => !allowed.has(key))
@@ -467,10 +471,11 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
   return issues
 }
 
-export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
+export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegistry): WorkflowIssue[] {
   const issues: WorkflowIssue[] = []
-  const inputs = value.nodes.filter((node) => node.type === 'audio_input')
-  const outputs = value.nodes.filter((node) => isTerminalNode(node.type))
+  const inputKinds = new Set(registry.kinds.filter((kind) => kind.inputPorts.length === 0 && kind.outputPorts.length > 0).map((kind) => kind.type))
+  const inputs = value.nodes.filter((node) => inputKinds.has(node.type))
+  const outputs = value.nodes.filter((node) => isTerminalNode(node.type, registry))
   if (inputs.length !== 1) issues.push({ code: 'INPUT_COUNT', message: `需要恰好一个音频输入节点，当前为 ${inputs.length} 个`, node_id: null })
   if (!outputs.length) issues.push({ code: 'OUTPUT_MISSING', message: '至少需要一个音频输出或文本输出节点', node_id: null })
   if (value.nodes.length > MAX_WORKFLOW_NODES) issues.push({ code: 'TOO_MANY_NODES', message: `节点数不能超过 ${MAX_WORKFLOW_NODES}`, node_id: null })
@@ -478,7 +483,7 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
 
   const ids = new Set<string>()
   const nodeTypes = new Map<string, NodeType>()
-  const supportedTypes = new Set<NodeType>(['audio_input', 'preprocess', 'asr', 'audio_output', 'text_output'])
+  const supportedTypes = new Set<NodeType>(registry.kinds.map((kind) => kind.type))
   for (const node of value.nodes) {
     if (ids.has(node.id)) {
       issues.push({ code: 'DUPLICATE_NODE', message: `节点 ID 重复：${node.id}`, node_id: node.id })
@@ -503,12 +508,12 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
     if (ids.has(edge.target)) incoming.get(edge.target)!.push(edge)
     const sourceType = nodeTypes.get(edge.source)
     const targetType = nodeTypes.get(edge.target)
-    if (sourceType && targetType && (!outputPortForNode(sourceType) || !inputPortForNode(targetType))) {
+    if (sourceType && targetType && (!outputPortForNode(sourceType, registry) || !inputPortForNode(targetType, registry))) {
       issues.push({ code: 'INVALID_DIRECTION', message: '节点方向不符合工作流端口规则', edge_id: edge.id })
     }
     if (edge.source === edge.target) issues.push({ code: 'SELF_LOOP', message: '节点不能连接到自身', edge_id: edge.id })
-    const expectedSourcePort = sourceType ? outputPortForNode(sourceType) : null
-    const expectedTargetPort = targetType ? inputPortForNode(targetType) : null
+    const expectedSourcePort = sourceType ? outputPortForNode(sourceType, registry) : null
+    const expectedTargetPort = targetType ? inputPortForNode(targetType, registry) : null
     if (expectedSourcePort && edge.source_port !== expectedSourcePort) {
       issues.push({ code: 'INVALID_PORT', message: `连线源端口必须是 ${expectedSourcePort}`, edge_id: edge.id })
     }
@@ -523,20 +528,17 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
   for (const node of value.nodes) {
     const inbound = incoming.get(node.id) || []
     const outbound = outgoing.get(node.id) || []
-    if (node.type === 'preprocess' && inbound.length !== 1) {
-      issues.push({ code: 'PREPROCESS_INPUT_COUNT', message: `预处理节点“${node.id}”需要恰好一条音频输入，当前为 ${inbound.length} 条`, node_id: node.id })
+    const definition = registry.kind(node.type)
+    if (definition && definition.requiredInbound !== inbound.length && !definition.terminal) {
+      issues.push({ code: 'NODE_INPUT_COUNT', message: `节点“${node.id}”需要 ${definition.requiredInbound} 条输入，当前为 ${inbound.length} 条`, node_id: node.id })
     }
-    if (node.type === 'asr' && inbound.length !== 1) {
-      issues.push({ code: 'ASR_INPUT_COUNT', message: `ASR 节点“${node.id}”需要恰好一条音频输入，当前为 ${inbound.length} 条`, node_id: node.id })
+    if (definition?.terminal && inbound.length !== definition.requiredInbound) {
+      issues.push({ code: 'NODE_INPUT_COUNT', message: `节点“${node.id}”需要 ${definition.requiredInbound} 条输入，当前为 ${inbound.length} 条`, node_id: node.id })
     }
-    if (isTerminalNode(node.type) && inbound.length !== 1) {
-      const kind = node.type === 'text_output' ? '文本输出' : '音频输出'
-      issues.push({ code: 'OUTPUT_INPUT_COUNT', message: `${kind}节点“${node.id}”需要恰好一条输入，当前为 ${inbound.length} 条`, node_id: node.id })
+    if (definition && definition.inputPorts.length === 0 && inbound.length) {
+      issues.push({ code: 'NODE_SOURCE_REQUIRED', message: `节点“${node.id}”不能有入边`, node_id: node.id })
     }
-    if (node.type === 'audio_input' && inbound.length) {
-      issues.push({ code: 'INPUT_SOURCE_REQUIRED', message: '音频输入节点不能有入边', node_id: node.id })
-    }
-    if (isTerminalNode(node.type) && outbound.length) {
+    if (isTerminalNode(node.type, registry) && outbound.length) {
       issues.push({ code: 'OUTPUT_SINK_REQUIRED', message: '输出节点不能有出边', node_id: node.id })
     }
     if (!inbound.length && !outbound.length) {
@@ -569,7 +571,7 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
     }
   }
   for (const node of value.nodes) {
-    if (!isTerminalNode(node.type) && !reachesOutput.has(node.id)) {
+    if (!isTerminalNode(node.type, registry) && !reachesOutput.has(node.id)) {
       issues.push({ code: 'OUTPUT_UNREACHABLE', message: `节点“${node.id}”无法到达任何终端输出`, node_id: node.id })
     }
   }
@@ -590,15 +592,12 @@ export function validateDraft(value: WorkflowDocumentInput): WorkflowIssue[] {
     issues.push({ code: 'CYCLE', message: '工作流不能包含循环连线', node_id: null })
   }
 
-  for (const node of value.nodes) issues.push(...validateNodeConfig(node))
+  for (const node of value.nodes) issues.push(...validateNodeConfig(node, registry))
   return issues
 }
 
-export function nextNodeId(type: NodeType, nodes: WorkflowNode[]): string {
-  const prefix = type === 'audio_input' ? 'input'
-    : type === 'preprocess' ? 'preprocess'
-      : type === 'asr' ? 'asr'
-        : type === 'text_output' ? 'text' : 'output'
+export function nextNodeId(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry): string {
+  const prefix = registry.kind(type)?.idPrefix || type
   let index = 1
   while (nodes.some((node) => node.id === `${prefix}-${index}`)) index += 1
   return `${prefix}-${index}`
@@ -610,20 +609,14 @@ export function nextEdgeId(edges: WorkflowEdge[]): string {
   return `edge-${index}`
 }
 
-export function nodeLabel(node: WorkflowNode): string {
-  if (node.type === 'audio_input') return '音频输入'
-  if (node.type === 'preprocess') return '音频预处理'
-  if (node.type === 'asr') return '语音识别'
-  if (node.type === 'text_output') return '文本输出'
-  return '音频输出'
+export function nodeLabel(node: WorkflowNode, registry: NodeRegistry): string {
+  return registry.label(node.type)
 }
 
-export function nextNodePosition(type: NodeType, nodes: WorkflowNode[]): WorkflowNode['position'] {
+export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry): WorkflowNode['position'] {
   const sameType = nodes.filter((node) => node.type === type)
-  const columnX = type === 'audio_input' ? 96
-    : type === 'preprocess' ? 286
-      : type === 'asr' ? 486
-        : sameType[0]?.position.x ?? (type === 'text_output' ? 686 : 500)
+  const definition = registry.kind(type)
+  const columnX = sameType[0]?.position.x ?? definition?.positionX ?? 500
   let candidateY = sameType.length
     ? Math.max(...sameType.map((node) => node.position.y)) + WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
     : nodes.find((node) => node.type === 'audio_input')?.position.y ?? 176
@@ -651,6 +644,10 @@ function isActiveRunStatus(status: RunStatus) {
 }
 
 export const useWorkflowStore = defineStore('workflow', () => {
+  const capabilities = ref<Awaited<ReturnType<typeof fetchCapabilities>> | null>(null)
+  const capabilitiesError = ref('')
+  const capabilitiesLoading = ref(false)
+  const registry = vueComputed(() => capabilities.value ? createNodeRegistry(capabilities.value) : null)
   const projectId = ref<string | null>(null)
   const audioId = ref<string | null>(null)
   const document = ref<WorkflowDocument | null>(null)
@@ -688,14 +685,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let stopped = true
 
-  const dirty = computed(() => savedSignature.value !== executionSignature(draft.value)
+  const dirty = computed(() => savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
     || (document.value?.nodes || []).some((node) => JSON.stringify(node.position) !== JSON.stringify(draft.value.nodes.find((item) => item.id === node.id)?.position)))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
-  const currentOutputNode = computed(() => selectedNode.value && isTerminalNode(selectedNode.value.type) ? selectedNode.value : null)
+  const currentOutputNode = computed(() => selectedNode.value && registry.value && isTerminalNode(selectedNode.value.type, registry.value) ? selectedNode.value : null)
   const runOutputs = computed(() => (run.value?.nodes || []).filter((node) => !!node.artifact))
-  const runMatchesDraft = computed(() => !!run.value
-    && executionSignature(run.value.workflow) === executionSignature(draft.value))
+  const runMatchesDraft = computed(() => !!run.value && !!registry.value
+    && executionSignature(run.value.workflow, registry.value) === executionSignature(draft.value, registry.value))
 
   function currentKey() { return { id: projectId.value, audioId: audioId.value } }
   function isCurrent(id: string | null, aid: string | null, token: number) {
@@ -782,6 +779,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
+  async function loadCapabilities() {
+    if (capabilities.value || capabilitiesLoading.value) return
+    capabilitiesLoading.value = true
+    capabilitiesError.value = ''
+    try {
+      const value = await fetchCapabilities()
+      if (stopped) return
+      capabilities.value = value
+    } catch (reason) {
+      capabilitiesError.value = reason instanceof Error ? reason.message : '能力目录读取失败，请检查后端服务后重试。'
+    } finally {
+      capabilitiesLoading.value = false
+    }
+  }
+
   async function load(id: string, aid: string) {
     stop()
     projectId.value = id
@@ -800,19 +812,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     notice.value = ''
     validationIssues.value = []
     document.value = null
-    draft.value = createDefaultWorkflow()
+    draft.value = { nodes: [], edges: [] }
     savedSignature.value = ''
     selectedNodeId.value = null
     clearHistoryState()
     runError.value = ''
     try {
+      await loadCapabilities()
+      if (!isCurrent(id, aid, token)) return
+      if (!capabilities.value || !registry.value) throw new Error(capabilitiesError.value || '能力目录不可用，节点工作流已停止加载。')
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
       const value = readWorkflow(await response.json())
       if (!isCurrent(id, aid, token)) return
       document.value = value
       setDraft(value)
-      savedSignature.value = executionSignature(value)
+      savedSignature.value = executionSignature(value, registry.value || undefined)
       selectedNodeId.value = draft.value.nodes[0]?.id || null
       zoom.value = 1
       pan.value = { x: 0, y: 0 }
@@ -830,6 +845,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const token = sessionGeneration
     const sequence = ++saveSequence
     const draftSnapshot = cloneDocument(draft.value)
+    if (!registry.value) { error.value = '能力目录不可用，不能保存节点工作流。'; return null }
     const body = { expected_revision: document.value?.revision ?? 1, nodes: draftSnapshot.nodes, edges: draftSnapshot.edges }
     saving.value = true
     error.value = ''
@@ -852,7 +868,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       if (!isCurrent(id, aid, token) || sequence !== saveSequence) return null
       document.value = value
       setDraft(value)
-      savedSignature.value = executionSignature(value)
+      savedSignature.value = executionSignature(value, registry.value || undefined)
       validationIssues.value = []
       notice.value = '节点工作流已保存。'
       return value
@@ -1102,26 +1118,24 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function addNode(type: NodeType) {
-    if (stopped || loading.value || activeRun.value || draft.value.nodes.length >= MAX_WORKFLOW_NODES) return
+    if (stopped || loading.value || activeRun.value || !registry.value || draft.value.nodes.length >= MAX_WORKFLOW_NODES) return
     const nodes = draft.value.nodes
-    if (type === 'audio_input' && nodes.some((node) => node.type === 'audio_input')) {
-      error.value = '工作流只允许一个音频输入节点。'
+    const definition = registry.value.kind(type)
+    if (!definition) { error.value = `能力目录未注册节点类型：${type}`; return }
+    if (definition.maxInstances !== null && nodes.filter((node) => node.type === type).length >= definition.maxInstances) {
+      error.value = definition.maxInstances === 1 ? `节点“${definition.label}”最多只能添加一个。` : `节点“${definition.label}”最多添加 ${definition.maxInstances} 个。`
       return
     }
-    const id = nextNodeId(type, nodes)
+    const id = nextNodeId(type, nodes, registry.value)
+    const standardConfig = type === 'preprocess' ? { ...defaultPreprocessConfig() }
+      : type === 'asr' ? { ...defaultAsrConfig() }
+        : type === 'text_output' ? { ...defaultTextOutputConfig() }
+          : type === 'audio_output' ? { filename_stem: 'audio-copy' } : null
     const node: WorkflowNode = {
       id,
       type,
-      config: type === 'audio_input'
-        ? {}
-        : type === 'preprocess'
-          ? { ...defaultPreprocessConfig() }
-          : type === 'asr'
-            ? { ...defaultAsrConfig() }
-            : type === 'text_output'
-              ? { ...defaultTextOutputConfig() }
-              : { filename_stem: 'audio-copy' },
-      position: nextNodePosition(type, nodes),
+      config: standardConfig || registry.value.createDefaultConfig(type),
+      position: nextNodePosition(type, nodes, registry.value),
     }
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
@@ -1155,8 +1169,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (stopped || activeRun.value) return false
     const from = draft.value.nodes.find((node) => node.id === source)
     const to = draft.value.nodes.find((node) => node.id === target)
-    const sourcePort = from ? outputPortForNode(from.type) : null
-    const targetPort = to ? inputPortForNode(to.type) : null
+    if (!registry.value) return false
+    const sourcePort = from ? outputPortForNode(from.type, registry.value) : null
+    const targetPort = to ? inputPortForNode(to.type, registry.value) : null
     if (!from || !to || !sourcePort || !targetPort) {
       error.value = '源节点没有可用输出端口，或目标节点没有可用输入端口。'
       return false
@@ -1171,6 +1186,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
     const exists = draft.value.edges.some((edge) => edge.source === source && edge.target === target)
     if (exists) return false
+    if (!registry.value) { error.value = '能力目录不可用，不能连接受限的工作流。'; return false }
     if (draft.value.edges.length >= MAX_WORKFLOW_EDGES) {
       error.value = `连接数不能超过 ${MAX_WORKFLOW_EDGES}，请先删除一条现有连线。`
       return false
@@ -1225,7 +1241,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function discardDraft() {
     if (document.value) {
       setDraft(document.value)
-      savedSignature.value = executionSignature(document.value)
+      savedSignature.value = executionSignature(document.value, registry.value || undefined)
     }
     discardSelection()
     validationIssues.value = []
@@ -1239,7 +1255,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    projectId, audioId, document, draft, loading, saving, validating, actionLoading, error, notice,
+    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNode, currentOutputNode, activeRunId, run, activeRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty,
     runMatchesDraft,

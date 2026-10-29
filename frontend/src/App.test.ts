@@ -28,6 +28,16 @@ async function mount(policyAvailable = true) {
   return { store: useProjectsStore(pinia), detail: useProjectDetailStore(pinia) }
 }
 
+async function chooseLanguages(source = 'ja', target = 'zh-CN') {
+  const sourceInput = root!.querySelector<HTMLInputElement>('#source-language')!
+  sourceInput.value = source
+  sourceInput.dispatchEvent(new Event('input', { bubbles: true }))
+  const targetInput = root!.querySelector<HTMLInputElement>('#target-language')!
+  targetInput.value = target
+  targetInput.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+}
+
 async function select(files: File[]) {
   const picker = root!.querySelector<HTMLInputElement>('input[type=file]')!
   Object.defineProperty(picker, 'files', { configurable: true, value: files })
@@ -61,6 +71,7 @@ describe('upload view integration', () => {
     vi.spyOn(store, 'createProject').mockImplementation(() => new Promise<Project>((resolve) => { release = resolve }))
     const append = vi.spyOn(store, 'addAudio').mockImplementation(() => new Promise((resolve) => { release = () => resolve({ id: 'aud_second', source: project.source }) }))
     await select([new File(['x'], 'first.wav'), new File(['y'], 'second.wav')])
+    await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await nextTick()
     const unload = new Event('beforeunload', { cancelable: true })
@@ -85,11 +96,26 @@ describe('upload view integration', () => {
     expect(finishedUnload.defaultPrevented).toBe(false)
   })
 
+  it('requires explicit source and target languages before creating a project, while accepting custom codes', async () => {
+    const { store } = await mount()
+    const create = vi.spyOn(store, 'createProject').mockResolvedValue(project)
+    await select([new File(['x'], 'voice.wav')])
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await settle()
+    expect(create).not.toHaveBeenCalled()
+    expect(root!.textContent).toContain('请选择或输入源语言')
+    await chooseLanguages('xx-CUSTOM', 'zh-CN')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await settle()
+    expect(create.mock.calls[0].slice(1)).toEqual(['voice', 'xx-CUSTOM', 'mock', 'zh-CN'])
+  })
+
   it('opens a successful single file in the existing workspace and retains its queue on return', async () => {
     const { store, detail } = await mount()
     vi.spyOn(store, 'createProject').mockResolvedValue(project)
     vi.spyOn(detail, 'load').mockResolvedValue(undefined)
     await select([new File(['x'], 'voice.wav')])
+    await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
     expect(detail.load).toHaveBeenCalledWith('created-project', undefined)
@@ -106,13 +132,14 @@ describe('upload view integration', () => {
     const append = vi.spyOn(store, 'addAudio').mockResolvedValue({ id: 'aud_second', source: project.source })
     vi.spyOn(detail, 'load').mockResolvedValue(undefined)
     await select([new File(['x'], 'first.wav'), new File(['y'], 'second.wav')])
+    await chooseLanguages()
     const input = root!.querySelector<HTMLInputElement>('#project-name')!
     expect(input.disabled).toBe(false)
     input.value = 'Shared album'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
-    expect(create.mock.calls[0].slice(1)).toEqual(['Shared album', 'ja'])
+    expect(create.mock.calls[0].slice(1)).toEqual(['Shared album', 'ja', 'mock', 'zh-CN'])
     expect(create).toHaveBeenCalledTimes(1)
     expect(append.mock.calls[0][0]).toBe(project.id)
     expect(detail.load).toHaveBeenCalledTimes(1)
@@ -125,6 +152,7 @@ describe('upload view integration', () => {
     const append = vi.spyOn(store, 'addAudio').mockResolvedValue({ id: 'unused', source: project.source })
     vi.spyOn(detail, 'load').mockResolvedValue(undefined)
     await select([new File(['x'], 'first.wav')])
+    await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
     root!.querySelector<HTMLAnchorElement>('.brand')!.click()
@@ -136,6 +164,7 @@ describe('upload view integration', () => {
     expect(root!.querySelector<HTMLInputElement>('#project-name')!.disabled).toBe(false)
     expect(root!.querySelector('h1')!.textContent).toBe('新建项目')
     await select([new File(['y'], 'new.wav')])
+    await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
     expect(create).toHaveBeenCalledTimes(2)
@@ -171,6 +200,7 @@ describe('upload view integration', () => {
     vi.spyOn(detail, 'load').mockImplementation(async () => { detail.project = project })
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     await select([new File(['x'], 'voice.wav')])
+    await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
     Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '添加音频')!.click()
@@ -195,6 +225,7 @@ describe('upload view integration', () => {
     const append = vi.spyOn(store, 'addAudio').mockRejectedValueOnce(new Error('文件格式不支持')).mockResolvedValueOnce({ id: 'aud_retry', source: project.source })
     vi.spyOn(detail, 'load').mockResolvedValue(undefined)
     await select([new File(['x'], 'first.wav'), new File(['y'], 'second.wav'), new File(['z'], 'invalid.exe')])
+    await chooseLanguages()
     expect(root!.textContent).toContain('2 个有效 / 3 个已选')
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
@@ -227,6 +258,10 @@ describe('workflow navigation guards', () => {
   async function mountWorkflow() {
     const firstAudio = { id: 'aud_primary', source: project.source }
     const secondAudio = { id: 'aud_second', source: { ...project.source, original_name: 'second.wav' } }
+    const capabilities = { schema_version: '1.0', workflow: { nodes: [
+      { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
+      { type: 'audio_output', label: '音频输出', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] }, position_x: 420 },
+    ], ports: ['audio'] }, asr: { backends: ['qwen3'], status: 'available' }, export: { formats: [{ id: 'srt', label: 'SRT' }], naming_modes: [{ id: 'language', label: '按语言命名' }] } }
     const workflowDocument = {
       schema_version: '1.0', project_id: project.id, revision: 1, workflow_revision: 1,
       updated_at: '2026-01-01T00:00:00Z',
@@ -239,7 +274,8 @@ describe('workflow navigation guards', () => {
     vi.stubGlobal('fetch', vi.fn((request: string) => {
       const path = String(request)
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 1024 }))
-      if (path.endsWith('/projects')) return Promise.resolve(response({ items: [project] }))
+      if (path.endsWith('/projects?limit=20&offset=0')) return Promise.resolve(response({ items: [project], total: 1, limit: 20, offset: 0 }))
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(capabilities))
       if (path.endsWith('/workflow/validate')) return Promise.resolve(response({ valid: true, errors: [] }))
       if (path.endsWith('/workflow-runs?limit=30&offset=0')) return Promise.resolve(response({ items: [], total: 0, limit: 30, offset: 0 }))
       if (path.endsWith('/workflow')) return Promise.resolve(response(workflowDocument))

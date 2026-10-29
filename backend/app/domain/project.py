@@ -3,6 +3,8 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .schema import require_schema_version
+
 
 class SourceAsset(BaseModel):
     path: str
@@ -56,6 +58,11 @@ class Project(BaseModel):
     preset: str = "mock"
     metadata: dict[str, object] = Field(default_factory=dict)
     audios: list[AudioAsset] = Field(default_factory=list)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "project")
 
     @model_validator(mode="after")
     def normalize_audios(self):

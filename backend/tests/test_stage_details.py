@@ -256,7 +256,12 @@ async def test_result_symlink_cannot_escape_the_audio(tmp_path):
                 pid, extra.load_job(pid).stages[stage].artifact
             )
             primary_path.unlink()
-            primary_path.symlink_to(extra_path)
+            try:
+                primary_path.symlink_to(extra_path)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == 1314:
+                    pytest.skip("Windows account cannot create symlinks for this security test")
+                raise
             value = (await client.get(base + f"/audios/{PRIMARY_AUDIO_ID}/stages/{stage}")).json()
             assert value["result"] is None
             assert value["result_error"]["code"] == "STAGE_RESULT_NOT_FOUND"

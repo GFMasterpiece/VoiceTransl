@@ -1,4 +1,4 @@
-from .crispasr import SUPPORTED_BACKENDS, CrispASRError, CrispASRProvider
+from .crispasr import CrispASRError, CrispASRProvider
 from .ffmpeg import FFmpegPreprocessProvider, PreprocessError
 from .mock import (
     MockAlignerProvider,
@@ -13,7 +13,6 @@ __all__ = [
     "FFmpegPreprocessProvider",
     "CrispASRError",
     "CrispASRProvider",
-    "SUPPORTED_BACKENDS",
     "MockAlignerProvider",
     "MockASRProvider",
     "MockPreprocessProvider",

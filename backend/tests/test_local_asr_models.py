@@ -34,7 +34,13 @@ def gguf(architecture="qwen3asr", extra=()):
 def fake_cli(path: Path, *, version="CrispASR v0.8.38", backend_command=None):
     if backend_command is None:
         compiled = json.dumps(
-            {"backends": [{"name": name} for name in ("qwen3", "whisper", "not-supported")]}
+            {
+                "backends": [
+                    {"name": "qwen3", "caps": ["timestamps-ctc", "token-confidence"]},
+                    {"name": "whisper", "caps": ["timestamps-native", "word-timestamps"]},
+                    {"name": "not-supported", "caps": ["tts"]},
+                ]
+            }
         )
         backend_command = f"printf '%s' '{compiled}'"
     path.write_text(
@@ -100,6 +106,7 @@ def test_catalog_contract_and_fixed_cli_commands_without_inference(runtime):
         "model_dir",
         "restart_required",
         "backends",
+        "backend_details",
         "items",
         "truncated",
         "warnings",
@@ -109,6 +116,11 @@ def test_catalog_contract_and_fixed_cli_commands_without_inference(runtime):
     assert body["model_dir"] == "./crispasr/models"
     assert not body["restart_required"] and not body["truncated"]
     assert body["backends"] == ["qwen3", "whisper"]
+    assert {item["id"] for item in body["backend_details"]} == {
+        "qwen3",
+        "whisper",
+        "not-supported",
+    }
     assert body["items"] == [
         {
             "model": "model.gguf",
@@ -276,15 +288,24 @@ def test_failed_backend_diagnostics_disable_items_without_raw_output(runtime, co
     assert_private(body, runtime)
 
 
-def test_valid_compiled_backends_intersection_does_not_enable_missing_qwen3(runtime):
+def test_protocol_compatible_backend_is_discovered_without_static_whitelist(runtime):
     (runtime["models"] / "model.gguf").write_bytes(gguf()[0])
     fake_cli(
         runtime["binary"],
-        backend_command='printf \'%s\' \'{"backends":[{"name":"whisper"},{"name":"not-supported"}]}\'',
+        backend_command=(
+            "printf '%s' '{\"backends\":["
+            '{"name":"future-asr","caps":["timestamps-native"]},'
+            '{"name":"not-supported","caps":["tts"]}]}\''
+        ),
     )
     body = runtime["client"].get(URL).json()
-    assert body["executable"]["ok"] and body["backends"] == ["whisper"]
-    assert not body["items"][0]["selectable"] and "未编译" in body["items"][0]["reason"]
+    assert body["executable"]["ok"]
+    assert body["backends"] == ["future-asr"]
+    details = {item["id"]: item for item in body["backend_details"]}
+    assert details["future-asr"]["task"] == "asr"
+    assert details["not-supported"]["task"] == "other"
+    assert not body["items"][0]["selectable"]
+    assert "未编译" in body["items"][0]["reason"]
 
 
 def test_saved_directory_and_executable_never_replace_active_scan_until_restart(runtime):
@@ -515,3 +536,23 @@ async def test_cancelled_backend_probe_kills_process_and_releases_lock(runtime):
     assert processes[0].returncode is not None and not service.lock.locked()
     with pytest.raises(ProcessLookupError):
         os.kill(processes[0].pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_compiled_backends_are_classified_by_capabilities_not_static_names(runtime):
+    (runtime["models"] / "model.gguf").write_bytes(gguf()[0])
+    fake_cli(
+        runtime["binary"],
+        backend_command=(
+            "printf '%s' '{\"backends\":["
+            '{"name":"whisper","caps":["timestamps-native"]},'
+            '{"name":"future-asr","caps":["token-confidence"]},'
+            '{"name":"not-supported","caps":["tts"]}]}\''
+        ),
+    )
+    body = runtime["client"].get(URL).json()
+    assert body["executable"]["ok"]
+    assert body["backends"] == ["future-asr", "whisper"]
+    details = {item["id"]: item for item in body["backend_details"]}
+    assert details["future-asr"]["task"] == "asr"
+    assert details["not-supported"]["task"] == "other"

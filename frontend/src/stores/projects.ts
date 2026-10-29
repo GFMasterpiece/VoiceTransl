@@ -1,9 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 export interface Audio {
   id: string
   source: Project['source']
+}
+
+export interface ProjectPage {
+  items: Project[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface Project {
@@ -40,26 +47,41 @@ async function parseError(response: Response): Promise<Error> {
 
 export const useProjectsStore = defineStore('projects', () => {
   const projects = ref<Project[]>([])
+  const total = ref(0)
+  const limit = ref(20)
+  const offset = ref(0)
   const loading = ref(false)
+  let fetchGeneration = 0
   const creating = ref(false)
   const error = ref('')
 
-  async function fetchProjects() {
+  async function fetchProjects(nextOffset = offset.value) {
+    const requestedOffset = Number.isInteger(nextOffset) && nextOffset >= 0 ? nextOffset : 0
+    const generation = ++fetchGeneration
     loading.value = true
     error.value = ''
     try {
-      const response = await fetch(`${API_BASE_URL}/projects`)
+      const response = await fetch(`${API_BASE_URL}/projects?limit=${limit.value}&offset=${requestedOffset}`)
       if (!response.ok) throw await parseError(response)
-      const payload = (await response.json()) as { items: Project[] }
-      projects.value = payload.items
+      const payload = (await response.json()) as { items?: unknown; total?: unknown; limit?: unknown; offset?: unknown }
+      if (!Array.isArray(payload.items) || !Number.isInteger(payload.total) || Number(payload.total) < 0
+        || !Number.isInteger(payload.limit) || Number(payload.limit) < 1 || !Number.isInteger(payload.offset) || Number(payload.offset) < 0) {
+        throw new Error('项目列表响应不完整，请检查后端版本后重试。')
+      }
+      if (generation !== fetchGeneration) return
+      projects.value = payload.items as Project[]
+      total.value = Number(payload.total)
+      limit.value = Number(payload.limit)
+      offset.value = Number(payload.offset)
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '项目列表加载失败'
+      if (generation === fetchGeneration) error.value = reason instanceof Error ? reason.message : '项目列表加载失败'
     } finally {
-      loading.value = false
+      if (generation === fetchGeneration) loading.value = false
     }
   }
 
-  async function createProject(file: File, name: string, language: string, preset = 'mock') {
+  async function createProject(file: File, name: string, language: string, preset = 'mock', targetLanguage?: string) {
+    ++fetchGeneration
     creating.value = true
     error.value = ''
     try {
@@ -67,12 +89,15 @@ export const useProjectsStore = defineStore('projects', () => {
       form.append('file', file)
       if (name.trim()) form.append('name', name.trim())
       form.append('source_language', language)
+      if (targetLanguage) form.append('target_language', targetLanguage)
       form.append('preset', preset)
 
       const response = await fetch(`${API_BASE_URL}/projects`, { method: 'POST', body: form })
       if (!response.ok) throw await parseError(response)
       const payload = (await response.json()) as { project: Project }
-      projects.value = [payload.project, ...projects.value]
+      total.value += 1
+      // Server ordering is authoritative; refresh instead of locally guessing order.
+      await fetchProjects(offset.value)
       return payload.project
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : '项目创建失败'
@@ -83,10 +108,17 @@ export const useProjectsStore = defineStore('projects', () => {
   }
 
   async function deleteProject(id: string) {
+    ++fetchGeneration
     error.value = ''
     const response = await fetch(`${API_BASE_URL}/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (!response.ok) throw await parseError(response)
+    const before = projects.value.length
     projects.value = projects.value.filter((project) => project.id !== id)
+    const removed = before - projects.value.length
+    total.value = Math.max(0, total.value - removed)
+    if (!removed) return
+    if (!projects.value.length && offset.value > 0) await fetchProjects(Math.max(0, offset.value - limit.value))
+    else if (total.value > offset.value + projects.value.length) await fetchProjects(offset.value)
   }
 
   async function addAudio(projectId: string, file: File, language: string) {
@@ -101,5 +133,10 @@ export const useProjectsStore = defineStore('projects', () => {
     return payload.audio
   }
 
-  return { projects, loading, creating, error, fetchProjects, createProject, addAudio, deleteProject }
+  const pageCount = computed(() => Math.max(1, Math.ceil(total.value / limit.value)))
+  const hasPrevious = computed(() => offset.value > 0)
+  const hasNext = computed(() => offset.value + limit.value < total.value)
+  async function previousPage() { await fetchProjects(Math.max(0, offset.value - limit.value)) }
+  async function nextPage() { if (hasNext.value) await fetchProjects(offset.value + limit.value) }
+  return { projects, total, limit, offset, pageCount, hasPrevious, hasNext, loading, creating, error, fetchProjects, previousPage, nextPage, createProject, addAudio, deleteProject }
 })

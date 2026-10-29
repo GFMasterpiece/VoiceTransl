@@ -48,7 +48,7 @@ describe('upload queue', () => {
     const { queue, append } = queueWith(create)
     append.mockRejectedValueOnce(new Error('文件过大')).mockResolvedValueOnce({ id: 'aud_third' }).mockResolvedValueOnce({ id: 'aud_retry' })
     queue.add([file('first.wav'), file('second.wav'), file('third.wav')])
-    const options = { name: 'Shared project', language: 'ja' }
+    const options = { name: 'Shared project', language: 'ja', targetLanguage: 'zh-CN' }
     const pending = queue.submit(options)
     options.language = 'en'
     expect(create).toHaveBeenCalledTimes(1)
@@ -56,11 +56,11 @@ describe('upload queue', () => {
     expect(queue.pendingCount.value).toBe(3)
     release!({ id: 'one-project' })
     await pending
-    expect(create.mock.calls[0].slice(1)).toEqual(['Shared project', 'ja'])
+    expect(create.mock.calls[0].slice(1)).toEqual(['Shared project', 'ja', 'zh-CN'])
     expect(append.mock.calls.map((call) => [call[0], call[2]])).toEqual([['one-project', 'ja'], ['one-project', 'ja']])
     expect(queue.items.value.map((item) => item.status)).toEqual(['created', 'failed', 'created'])
     expect(queue.items.value[1].error).toContain('文件过大')
-    await queue.submit({ name: 'Later name', language: 'en' })
+    await queue.submit({ name: 'Later name', language: 'en', targetLanguage: 'zh-CN' })
     await queue.retry(queue.items.value[1].id)
     expect(create).toHaveBeenCalledTimes(1)
     expect(append).toHaveBeenCalledTimes(3)
@@ -75,7 +75,7 @@ describe('upload queue', () => {
   it('keeps the shared name when the first file fails and the next creates the project', async () => {
     const { queue, create, append } = queueWith(vi.fn().mockRejectedValueOnce(new Error('failed')).mockResolvedValueOnce({ id: 'parent' }))
     queue.add([file('first.wav'), file('second.wav')])
-    await queue.submit({ name: 'Custom project', language: 'en' })
+    await queue.submit({ name: 'Custom project', language: 'en', targetLanguage: 'zh-CN' })
     expect(create.mock.calls.map((call) => call[1])).toEqual(['Custom project', 'Custom project'])
     await queue.retry(queue.items.value[0].id)
     expect(append.mock.calls[0][0]).toBe('parent')
@@ -87,13 +87,13 @@ describe('upload queue', () => {
     expect(queue.setTarget('existing', 'Existing project')).toBe(true)
     queue.add([file('more.wav')])
     expect(queue.setTarget('other', 'Other project')).toBe(false)
-    await queue.submit({ name: 'Existing project', language: 'ko' })
+    await queue.submit({ name: 'Existing project', language: 'ko', targetLanguage: 'zh-CN' })
     expect(create).not.toHaveBeenCalled()
     expect(append.mock.calls[0][0]).toBe('existing')
     queue.clear()
     expect(queue.targetProjectId.value).toBeNull()
     queue.add([file('new.wav')])
-    await queue.submit({ name: '', language: 'ja' })
+    await queue.submit({ name: '', language: 'ja', targetLanguage: 'zh-CN' })
     expect(create.mock.calls[0][1]).toBe('new')
   })
 
@@ -102,13 +102,13 @@ describe('upload queue', () => {
     const create = vi.fn(() => new Promise<{ id: string }>((resolve) => { release = resolve }))
     const { queue } = queueWith(create)
     queue.add([file('voice.wav')])
-    const pending = queue.submit({ name: 'Custom voice', language: 'en' })
+    const pending = queue.submit({ name: 'Custom voice', language: 'en', targetLanguage: 'zh-CN' })
     expect(queue.add([file('extra.wav')])).toBe(false)
     expect(queue.remove(queue.items.value[0].id)).toBe(false)
     expect(queue.clear()).toBe(false)
     expect(queue.setPolicy(policy)).toBe(false)
     expect(queue.setTarget('other', 'Other')).toBe(false)
-    await queue.submit({ name: 'Changed', language: 'ja' })
+    await queue.submit({ name: 'Changed', language: 'ja', targetLanguage: 'zh-CN' })
     expect(create).toHaveBeenCalledTimes(1)
     release!({ id: 'parent' })
     await pending
@@ -116,13 +116,54 @@ describe('upload queue', () => {
     expect(queue.busy.value).toBe(false)
   })
 
+  it('retries a failed upload with its original source and target language snapshot', async () => {
+    const create = vi.fn().mockRejectedValueOnce(new Error('first failed')).mockResolvedValueOnce({ id: 'created', audios: [{ id: 'aud_primary' }] })
+    const append = vi.fn()
+    const queue = useUploadQueue(create, append)
+    queue.setPolicy({ allowed_extensions: ['wav'], max_upload_bytes: 1024 })
+    queue.add([new File(['wav'], 'voice.wav')])
+    await queue.submit({ name: 'snapshot', language: 'ja', targetLanguage: 'zh-CN' })
+    const failed = queue.items.value[0]
+    expect(failed.snapshot).toEqual({ name: 'snapshot', language: 'ja', targetLanguage: 'zh-CN' })
+    // User edits form values before retry; the queued snapshot must win.
+    await queue.retry(failed.id)
+    expect(create.mock.calls[1].slice(1)).toEqual(['snapshot', 'ja', 'zh-CN'])
+  })
+
+  it('rejects identical or malformed source and target languages before uploading', async () => {
+    const create = vi.fn()
+    const append = vi.fn()
+    const queue = useUploadQueue(create, append)
+    queue.setPolicy({ allowed_extensions: ['wav'], max_upload_bytes: 1024 })
+    queue.add([new File(['wav'], 'voice.wav')])
+    await queue.submit({ name: 'languages', language: 'ja', targetLanguage: 'ja' })
+    expect(queue.feedback.value).toContain('不能相同')
+    expect(create).not.toHaveBeenCalled()
+    await queue.submit({ name: 'languages', language: ' ja', targetLanguage: 'zh-CN' })
+    expect(queue.feedback.value).toContain('源语言')
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('appends to an existing project without requiring a target language', async () => {
+    const create = vi.fn()
+    const append = vi.fn().mockResolvedValue({ id: 'aud_extra' })
+    const queue = useUploadQueue(create, append)
+    queue.setPolicy({ allowed_extensions: ['wav'], max_upload_bytes: 1024 })
+    queue.setTarget('parent', 'Existing')
+    queue.add([new File(['wav'], 'extra.wav')])
+    await queue.submit({ name: 'Existing', language: 'fr-CA', targetLanguage: '' })
+    expect(append).toHaveBeenCalledWith('parent', expect.any(File), 'fr-CA')
+    expect(create).not.toHaveBeenCalled()
+    expect(queue.feedback.value).toBe('')
+  })
+
   it('excludes invalid files while applying the user project name to valid files', async () => {
     const { queue, create } = queueWith()
     queue.add([file('good.wav'), file('bad.exe'), file('remove.wav')])
     expect(queue.validCount.value).toBe(2)
     queue.remove(queue.items.value[2].id)
-    await queue.submit({ name: 'Project name', language: 'ko' })
-    expect(create.mock.calls[0].slice(1)).toEqual(['Project name', 'ko'])
+    await queue.submit({ name: 'Project name', language: 'ko', targetLanguage: 'zh-CN' })
+    expect(create.mock.calls[0].slice(1)).toEqual(['Project name', 'ko', 'zh-CN'])
     expect(queue.items.value[1].status).toBe('invalid')
   })
 
@@ -140,7 +181,7 @@ describe('upload queue', () => {
   it('retains recovery instructions and releases the lock after connection failure', async () => {
     const { queue } = queueWith(vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
     queue.add([file('voice.wav')])
-    await queue.submit({ name: '', language: 'en' })
+    await queue.submit({ name: '', language: 'en', targetLanguage: 'zh-CN' })
     expect(queue.items.value[0].error).toContain('检查服务和网络')
     expect(queue.busy.value).toBe(false)
   })

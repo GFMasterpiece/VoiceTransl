@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
+import json
 import os
 import shutil
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -27,6 +30,7 @@ from ..domain import (
     workflow_semantic_digest,
 )
 from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
+from ..domain.schema import validate_schema_payload
 from .atomic import atomic_write_bytes, atomic_write_json, atomic_write_text
 
 
@@ -85,7 +89,7 @@ class FileSystemProjectStore:
         path = self._workflow_path(project_id)
         if not path.exists():
             return default_workflow(project_id, project.updated_at)
-        document = WorkflowDocument.model_validate_json(path.read_text(encoding="utf-8"))
+        document = WorkflowDocument.model_validate(self._load_json(path, "workflow"))
         if document.project_id != project_id:
             raise ValueError("invalid workflow ownership")
         self._repair_workflow_history(document)
@@ -148,9 +152,7 @@ class FileSystemProjectStore:
         if history_path.is_symlink():
             raise ValueError("workflow revision history must not be a symlink")
         if history_path.exists():
-            existing = WorkflowDocument.model_validate_json(
-                history_path.read_text(encoding="utf-8")
-            )
+            existing = WorkflowDocument.model_validate(self._load_json(history_path, "workflow"))
             if existing.model_dump(exclude={"updated_at"}) != (
                 updated.model_dump(exclude={"updated_at"})
             ):
@@ -225,7 +227,7 @@ class FileSystemProjectStore:
         path = directory / "run.json"
         if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(run_id)
-        run = WorkflowRun.model_validate_json(path.read_text(encoding="utf-8"))
+        run = WorkflowRun.model_validate(self._load_json(path, "workflow run"))
         if run.project_id != project_id or run.audio_id != audio_id or run.id != run_id:
             raise ValueError("invalid workflow run ownership")
         return run
@@ -423,9 +425,15 @@ class FileSystemProjectStore:
         return child
 
     async def create_project_from_upload(
-        self, project: Project, job: Job, upload, max_bytes: int
+        self,
+        project: Project,
+        job: Job,
+        upload,
+        max_bytes: int,
+        *,
+        config: PipelineConfig | None = None,
     ) -> tuple[Project, Job]:
-        """Publish a complete project with one atomic rename."""
+        """Publish project metadata and optional initial config atomically."""
         final_dir = self.project_dir(project.id)
         if final_dir.exists():
             raise FileExistsError(project.id)
@@ -454,6 +462,8 @@ class FileSystemProjectStore:
             project.source.size_bytes = total
             atomic_write_json(temp_dir / "project.json", project.model_dump(mode="json"))
             atomic_write_json(temp_dir / "job.json", job.model_dump(mode="json"))
+            if config is not None:
+                atomic_write_json(temp_dir / "config.json", config.model_dump(mode="json"))
             if final_dir.exists():
                 raise FileExistsError(project.id)
             os.replace(temp_dir, final_dir)
@@ -482,10 +492,18 @@ class FileSystemProjectStore:
         shutil.rmtree(directory)
 
     def list_projects(self) -> list[Project]:
-        items = []
-        for _, project in self._published_projects():
-            items.append(project)
-        return sorted(items, key=lambda x: x.updated_at, reverse=True)[:200]
+        """Return the legacy full listing with its existing 200-item cap."""
+        return self.list_projects_page(limit=200, offset=0)[0]
+
+    def list_projects_page(self, *, limit: int, offset: int) -> tuple[list[Project], int]:
+        """Return a stable newest-first project page and the unpaged total."""
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        items = [project for _, project in self._published_projects()]
+        items.sort(key=lambda project: (project.updated_at, project.id), reverse=True)
+        return items[offset : offset + limit], len(items)
 
     def _published_projects(self):
         """Yield only complete, named project directories after a restart."""
@@ -496,17 +514,23 @@ class FileSystemProjectStore:
             if metadata.is_symlink() or not metadata.is_file():
                 continue
             try:
-                project = Project.model_validate_json(metadata.read_text(encoding="utf-8"))
+                project = Project.model_validate(self._load_json(metadata, "project"))
                 if project.id == p.name:
                     yield p, project
             except Exception:
                 continue
 
+    @staticmethod
+    def _load_json(path: Path, document: str) -> object:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        validate_schema_payload(payload, document)
+        return payload
+
     def load_project(self, project_id: str) -> Project:
         path = self.project_dir(project_id) / "project.json"
         if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(project_id)
-        return Project.model_validate_json(path.read_text(encoding="utf-8"))
+        return Project.model_validate(self._load_json(path, "project"))
 
     def save_project(self, project: Project) -> None:
         atomic_write_json(
@@ -517,7 +541,7 @@ class FileSystemProjectStore:
         path = self.project_dir(project_id) / "job.json"
         if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(project_id)
-        job = Job.model_validate_json(path.read_text(encoding="utf-8"))
+        job = Job.model_validate(self._load_json(path, "job"))
         if job.project_id != project_id or job.audio_id != PRIMARY_AUDIO_ID:
             raise ValueError("invalid primary job ownership")
         return job
@@ -545,9 +569,13 @@ class FileSystemProjectStore:
         if not path.exists():
             project = self.load_project(project_id)
             return default_pipeline_config(project.source.language)
-        return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+        return PipelineConfig.model_validate(self._load_json(path, "pipeline config"))
 
     def save_pipeline_config(self, project_id: str, value: PipelineConfig) -> None:
+        self.save_initial_pipeline_config(project_id, value)
+
+    def save_initial_pipeline_config(self, project_id: str, value: PipelineConfig) -> None:
+        """Persist the initial config without requiring a second metadata write."""
         atomic_write_json(
             self.project_dir(project_id) / "config.json", value.model_dump(mode="json")
         )
@@ -565,7 +593,9 @@ class FileSystemProjectStore:
         path = self._provider_profiles_path()
         if not path.exists():
             return []
-        document = ProviderProfilesDocument.model_validate_json(path.read_text(encoding="utf-8"))
+        document = ProviderProfilesDocument.model_validate(
+            self._load_json(path, "provider profiles")
+        )
         return [profile.model_copy(deep=True) for profile in document.profiles]
 
     def save_provider_profiles(self, profiles: list[ProviderProfile]) -> None:
@@ -595,7 +625,7 @@ class FileSystemProjectStore:
         if stage not in {"raw", "aligned", "translated"}:
             raise ValueError("invalid transcript stage")
         path = self._project_subdir(project_id, "transcript") / f"{stage}.json"
-        return Transcript.model_validate_json(path.read_text(encoding="utf-8"))
+        return Transcript.model_validate(self._load_json(path, "transcript"))
 
     def save_transcript(
         self, project_id: str, name: str, value: Transcript, *, overwrite: bool = False
@@ -605,7 +635,7 @@ class FileSystemProjectStore:
         path = self._project_subdir(project_id, "transcript") / f"{name}.json"
         if path.exists() and not overwrite:
             try:
-                existing = Transcript.model_validate_json(path.read_text(encoding="utf-8"))
+                existing = Transcript.model_validate(self._load_json(path, "transcript"))
             except Exception:
                 raise TranscriptProtectedError(f"transcript/{name}.json is protected")
             if existing.model_dump(exclude={"created_at"}) != value.model_dump(
@@ -677,18 +707,209 @@ class FileSystemProjectStore:
         self._touch_project(project_id)
         return path
 
+    def _direct_output_path(self, project_id: str, filename: str) -> Path:
+        """Return output/name without following its final component."""
+        from ..exporters import validate_export_filename
+
+        validate_export_filename(filename)
+        output = self._project_subdir(project_id, "output")
+        candidate = output / filename
+        if candidate.is_symlink():
+            raise ValueError("export output must not be a symlink")
+        return candidate
+
     def list_outputs(self, project_id: str) -> list[Path]:
-        d = self._project_subdir(project_id, "output")
-        return (
-            sorted([p for p in d.iterdir() if p.is_file() and not p.is_symlink()])
-            if d.exists()
-            else []
+        output = self._project_subdir(project_id, "output")
+        manifest_present = self.has_export_manifest(project_id)
+        if manifest_present:
+            manifest = self.load_export_manifest(project_id)
+            result = []
+            for item in manifest:
+                try:
+                    path = self._direct_output_path(project_id, str(item["name"]))
+                except (FileNotFoundError, ValueError):
+                    continue
+                if path.is_file() and not path.is_symlink():
+                    result.append(path)
+            return sorted(result, key=lambda path: path.name)
+        legacy = {"zh.srt", "ja-zh.srt", "zh.vtt", "ja-zh.vtt", "zh.lrc"}
+        return sorted(
+            path
+            for path in output.iterdir()
+            if path.name in legacy and path.is_file() and not path.is_symlink()
         )
 
+    def export_manifest_path(self, project_id: str) -> Path:
+        return self._project_subdir(project_id, "output") / "manifest.json"
+
+    def has_export_manifest(self, project_id: str) -> bool:
+        # A present but invalid manifest (including a symlink or directory) is
+        # still authoritative: do not fall back to legacy discovery.
+        try:
+            self.export_manifest_path(project_id).lstat()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def load_export_manifest(self, project_id: str) -> list[dict[str, object]]:
+        from ..domain.schema import require_schema_version
+        from ..exporters import EXPORT_FORMATS, validate_export_filename
+
+        path = self.export_manifest_path(project_id)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return []
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise ValueError("invalid export manifest")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ValueError("invalid export manifest") from exc
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "items"}:
+            raise ValueError("invalid export manifest")
+        require_schema_version(payload.get("schema_version"), "export manifest")
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ValueError("invalid export manifest")
+        result: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or set(item) != {
+                "name",
+                "format",
+                "kind",
+                "language",
+                "bilingual",
+                "size_bytes",
+                "sha256",
+            }:
+                raise ValueError("invalid export manifest")
+            name = item.get("name")
+            format_name = item.get("format")
+            kind = item.get("kind")
+            language = item.get("language")
+            bilingual = item.get("bilingual")
+            size = item.get("size_bytes")
+            digest = item.get("sha256")
+            if (
+                not isinstance(name, str)
+                or format_name not in EXPORT_FORMATS
+                or kind not in {"translated", "bilingual"}
+                or not isinstance(language, str)
+                or not language
+                or not isinstance(bilingual, bool)
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
+                raise ValueError("invalid export manifest")
+            validate_export_filename(name)
+            if not name.endswith(f".{format_name}"):
+                raise ValueError("invalid export manifest")
+            if name.casefold() in seen:
+                raise ValueError("duplicate export manifest filename")
+            seen.add(name.casefold())
+            result.append(dict(item))
+        return result
+
+    def save_export_outputs(self, project_id: str, payloads: dict[str, str], files) -> None:
+        """Stage new files, publish their manifest, then remove old managed files."""
+        from ..exporters import ExportFile
+
+        if not all(isinstance(item, ExportFile) for item in files):
+            raise ValueError("invalid export metadata")
+        names = {item.name for item in files}
+        if set(payloads) != names:
+            raise ValueError("export payload names do not match metadata")
+        output = self._project_subdir(project_id, "output")
+        for name in names:
+            self._direct_output_path(project_id, name)
+        managed = (
+            self.load_export_manifest(project_id) if self.has_export_manifest(project_id) else []
+        )
+        previous = {str(item["name"]) for item in managed}
+        # Only the historical built-in outputs may be removed without a manifest.
+        legacy = {"zh.srt", "ja-zh.srt", "zh.vtt", "ja-zh.vtt", "zh.lrc"}
+        if not self.has_export_manifest(project_id):
+            previous |= legacy
+        existing = {path.name.casefold(): path.name for path in output.iterdir()}
+        previous_folded = {name.casefold() for name in previous}
+        unmanaged = {
+            name
+            for name in names
+            if name.casefold() in existing and name.casefold() not in previous_folded
+        }
+        if unmanaged:
+            raise ValueError("export filename would overwrite an unmanaged file")
+        # A managed name alone is not authorization to replace or delete a file:
+        # the prior manifest's size/hash must still describe the on-disk bytes.
+        for item in managed:
+            prior_name = str(item["name"])
+            try:
+                prior_path = self._direct_output_path(project_id, prior_name)
+            except (FileNotFoundError, ValueError):
+                continue
+            if not prior_path.is_file() or prior_path.is_symlink():
+                continue
+            data = prior_path.read_bytes()
+            if (
+                len(data) != item["size_bytes"]
+                or hashlib.sha256(data).hexdigest() != item["sha256"]
+            ):
+                raise ValueError("managed export file was modified outside the application")
+        for name in names:
+            candidate = output / name
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                raise ValueError("export output must be a regular file")
+
+        staged: dict[str, Path] = {}
+        try:
+            for item in sorted(files, key=lambda value: value.name):
+                temporary = output / f".{item.name}.{uuid4().hex}.tmp"
+                staged[item.name] = temporary
+                atomic_write_text(temporary, payloads[item.name])
+            entries = []
+            for item in sorted(files, key=lambda value: value.name):
+                data = staged[item.name].read_bytes()
+                entries.append(
+                    {
+                        "name": item.name,
+                        "format": item.format,
+                        "kind": item.kind,
+                        "language": item.language,
+                        "bilingual": item.bilingual,
+                        "size_bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+            for item in sorted(files, key=lambda value: value.name):
+                os.replace(staged[item.name], output / item.name)
+            atomic_write_json(output / "manifest.json", {"schema_version": "1.0", "items": entries})
+        finally:
+            for temporary in staged.values():
+                temporary.unlink(missing_ok=True)
+        for name in previous - names - {"manifest.json"}:
+            try:
+                path = self._direct_output_path(project_id, name)
+            except (FileNotFoundError, ValueError):
+                continue
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+        self._touch_project(project_id)
+
     def prune_generated_outputs(self, project_id: str, keep: set[str]) -> None:
+        output = self._project_subdir(project_id, "output")
         generated = {"zh.srt", "ja-zh.srt", "zh.vtt", "ja-zh.vtt", "zh.lrc"}
         for name in generated - keep:
-            path = self._project_subdir(project_id, "output") / name
+            path = output / name
             if path.is_file() and not path.is_symlink():
                 path.unlink()
 
@@ -719,6 +940,24 @@ class FileSystemProjectStore:
                     continue
 
 
+def verify_export_manifest(store, project_id: str, expected_names: set[str]) -> None:
+    """Reject a completed export whose manifest does not match actual bytes."""
+    if not store.has_export_manifest(project_id):
+        # Legacy outputs have no recorded hashes; required names were already
+        # checked by the resume path and are never treated as user-editable.
+        return
+    manifest = store.load_export_manifest(project_id)
+    if {str(item["name"]) for item in manifest} != expected_names:
+        raise ValueError("export manifest does not match configured outputs")
+    for item in manifest:
+        path = store._direct_output_path(project_id, str(item["name"]))
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError("export manifest output is missing")
+        data = path.read_bytes()
+        if len(data) != item["size_bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+            raise ValueError("export manifest output was modified")
+
+
 class PrimaryAudioProjectStore:
     """Keep legacy root artifacts while isolating the primary config override."""
 
@@ -739,7 +978,7 @@ class PrimaryAudioProjectStore:
         if path.is_symlink():
             raise ValueError("config must not be a symlink")
         if path.exists():
-            return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+            return PipelineConfig.model_validate(self.parent._load_json(path, "pipeline config"))
         return self.parent.load_pipeline_config(project_id)
 
     def save_pipeline_config(self, project_id, value):
@@ -806,7 +1045,7 @@ class AudioProjectStore(FileSystemProjectStore):
         path = self.audio_dir() / "job.json"
         if path.is_symlink() or not path.is_file():
             raise ProjectNotFound(self.audio_id)
-        job = Job.model_validate_json(path.read_text(encoding="utf-8"))
+        job = Job.model_validate(self.parent._load_json(path, "job"))
         if job.project_id != project_id or job.audio_id != self.audio_id:
             raise ValueError("invalid audio job ownership")
         return job
@@ -823,7 +1062,7 @@ class AudioProjectStore(FileSystemProjectStore):
         if path.is_symlink():
             raise ValueError("config must not be a symlink")
         if path.exists():
-            return PipelineConfig.model_validate_json(path.read_text(encoding="utf-8"))
+            return PipelineConfig.model_validate(self.parent._load_json(path, "pipeline config"))
         payload = self.parent.load_pipeline_config(project_id).model_dump(mode="json")
         language = self.parent.audio(project_id, self.audio_id).source.language
         payload["source_language"] = language

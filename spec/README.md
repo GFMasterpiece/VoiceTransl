@@ -15,11 +15,12 @@
 
 | 规格 | 状态 | 主题 |
 | --- | --- | --- |
+| [兼容性与扩展性整改](compatibility-extensibility.md) | Approved | 严格版本、能力/节点单一来源、可取消传输、附加参数、跨平台、语言与命名/分页 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 实现 ComfyUI 风格的可视化节点编排和节点独立配置 |
 | [首个音频直通里程碑](workflow-audio-mvp.md) | Implemented | 已验收输入/输出图编辑、版本化保存及独立运行历史；不含处理节点与重跑 |
 | [音频预处理节点里程碑](workflow-preprocess.md) | Implemented | 已验收 Mock/FFmpeg 预处理、直接上游产物、依赖调度及分支失败隔离 |
 | [ASR 与文本输出节点里程碑](workflow-asr.md) | Implemented | 已验收 Mock/CrispASR、类型端口、结构化识别产物及 TXT/SRT/VTT/LRC 原文输出 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 当前下一优先项；服务商/协议及节点接入范围待明确后实施 |
-| [本地 ASR 能力发现与静态白名单](local-asr-capabilities.md) | Deferred | 已知重复名单及动态能力过滤问题；先做云端 ASR，保留现有本地实现 |
+| [本地 ASR 能力发现与静态白名单](local-asr-capabilities.md) | Approved | 最新决定恢复能力单一来源及跨平台整改，不扩张本地推理功能 |
 
 整体产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，阶段与进度见 [`../docs/roadmap.md`](../docs/roadmap.md)。规格获批和实现后才把稳定行为沉淀为 `docs/` 契约；不要在两处重复维护完整细节。

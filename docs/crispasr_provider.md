@@ -4,10 +4,10 @@ VoiceTransl keeps `mock` ASR as the default. To enable local CrispASR, install a
 tested CrispASR CLI and place the GGUF model in a server owned directory. No
 model is downloaded by VoiceTransl.
 
-As of 2026-10-29, further local-ASR development is on hold while cloud ASR takes
-priority. Existing local features remain available. The duplicated static backend
-allowlists and filtering of CLI-discovered capabilities are a known deferred
-limitation; see [local ASR capability discovery](../spec/local-asr-capabilities.md).
+As of 2026-10-29, further local-ASR feature development is on hold while cloud
+ASR takes priority. Existing local features remain available. Capability-source
+and Linux/Windows platform compatibility fixes are complete without adding new
+local inference features; see [local ASR capability discovery](../spec/local-asr-capabilities.md).
 
 Version support is capability based rather than pinned to a bundled release:
 use a CrispASR release whose CLI exposes the flags listed below. The local
@@ -65,7 +65,8 @@ The response contains:
 | `executable` | CLI probe result: `ok`, nullable `version`, and `message` |
 | `model_dir` | Active directory in privacy-preserving form |
 | `restart_required` | Whether saved settings differ from the active runtime |
-| `backends` | Intersection of VoiceTransl-supported and CLI-compiled backends |
+| `backends` | ASR task identifiers derived from the active CLI metadata; no permanent model-name allowlist intersection |
+| `backend_details` | `id`, `label`, `task`, CLI capability flags, and a reason when the task is not confirmed as ASR |
 | `items` | `model`, nullable `backend`, `size_bytes`, nullable `architecture`, `selectable`, and nullable `reason` for each discovered file |
 | `truncated`, `warnings` | Scan limits or diagnostics; do not assume the list is exhaustive when truncated |
 
@@ -100,8 +101,12 @@ Directory, CLI, timeout, malformed-response and network failures have separate
 diagnostics and point users to global settings; pending-restart notices show
 the active directory in privacy-preserving form.
 
-The supported backend set includes `qwen3` for the general 0.6B family. Existing
-`qwen3-1.7b` parameters remain supported rather than being rewritten to `qwen3`.
+Backend names are capability data, not a fixed model list. Existing `qwen3-1.7b`
+configuration is not rewritten to `qwen3`; availability depends on the active CLI.
+A new backend using the same command protocol must not require editing separate
+frontend, domain and provider allowlists. A different protocol still needs an
+explicit adapter. Unknown model architectures are not automatically mapped from
+filenames or backend names.
 
 The executable must write an SRT (or JSON transcript) to the requested output
 base. SRT cues and JSON segments are validated for non-empty text, finite

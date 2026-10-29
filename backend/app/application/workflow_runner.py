@@ -11,12 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..domain import (
-    ASR_NODE_TYPE,
-    AUDIO_OUTPUT_NODE_TYPE,
-    INPUT_NODE_TYPE,
-    OUTPUT_NODE_TYPES,
     PREPROCESS_NODE_TYPE,
-    TEXT_OUTPUT_NODE_TYPE,
     PreprocessConfig,
     WorkflowArtifact,
     WorkflowNode,
@@ -26,14 +21,20 @@ from ..domain import (
     WorkflowRunError,
     WorkflowRunStatus,
 )
+from ..domain.node_execution import NodeData, NodeExecutionContext, NodeResult
+from ..domain.node_registry import (
+    NODE_DEFINITIONS,
+    PORT_DEFINITIONS,
+    register_port,
+    validate_node_result,
+)
 from ..providers import FFmpegPreprocessProvider, PreprocessError
+from .platform_process import spawn_contained, terminate_contained
 from .workflow_asr import (
     ASRSettings,
     TranscriptData,
     WorkflowASRCancelled,
     WorkflowASRError,
-    execute_asr_node,
-    execute_text_output_node,
 )
 
 COPY_CHUNK_SIZE = 1024 * 1024
@@ -57,6 +58,13 @@ class AudioData:
     suffix: str
     media_type: str
     size_bytes: int
+
+
+def _ensure_runtime_ports() -> None:
+    if "audio" not in PORT_DEFINITIONS:
+        register_port("audio", AudioData)
+    if "transcript" not in PORT_DEFINITIONS:
+        register_port("transcript", TranscriptData)
 
 
 async def _copy_audio(
@@ -139,33 +147,17 @@ def _download_url(run: WorkflowRun, node_id: str) -> str:
 
 
 async def _terminate_process(process) -> None:
-    """Terminate and reap a child process before callers can observe completion."""
+    """Terminate and reap a contained child before callers observe completion."""
 
-    if getattr(process, "returncode", None) is None:
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
-        try:
-            await asyncio.wait_for(asyncio.shield(process.wait()), timeout=FFMPEG_TERMINATE_SECONDS)
-        except asyncio.TimeoutError:
-            if getattr(process, "returncode", None) is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                await process.wait()
-    else:
-        # A process can have exited while its wait future is still pending.
-        await process.wait()
+    await terminate_contained(process)
 
 
 async def _ffmpeg_process_runner(command: list[str], cancel_event: asyncio.Event):
     if cancel_event.is_set():
         raise WorkflowRunCancelled
     spawn_task = asyncio.create_task(
-        asyncio.create_subprocess_exec(
-            *command,
+        spawn_contained(
+            command,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -178,19 +170,14 @@ async def _ffmpeg_process_runner(command: list[str], cancel_event: asyncio.Event
             timeout=FFMPEG_TIMEOUT_SECONDS,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if not done:
+        if not done or (cancel_wait in done and cancel_wait.result()):
             spawn_task.cancel()
             spawned = await asyncio.gather(spawn_task, return_exceptions=True)
             process = spawned[0]
             if not isinstance(process, BaseException):
                 await _terminate_process(process)
-            raise PreprocessError("PREPROCESS_FFMPEG_TIMEOUT", "FFmpeg 音频转换超时")
-        if cancel_wait in done and cancel_wait.result():
-            spawn_task.cancel()
-            spawned = await asyncio.gather(spawn_task, return_exceptions=True)
-            process = spawned[0]
-            if not isinstance(process, BaseException):
-                await _terminate_process(process)
+            if not done:
+                raise PreprocessError("PREPROCESS_FFMPEG_TIMEOUT", "FFmpeg 音频转换超时")
             raise WorkflowRunCancelled
         process = await spawn_task
     except asyncio.CancelledError:
@@ -421,6 +408,18 @@ async def _execute_preprocess_node(
     raise PreprocessError("PREPROCESS_PROVIDER_INVALID", "预处理 Provider 不受支持")
 
 
+async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
+    _ensure_runtime_ports()
+    definition = NODE_DEFINITIONS.get(context.node.type)
+    if definition is None or definition.execute is None:
+        raise RuntimeError("NODE_EXECUTOR_UNAVAILABLE")
+    result = await definition.execute(context)
+    validate_node_result(definition, result)
+    if result.artifact is not None and not isinstance(result.artifact, WorkflowArtifact):
+        raise TypeError("node artifact must be WorkflowArtifact")
+    return result
+
+
 async def execute_workflow_run(
     store,
     run: WorkflowRun,
@@ -437,8 +436,16 @@ async def execute_workflow_run(
 
     records = {node.node_id: node for node in run.nodes}
     node_by_id = {node.id: node for node in run.workflow.nodes}
-    output_ids = [node.id for node in run.workflow.nodes if node.type in OUTPUT_NODE_TYPES]
-    input_nodes = [node for node in run.workflow.nodes if node.type == INPUT_NODE_TYPE]
+    output_ids = [
+        node.id
+        for node in run.workflow.nodes
+        if NODE_DEFINITIONS.get(node.type) is not None and NODE_DEFINITIONS[node.type].terminal
+    ]
+    input_nodes = [
+        node
+        for node in run.workflow.nodes
+        if NODE_DEFINITIONS.get(node.type) is not None and NODE_DEFINITIONS[node.type].is_source
+    ]
     asr_settings = asr_settings or ASRSettings()
     input_record = records.get(input_nodes[0].id) if input_nodes else None
     incoming, order = _dependency_edges(run)
@@ -481,10 +488,9 @@ async def execute_workflow_run(
         store.save_workflow_run(run)
         return run
 
-    audio_by_node: dict[str, AudioData] = {}
-    transcript_by_node: dict[str, TranscriptData] = {}
+    outputs_by_node: dict[str, dict[str, NodeData]] = {}
     if input_nodes:
-        audio_by_node[input_nodes[0].id] = source
+        outputs_by_node[input_nodes[0].id] = {"audio": NodeData("audio", source)}
     failed_or_blocked: set[str] = set()
     try:
         for node_id in order:
@@ -492,13 +498,18 @@ async def execute_workflow_run(
                 raise WorkflowRunCancelled
             node = node_by_id[node_id]
             record = records[node_id]
-            if node.type == INPUT_NODE_TYPE:
+            definition = NODE_DEFINITIONS.get(node.type)
+            if definition is None:
+                record.status = WorkflowNodeStatus.FAILED
+                record.error = WorkflowNodeError(type="UNKNOWN_NODE_TYPE", message="节点类型未注册")
+                failed_or_blocked.add(node.id)
+                continue
+            if definition.is_source:
                 continue
             upstream_id = incoming[node_id]
-            expected_upstream = (
-                transcript_by_node if node.type == TEXT_OUTPUT_NODE_TYPE else audio_by_node
-            )
-            if upstream_id in failed_or_blocked or upstream_id not in expected_upstream:
+            input_port = definition.input_ports[0]
+            upstream = outputs_by_node.get(upstream_id, {}).get(input_port)
+            if upstream_id in failed_or_blocked or upstream is None:
                 record.status = WorkflowNodeStatus.BLOCKED
                 record.finished_at = now()
                 record.error = WorkflowNodeError(
@@ -511,51 +522,24 @@ async def execute_workflow_run(
                 raise WorkflowRunCancelled
             record.finished_at = None
             record.error = None
-            upstream = expected_upstream[upstream_id]
             record.status = WorkflowNodeStatus.RUNNING
             record.started_at = now()
             store.save_workflow_run(run)
             try:
-                if node.type == PREPROCESS_NODE_TYPE:
-                    artifact, output = await _execute_preprocess_node(
-                        store, run, node, upstream, cancel_event, ffmpeg_path
+                result = await _run_registered_node(
+                    NodeExecutionContext(
+                        store=store,
+                        run=run,
+                        node=node,
+                        inputs={input_port: upstream},
+                        project=project,
+                        cancel_event=cancel_event,
+                        ffmpeg_path=ffmpeg_path,
+                        asr_settings=asr_settings,
                     )
-                    record.artifact = artifact
-                    audio_by_node[node.id] = output
-                elif node.type == AUDIO_OUTPUT_NODE_TYPE:
-                    artifact = await _execute_copy_node(store, run, node, upstream, cancel_event)
-                    record.artifact = artifact
-                    audio_by_node[node.id] = AudioData(
-                        path=store.workflow_artifact_path(
-                            run.project_id,
-                            run.audio_id,
-                            run.id,
-                            node.id,
-                            artifact.filename,
-                        ),
-                        suffix=upstream.suffix,
-                        media_type=artifact.media_type,
-                        size_bytes=artifact.size_bytes,
-                    )
-                elif node.type == ASR_NODE_TYPE:
-                    artifact, transcript = await execute_asr_node(
-                        store,
-                        run,
-                        node,
-                        upstream.path,
-                        project,
-                        cancel_event,
-                        asr_settings,
-                    )
-                    record.artifact = artifact
-                    transcript_by_node[node.id] = transcript
-                elif node.type == TEXT_OUTPUT_NODE_TYPE:
-                    artifact = await execute_text_output_node(
-                        store, run, node, upstream, cancel_event
-                    )
-                    record.artifact = artifact
-                else:
-                    raise ValueError("unsupported node type")
+                )
+                record.artifact = result.artifact
+                outputs_by_node[node.id] = result.outputs
                 record.status = WorkflowNodeStatus.COMPLETED
                 record.finished_at = now()
                 store.save_workflow_run(run)
@@ -570,16 +554,7 @@ async def execute_workflow_run(
                 record.status = WorkflowNodeStatus.FAILED
                 record.finished_at = now()
                 record.error = WorkflowNodeError(
-                    type={
-                        PREPROCESS_NODE_TYPE: "PREPROCESS_FAILED",
-                        ASR_NODE_TYPE: "ASR_FAILED",
-                        TEXT_OUTPUT_NODE_TYPE: "TEXT_OUTPUT_FAILED",
-                    }.get(node.type, "OUTPUT_COPY_FAILED"),
-                    message={
-                        PREPROCESS_NODE_TYPE: "预处理执行失败",
-                        ASR_NODE_TYPE: "语音识别执行失败",
-                        TEXT_OUTPUT_NODE_TYPE: "文本输出失败",
-                    }.get(node.type, "输出音频复制失败"),
+                    type="NODE_EXECUTION_FAILED", message="节点执行失败"
                 )
                 failed_or_blocked.add(node.id)
             store.save_workflow_run(run)

@@ -14,7 +14,7 @@ class TranslationContext(BaseModel):
     glossary: dict[str, str] = Field(default_factory=dict)
     instructions: str | None = None
     batch_size: int = Field(default=8, ge=1, le=128)
-    temperature: float = Field(default=0.2, ge=0, le=2)
+    additional_parameters: dict[str, object] = Field(default_factory=dict)
 
 
 class PreprocessProvider(Protocol):

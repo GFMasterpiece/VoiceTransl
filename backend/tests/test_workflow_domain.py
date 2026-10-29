@@ -72,7 +72,7 @@ def test_workflow_asr_defaults_are_strict_and_same_as_explicit_values():
         None,
         [],
         {"provider": "openai"},
-        {"backend": "not-supported"},
+        {"backend": "../not-supported"},
         {"model": "../model.gguf"},
         {"model": "model.gguf."},
         {"model": " "},
@@ -104,6 +104,10 @@ def test_workflow_asr_accepts_mock_and_safe_crispasr_identifiers():
         }
     )
     assert crisp.provider == "crispasr"
+
+    # Availability is decided from live CLI capabilities, not a domain list.
+    future = validate_asr_config({"provider": "crispasr", "backend": "future-asr"})
+    assert future.backend == "future-asr"
 
 
 @pytest.mark.parametrize(

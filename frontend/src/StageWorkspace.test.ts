@@ -14,7 +14,7 @@ const config: PipelineConfig = {
   preprocess: { provider: 'ffmpeg', sample_rate: 16000, channels: 1, preserve_original: true },
   asr: { provider: 'mock', backend: 'qwen3-1.7b', model: 'draft-asr', language: 'ja', vad_enabled: true, chunk_seconds: 30 },
   alignment: { enabled: true, provider: 'mock', model: 'align-model', fallback: 'keep_asr_timestamps' },
-  translation: { provider: 'mock', model: 'draft-translation', target_language: 'zh-CN', base_url: null, api_key_env: null, batch_size: 8, temperature: .2, glossary: {}, instructions: null, timeout_seconds: 120 },
+  translation: { provider: 'mock', model: 'draft-translation', target_language: 'zh-CN', base_url: null, api_key_env: null, batch_size: 8, additional_parameters: {}, glossary: {}, instructions: null, timeout_seconds: 120 },
   export: { formats: ['srt'], bilingual: true, naming: 'language' },
 }
 function makeJob(id = 'j1', audioId = 'a1'): Job {
@@ -31,6 +31,29 @@ function stageResponse(stage: StageName, job: Job): StageDetail {
   }
 }
 const response = (payload: unknown, status = 200) => ({ ok: status === 200, status, json: async () => payload }) as Response
+const capabilities = {
+  schema_version: '1.0',
+  workflow: {
+    nodes: [
+      { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
+      { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
+    ],
+    ports: ['audio'],
+  },
+  asr: {
+    providers: [{ id: 'mock', label: 'Mock' }, { id: 'crispasr', label: 'CrispASR' }],
+    backends: ['qwen3', 'qwen3-1.7b'],
+    backend_details: [
+      { id: 'qwen3', label: 'Qwen3 ASR', task: 'asr' },
+      { id: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B', task: 'asr' },
+    ],
+    status: 'available', message: null, truncated: false, warnings: [],
+  },
+  export: {
+    formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }],
+    naming_modes: [{ id: 'language', label: '按语言命名' }],
+  },
+}
 class FakeSocket {
   static instances: FakeSocket[] = []
   onopen: (() => void) | null = null
@@ -55,7 +78,8 @@ function setup(override?: (path: string, init?: RequestInit) => Promise<Response
     const audioId = path.includes('/a2/') ? 'a2' : 'a1'
     const job = jobs[audioId]
     if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 50000 }))
-    if (path.endsWith('/projects')) return Promise.resolve(response({ items: [project] }))
+    if (path.endsWith('/capabilities')) return Promise.resolve(response(capabilities))
+    if (path.endsWith('/projects?limit=20&offset=0')) return Promise.resolve(response({ items: [project], total: 1, limit: 20, offset: 0 }))
     if (path.endsWith('/audios')) return Promise.resolve(response({ items: Object.entries(jobs).map(([id, job]) => ({ id, source: { ...source, original_name: `${id}.wav` }, job })) }))
     if (path.endsWith('/job')) return Promise.resolve(response(job))
     if (path.endsWith('/config')) return Promise.resolve(response(init?.method === 'PUT' ? JSON.parse(String(init.body)) : config))
@@ -322,6 +346,32 @@ describe('ASR model discovery modal integration', () => {
     expect(saved.translation).toEqual(config.translation)
     expect(saved.export).toEqual(config.export)
     expect(store.job!.config_snapshot!.asr.model).toBe('actual-asr')
+  })
+
+  it('uses only capability-provided export naming modes and preserves an unavailable legacy value', async () => {
+    await mountWorkspace()
+    store.config!.export.naming = 'original'
+    await chooseStage(4)
+    root!.querySelector<HTMLButtonElement>('.stage-config-button')!.click(); await settle()
+    const naming = root!.querySelector<HTMLSelectElement>('.config-modal select')!
+    expect(Array.from(naming.options).map((option) => option.value)).toEqual(['original', 'language'])
+    expect(naming.options[0].textContent).toContain('当前值，不可新选')
+    expect(store.config!.export.naming).toBe('original')
+    naming.value = 'language'; naming.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+    expect(store.config!.export.naming).toBe('language')
+    expect(store.configDirty).toBe(true)
+  })
+
+  it('disables export naming when capabilities provide no naming modes', async () => {
+    await mountWorkspace((path) => path.endsWith('/capabilities') ? Promise.resolve(response({ ...capabilities, export: { ...capabilities.export, naming_modes: [] } })) : undefined)
+    await chooseStage(4)
+    root!.querySelector<HTMLButtonElement>('.stage-config-button')!.click(); await settle()
+    const naming = root!.querySelector<HTMLSelectElement>('.config-modal select')!
+    expect(naming.disabled).toBe(true)
+    expect(Array.from(naming.options).map((option) => option.value)).toEqual(['language'])
+    expect(naming.options[0].textContent).toContain('当前值，不可新选')
+    expect(root!.textContent).toContain('服务端未提供导出命名方式')
+    expect(store.config!.export.naming).toBe('language')
   })
 
   it('keeps Mock modal configuration independent from a missing catalog route', async () => {

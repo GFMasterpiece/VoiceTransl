@@ -17,27 +17,22 @@ interface Catalog {
   model_dir: string
   restart_required: boolean
   backends: string[]
+  backend_details?: { id: string; label: string; task: string }[]
   items: ModelItem[]
   truncated: boolean
   warnings: string[]
 }
-const props = defineProps<{ config: AsrConfig; locked: boolean; audioKey: string }>()
+const props = defineProps<{ config: AsrConfig; locked: boolean; audioKey: string; providers?: readonly { value: string; label: string }[]; backendDetails?: readonly { id: string; label: string; task: string }[] }>()
 const emit = defineEmits<{ change: [patch: Partial<AsrConfig>] }>()
 const catalog = ref<Catalog | null>(null)
 const loading = ref(false)
 const error = ref('')
-const knownBackends = [
-  { value: 'qwen3', label: 'Qwen3 ASR（通用）' },
-  { value: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B' },
-  { value: 'whisper', label: 'Whisper' },
-  { value: 'mega-asr', label: 'Mega ASR' },
-  { value: 'voxtral', label: 'Voxtral' },
-  { value: 'voxtral4b', label: 'Voxtral 4B' },
-  { value: 'granite', label: 'Granite' },
-]
+const providerOptions = computed(() => props.providers?.length ? [...props.providers] : [{ value: 'mock', label: 'Mock（演示）' }, { value: 'crispasr', label: 'CrispASR（本机）' }])
+const backendDetails = computed(() => props.backendDetails?.length ? props.backendDetails : catalog.value?.backend_details || [])
+const asrBackendIds = computed(() => [...new Set(backendDetails.value.filter((detail) => detail.task === 'asr').map((detail) => detail.id))])
 const backendOptions = computed(() => {
-  const values = [...new Set([...knownBackends.map((item) => item.value), props.config.backend, ...(catalog.value?.backends || [])])]
-  return values.map((value) => ({ value, label: knownBackends.find((item) => item.value === value)?.label || safeText(value) }))
+  const current = props.config.backend ? [props.config.backend] : []
+  return [...new Set([...asrBackendIds.value, ...current])].map((value) => ({ value, label: safeText(backendDetails.value.find((detail) => detail.id === value)?.label || value) }))
 })
 const availableItems = computed(() => catalog.value?.items.filter(canSelect) || [])
 const selectedModel = computed(() => availableItems.value.find((item) => item.model === props.config.model && item.backend === props.config.backend)?.model || '')
@@ -46,10 +41,13 @@ const selectionReason = computed(() => {
   if (loading.value) return '正在读取本地模型，请等待目录检查完成。'
   if (error.value) return '模型列表读取失败，可重试或保留手动文件名。'
   if (!catalog.value?.executable.ok) return 'CrispASR 不可用，请检查全局设置中的可执行文件。'
+  if (!catalog.value?.backends.length) return '服务端未发现可用识别后端；不能以预置名单代替能力查询结果。'
+  if (!asrBackendIds.value.length) return '服务端未提供 ASR 任务分类；不能把其他用途的后端当作语音识别后端。'
   if (!availableItems.value.length) return '没有可选模型，可检查全局设置或手动确认文件名。'
   return '选择模型时会同步匹配的识别后端，不会自动保存。'
 })
 let generation = 0
+let activeProvider: AsrConfig['provider'] | null = null
 let controller: AbortController | undefined
 let requestTimeout: number | undefined
 let alive = true
@@ -74,7 +72,7 @@ function readCatalog(value: unknown): Catalog {
   return { ...data, executable: { ...data.executable, message: safeText(data.executable.message), version: data.executable.version === null ? null : safeText(data.executable.version) },
     items: data.items.map((item) => ({ ...item, reason: item.reason === null ? null : safeText(item.reason), architecture: item.architecture === null ? null : safeText(item.architecture) })), warnings: data.warnings.map(safeText) }
 }
-function canSelect(item: ModelItem) { return !!catalog.value?.executable.ok && item.selectable && !!item.backend && catalog.value.backends.includes(item.backend) }
+function canSelect(item: ModelItem) { return !!catalog.value?.executable.ok && item.selectable && !!item.backend && catalog.value.backends.includes(item.backend) && asrBackendIds.value.includes(item.backend) }
 function unavailableReason(item: ModelItem) { return item.reason || (!catalog.value?.executable.ok ? 'CrispASR 不可用' : '当前 CLI 不支持或无法确定识别后端') }
 function sizeLabel(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB` }
 function update(patch: Partial<AsrConfig>) { if (!props.locked) emit('change', patch) }
@@ -88,6 +86,8 @@ function invalidate() { ++generation; controller?.abort(); if (requestTimeout !=
 async function fetchModels() {
   if (props.config.provider !== 'crispasr') return
   const request = ++generation
+  const provider = props.config.provider
+  activeProvider = provider
   controller?.abort()
   if (requestTimeout !== undefined) window.clearTimeout(requestTimeout)
   const requestController = new AbortController()
@@ -108,27 +108,31 @@ async function fetchModels() {
       throw new Error(message)
     }
     const result = readCatalog(await response.json())
-    if (alive && request === generation && props.audioKey === audioKey && props.config.provider === 'crispasr') catalog.value = result
+    if (alive && request === generation && props.audioKey === audioKey && props.config.provider === provider && activeProvider === provider) catalog.value = result
   } catch (reason) {
-    if (!alive || request !== generation || props.audioKey !== audioKey || props.config.provider !== 'crispasr') return
+    if (!alive || request !== generation || props.audioKey !== audioKey || props.config.provider !== provider || activeProvider !== provider) return
     if (timedOut) error.value = '读取本地模型超时，请确认后端服务和 CrispASR 状态后重试。'
     else if (!requestController.signal.aborted) error.value = reason instanceof Error && !(reason instanceof TypeError) && !(reason instanceof SyntaxError) && /[\u3400-\u9fff]/.test(reason.message)
       ? safeText(reason.message) : '模型列表读取失败，请检查后端连接后重试。'
   } finally {
     window.clearTimeout(timeout)
     if (requestTimeout === timeout) requestTimeout = undefined
-    if (alive && request === generation) loading.value = false
+    if (alive && request === generation && props.config.provider === provider && activeProvider === provider) loading.value = false
   }
 }
-watch([() => props.audioKey, () => props.config.provider], () => { invalidate(); if (props.config.provider === 'crispasr') void fetchModels() }, { immediate: true })
+watch([() => props.audioKey, () => props.config.provider], () => {
+  activeProvider = props.config.provider
+  invalidate()
+  if (props.config.provider === 'crispasr') void fetchModels()
+}, { immediate: true })
 onUnmounted(() => { alive = false; invalidate() })
 </script>
 
 <template>
   <div class="asr-config-fields">
     <div class="modal-field-grid">
-      <label class="config-field"><span>识别 Provider</span><select :value="config.provider" :disabled="locked" @change="update({ provider: textValue($event) })"><option value="mock">Mock（演示）</option><option value="crispasr">CrispASR（本机）</option></select></label>
-      <label class="config-field"><span>识别后端</span><select :value="config.backend" :disabled="locked" @change="update({ backend: textValue($event) })"><option v-for="backend in backendOptions" :key="backend.value" :value="backend.value">{{ backend.label }}</option></select></label>
+      <label class="config-field"><span>识别 Provider</span><select :value="config.provider" :disabled="locked" @change="update({ provider: textValue($event) })"><option v-for="provider in providerOptions" :key="provider.value" :value="provider.value">{{ provider.label }}</option></select></label>
+      <label class="config-field"><span>识别后端</span><select :value="config.backend" :disabled="locked || !asrBackendIds.length" @change="update({ backend: textValue($event) })"><option v-if="!backendOptions.length" :value="config.backend">{{ safeText(config.backend) }}</option><option v-for="backend in backendOptions" :key="backend.value" :value="backend.value">{{ backend.label }}</option></select></label>
     </div>
     <section v-if="config.provider === 'crispasr'" class="asr-model-catalog" aria-labelledby="asr-model-catalog-title">
       <div class="asr-catalog-heading"><h4 id="asr-model-catalog-title">本地模型</h4><button class="secondary-button compact-button" type="button" :disabled="loading" @click="fetchModels">{{ loading ? '正在读取…' : '刷新模型列表' }}</button></div>
@@ -146,6 +150,7 @@ onUnmounted(() => { alive = false; invalidate() })
         <ul v-if="catalog.warnings.length" class="asr-catalog-warnings"><li v-for="(warning, index) in catalog.warnings" :key="index">{{ warning }}</li></ul>
       </template>
       <p id="asr-model-selection-note" class="settings-help">{{ selectionReason }}</p>
+      <p v-if="catalog && !asrBackendIds.length" class="settings-feedback settings-error" role="alert">服务端尚未提供 ASR 任务分类。为防止误选 TTS、LLM 或其他后端，识别后端和本地模型暂不可选；已保存的旧配置会保留。</p>
       <p class="settings-help">发现文件不代表已验证推理可用；任务启动后仍会检查模型格式与运行能力。</p>
     </section>
     <div class="modal-field-grid asr-parameter-grid">

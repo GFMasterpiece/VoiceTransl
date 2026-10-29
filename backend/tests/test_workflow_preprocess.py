@@ -29,6 +29,7 @@ async def project(client, payload=None):
     response = await client.post(
         "/api/v1/projects",
         files={"file": ("input.wav", payload or wav(b"source"), "audio/wav")},
+        data={"source_language": "ja", "target_language": "zh-CN"},
     )
     assert response.status_code == 201, response.text
     value = response.json()["project"]
@@ -355,6 +356,17 @@ async def test_ffmpeg_cancel_timeout_and_shutdown_terminate_and_reap(tmp_path, m
     async def scenario():
         import app.application.workflow_runner as runner_module
 
+        async def terminate_fake(process):
+            process.terminate()
+            try:
+                await asyncio.wait_for(
+                    process.wait(), timeout=runner_module.FFMPEG_TERMINATE_SECONDS
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+
+        monkeypatch.setattr(runner_module, "_terminate_process", terminate_fake)
         processes = []
 
         async def create(*args, **kwargs):
@@ -362,7 +374,7 @@ async def test_ffmpeg_cancel_timeout_and_shutdown_terminate_and_reap(tmp_path, m
             processes.append(process)
             return process
 
-        monkeypatch.setattr(runner_module.asyncio, "create_subprocess_exec", create)
+        monkeypatch.setattr(runner_module, "spawn_contained", create)
         monkeypatch.setattr(runner_module, "FFMPEG_TERMINATE_SECONDS", 0.01)
         assert processes == []
         cancel = real_event()
@@ -379,7 +391,7 @@ async def test_ffmpeg_cancel_timeout_and_shutdown_terminate_and_reap(tmp_path, m
             processes.append(process)
             return process
 
-        monkeypatch.setattr(runner_module.asyncio, "create_subprocess_exec", create_slow)
+        monkeypatch.setattr(runner_module, "spawn_contained", create_slow)
         task = asyncio.create_task(_ffmpeg_process_runner(["ffmpeg"], real_event()))
         while len(processes) < 2:
             await asyncio.sleep(0)
@@ -403,7 +415,7 @@ async def test_ffmpeg_cancel_timeout_and_shutdown_terminate_and_reap(tmp_path, m
                 return spawned_process
             return spawned_process
 
-        monkeypatch.setattr(runner_module.asyncio, "create_subprocess_exec", swallow_cancel_create)
+        monkeypatch.setattr(runner_module, "spawn_contained", swallow_cancel_create)
         monkeypatch.setattr(runner_module, "FFMPEG_TIMEOUT_SECONDS", 300)
         task = asyncio.create_task(_ffmpeg_process_runner(["ffmpeg"], real_event()))
         await asyncio.wait_for(spawn_entered.wait(), timeout=1)
@@ -413,7 +425,7 @@ async def test_ffmpeg_cancel_timeout_and_shutdown_terminate_and_reap(tmp_path, m
         assert spawned_process.terminated and spawned_process.waited
 
         monkeypatch.setattr(runner_module, "FFMPEG_TIMEOUT_SECONDS", 0.01)
-        monkeypatch.setattr(runner_module.asyncio, "create_subprocess_exec", create)
+        monkeypatch.setattr(runner_module, "spawn_contained", create)
         with pytest.raises(PreprocessError) as error:
             await _ffmpeg_process_runner(["ffmpeg"], real_event())
         assert error.value.code == "PREPROCESS_FFMPEG_TIMEOUT"
@@ -492,6 +504,12 @@ async def test_shutdown_during_subprocess_spawn_reaps_child_idempotently(tmp_pat
     process = Process()
     spawn_started = asyncio.Event()
 
+    async def terminate_fake(child):
+        child.terminate()
+        await child.wait()
+
+    monkeypatch.setattr(runner_module, "_terminate_process", terminate_fake)
+
     async def gated_spawn(*_args, **_kwargs):
         spawn_started.set()
         try:
@@ -502,7 +520,7 @@ async def test_shutdown_during_subprocess_spawn_reaps_child_idempotently(tmp_pat
             return process
         return process
 
-    monkeypatch.setattr(runner_module.asyncio, "create_subprocess_exec", gated_spawn)
+    monkeypatch.setattr(runner_module, "spawn_contained", gated_spawn)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aid = await project(client)
         graph = {
@@ -570,6 +588,7 @@ async def test_real_ffmpeg_mixed_branch_mp3_to_wav_to_mock(tmp_path, monkeypatch
         created = await client.post(
             "/api/v1/projects",
             files={"file": ("source.mp3", mp3.read_bytes(), "audio/mpeg")},
+            data={"source_language": "ja", "target_language": "zh-CN"},
         )
         assert created.status_code == 201, created.text
         value = created.json()["project"]
@@ -646,7 +665,12 @@ async def test_artifact_api_rejects_escape_and_symlink(tmp_path):
         run_dir = app.state.store.workflow_run_dir(pid, aid, rid)
         artifact = run_dir / "nodes" / "pre" / "preprocessed.wav"
         artifact.unlink()
-        artifact.symlink_to(tmp_path / "outside.wav")
+        try:
+            artifact.symlink_to(tmp_path / "outside.wav")
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks for this security test")
+            raise
         response = await client.get(
             f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/pre/download"
         )

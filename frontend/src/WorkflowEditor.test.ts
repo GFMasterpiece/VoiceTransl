@@ -3,12 +3,38 @@ import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
-  ASR_BACKENDS, MAX_WORKFLOW_EDGES, WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH,
+  MAX_WORKFLOW_EDGES, WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH,
   cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition, readAsrConfig, readPreprocessConfig,
   resolveArtifactUrl, useWorkflowStore, validateDraft,
   type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
 } from './stores/workflow'
+import { readCapabilities } from './workflow/capabilities'
+import { createNodeRegistry, type NodeRegistry } from './workflow/nodeRegistry'
 
+const testCapabilities: Record<string, any> = {
+  schema_version: '1.0',
+  workflow: {
+    nodes: [
+      { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
+      { type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [] }, position_x: 286 },
+      { type: 'asr', label: '语音识别', add_label: 'ASR', id_prefix: 'asr', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [] }, position_x: 486 },
+      { type: 'audio_output', label: '音频输出', add_label: '输出节点', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] }, position_x: 500 },
+      { type: 'text_output', label: '文本输出', add_label: '文本输出', id_prefix: 'text', input_ports: ['transcript'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'text_output', fields: [] }, position_x: 686 },
+    ],
+    ports: ['audio', 'transcript', 'text'],
+  },
+  asr: { backends: ['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'], backend_details: [
+    { id: 'qwen3', label: 'Qwen3 ASR', task: 'asr' },
+    { id: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B', task: 'asr' },
+    { id: 'whisper', label: 'Whisper ASR', task: 'asr' },
+    { id: 'mega-asr', label: 'Mega ASR', task: 'asr' },
+    { id: 'voxtral', label: 'Voxtral ASR', task: 'asr' },
+    { id: 'voxtral4b', label: 'Voxtral 4B ASR', task: 'asr' },
+    { id: 'granite', label: 'Granite ASR', task: 'asr' },
+  ], status: 'available' },
+  export: { formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }], naming_modes: [{ id: 'language', label: '按语言命名' }, { id: 'original', label: '沿用源文件名' }] },
+}
+const testRegistry: NodeRegistry = createNodeRegistry(readCapabilities(testCapabilities))
 const input = { id: 'input', type: 'audio_input' as const, config: {}, position: { x: 80, y: 120 } }
 const output = { id: 'output', type: 'audio_output' as const, config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }
 const edge = { id: 'input-output', source: 'input', source_port: 'audio' as const, target: 'output', target_port: 'audio' as const }
@@ -95,6 +121,7 @@ function setup(override?: FetchOverride, pinia = createPinia(), properties: Reco
     const path = String(request)
     const custom = override?.(path, init)
     if (custom) return custom
+    if (path.endsWith('/capabilities')) return Promise.resolve(response(testCapabilities))
     if (path.endsWith('/workflow')) return Promise.resolve(response(documentBody()))
     if (path.endsWith('/workflow/validate')) return Promise.resolve(response({ valid: true, errors: [] }))
     if (path.endsWith('/workflow-runs/run-1/outputs/preprocess-1')) return Promise.resolve(response(preprocessArtifact))
@@ -141,14 +168,14 @@ afterEach(() => {
 
 describe('workflow validation and helpers', () => {
   it('validates graph requirements, detects a real cycle, and ignores layout and edge IDs in execution signatures', () => {
-    expect(validateDraft({ nodes: [input, output], edges: [edge] })).toEqual([])
+    expect(validateDraft({ nodes: [input, output], edges: [edge] }, testRegistry)).toEqual([])
     const changedLayout = { nodes: [{ ...input, position: { x: 140, y: 160 } }, output], edges: [{ ...edge, id: 'renamed-edge' }] }
-    expect(executionSignature({ nodes: [input, output], edges: [edge] })).toBe(executionSignature(changedLayout))
-    const errors = validateDraft({ nodes: [input], edges: [] })
+    expect(executionSignature({ nodes: [input, output], edges: [edge] }, testRegistry)).toBe(executionSignature(changedLayout, testRegistry))
+    const errors = validateDraft({ nodes: [input], edges: [] }, testRegistry)
     expect(errors.map((issue) => issue.code)).toEqual(expect.arrayContaining(['OUTPUT_MISSING', 'ISOLATED_NODE']))
-    expect(validateDraft({ nodes: [input, { ...output, config: { filename_stem: 'bad/name' } }], edges: [edge] }).map((issue) => issue.code)).toContain('INVALID_FILENAME_STEM')
-    expect(validateDraft({ nodes: [input, { ...output, config: { filename_stem: 'bad' + String.fromCharCode(92) + 'name' } }], edges: [edge] }).map((issue) => issue.code)).toContain('INVALID_FILENAME_STEM')
-    const cyclic = validateDraft({ nodes: [input, output], edges: [edge, { ...edge, id: 'self-loop', source: 'output', target: 'output' }] })
+    expect(validateDraft({ nodes: [input, { ...output, config: { filename_stem: 'bad/name' } }], edges: [edge] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_FILENAME_STEM')
+    expect(validateDraft({ nodes: [input, { ...output, config: { filename_stem: 'bad' + String.fromCharCode(92) + 'name' } }], edges: [edge] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_FILENAME_STEM')
+    const cyclic = validateDraft({ nodes: [input, output], edges: [edge, { ...edge, id: 'self-loop', source: 'output', target: 'output' }] }, testRegistry)
     expect(cyclic.map((issue) => issue.code)).toEqual(expect.arrayContaining(['SELF_LOOP', 'CYCLE']))
   })
 
@@ -159,6 +186,39 @@ describe('workflow validation and helpers', () => {
     expect(executionSignature(omitted)).not.toBe(executionSignature({ ...omitted, nodes: [input, preprocess, output] }))
   })
 
+  it('includes registry defaults in signatures for a catalog-only node', () => {
+    const capabilities = structuredClone(testCapabilities)
+    capabilities.workflow.nodes.push({
+      type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
+      required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
+        { key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+      ] }, position_x: 386,
+    })
+    const registry = createNodeRegistry(readCapabilities(capabilities))
+    const denoise = { id: 'denoise-1', type: 'denoise', config: {}, position: { x: 386, y: 120 } }
+    const graph = { nodes: [input, denoise, output], edges: [preprocessEdge, preprocessToOutput] }
+    expect(executionSignature(graph, registry)).toContain('"strength":2')
+    expect(executionSignature(graph, registry)).not.toBe(executionSignature({ ...graph, nodes: [input, { ...denoise, config: { strength: 1 } }, output] }, registry))
+    expect(executionSignature(graph)).not.toBe(executionSignature(graph, registry))
+  })
+
+  it('keeps a loaded graph clean with registry defaults in its saved signature', async () => {
+    const capabilities = structuredClone(testCapabilities)
+    capabilities.workflow.nodes.push({
+      type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
+      required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
+        { key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+      ] }, position_x: 386,
+    })
+    const document = documentBody()
+    const denoise = { id: 'denoise-1', type: 'denoise', config: {}, position: { x: 386, y: 120 } }
+    document.nodes = structuredClone([input, denoise, output])
+    document.edges = structuredClone([preprocessEdge, preprocessToOutput])
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(capabilities)) : path.endsWith('/workflow') ? Promise.resolve(response(document)) : undefined)
+    await settle()
+    expect(useWorkflowStore().dirty).toBe(false)
+  })
+
   it('accepts branches and chained preprocessing while preserving default values in snapshots', () => {
     const chained = { ...preprocess, id: 'preprocess-2', config: { provider: 'ffmpeg' as const, sample_rate: 22050, channels: 2 as const, preserve_original: false }, position: { x: 440, y: 260 } }
     const branch = { ...output, id: 'direct-output', config: { filename_stem: 'direct' }, position: { x: 440, y: 320 } }
@@ -166,32 +226,32 @@ describe('workflow validation and helpers', () => {
       nodes: [input, preprocess, chained, output, branch],
       edges: [preprocessEdge, preprocessToOutput, { id: 'preprocess-chained', source: 'preprocess-1', source_port: 'audio' as const, target: 'preprocess-2', target_port: 'audio' as const }, { id: 'chained-direct', source: 'preprocess-2', source_port: 'audio' as const, target: 'direct-output', target_port: 'audio' as const }],
     }
-    expect(validateDraft(graph)).toEqual([])
-    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }))
-      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }))
+    expect(validateDraft(graph, testRegistry)).toEqual([])
+    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
+      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
   })
 
   it('rejects invalid preprocessing values, fields, directions, multiple inputs and unreachable nodes', () => {
     const badConfig = validateDraft({
       nodes: [input, { ...preprocess, config: { provider: 'custom', sample_rate: 7999, channels: 3, preserve_original: 'yes', command: 'rm -rf /' } }, output],
       edges: [preprocessEdge, preprocessToOutput],
-    }).map((issue) => issue.code)
+    }, testRegistry).map((issue) => issue.code)
     expect(badConfig).toEqual(expect.arrayContaining(['INVALID_NODE_CONFIG', 'INVALID_PREPROCESS_PROVIDER', 'INVALID_SAMPLE_RATE', 'INVALID_CHANNELS', 'INVALID_PRESERVE_ORIGINAL']))
-    const invalidDirection = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, { ...preprocessToOutput, id: 'reverse', source: 'output', target: 'preprocess-1' }] })
-    expect(invalidDirection.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_DIRECTION', 'PREPROCESS_INPUT_COUNT']))
-    const multipleInputs = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput, { ...preprocessEdge, id: 'input-again', source: 'input' }] })
-    expect(multipleInputs.map((issue) => issue.code)).toContain('PREPROCESS_INPUT_COUNT')
-    const unreachable = validateDraft({ nodes: [input, { ...preprocess, id: 'orphan' }, output], edges: [edge] }).map((issue) => issue.code)
+    const invalidDirection = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, { ...preprocessToOutput, id: 'reverse', source: 'output', target: 'preprocess-1' }] }, testRegistry)
+    expect(invalidDirection.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_DIRECTION', 'NODE_INPUT_COUNT']))
+    const multipleInputs = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput, { ...preprocessEdge, id: 'input-again', source: 'input' }] }, testRegistry)
+    expect(multipleInputs.map((issue) => issue.code)).toContain('NODE_INPUT_COUNT')
+    const unreachable = validateDraft({ nodes: [input, { ...preprocess, id: 'orphan' }, output], edges: [edge] }, testRegistry).map((issue) => issue.code)
     expect(unreachable).toEqual(expect.arrayContaining(['UNREACHABLE_FROM_INPUT', 'OUTPUT_UNREACHABLE']))
   })
 
   it('places every new node without overlapping any existing node rectangle', () => {
-    const firstPre = nextNodePosition('preprocess', [input, output])
+    const firstPre = nextNodePosition('preprocess', [input, output], testRegistry)
     expect(firstPre).toEqual({ x: 286, y: 240 })
-    const secondPre = nextNodePosition('preprocess', [input, output, { ...preprocess, position: firstPre }])
+    const secondPre = nextNodePosition('preprocess', [input, output, { ...preprocess, position: firstPre }], testRegistry)
     expect(secondPre).toEqual({ x: 286, y: 360 })
-    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }])).toEqual({ x: 420, y: 360 })
-    expect(nextNodePosition('audio_output', [{ ...input, position: { x: 80, y: 120 } }])).toEqual({ x: 500, y: 120 })
+    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 360 })
+    expect(nextNodePosition('audio_output', [{ ...input, position: { x: 80, y: 120 } }], testRegistry)).toEqual({ x: 500, y: 120 })
     const all = [input, output, { ...preprocess, position: firstPre }, { ...preprocess, id: 'preprocess-2', position: secondPre }]
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       const overlapX = Math.min(all[i].position.x + WORKFLOW_NODE_WIDTH, all[j].position.x + WORKFLOW_NODE_WIDTH) - Math.max(all[i].position.x, all[j].position.x)
@@ -209,7 +269,7 @@ describe('workflow validation and helpers', () => {
   })
 
   it('accepts a text-only graph and multiple independent ASR branches with strict typed ports', () => {
-    expect(validateDraft({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] })).toEqual([])
+    expect(validateDraft({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }, testRegistry)).toEqual([])
     const secondAsr = { ...asr, id: 'asr-2', config: { ...asr.config, language: 'en' }, position: { x: 486, y: 240 } }
     const secondText = { ...textOutput, id: 'text-2', config: { filename_stem: 'subtitles', format: 'srt' as const }, position: { x: 700, y: 240 } }
     const graph = {
@@ -221,15 +281,15 @@ describe('workflow validation and helpers', () => {
         edge,
       ],
     }
-    expect(validateDraft(graph)).toEqual([])
+    expect(validateDraft(graph, testRegistry)).toEqual([])
     expect(executionSignature({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }))
       .not.toBe(executionSignature({ nodes: [input, secondAsr, secondText], edges: [inputAsr, asrText] }))
     const wrongPorts = validateDraft({
       nodes: [input, asr, textOutput],
       edges: [inputAsr, { ...asrText, source_port: 'audio', target_port: 'audio' } as unknown as typeof asrText],
-    }).map((issue) => issue.code)
+    }, testRegistry).map((issue) => issue.code)
     expect(wrongPorts).toContain('INVALID_PORT')
-    expect(validateDraft({ nodes: [input, asr, textOutput, output], edges: [inputAsr, { id: 'bad', source: 'asr-1', source_port: 'transcript', target: 'output', target_port: 'audio' }, edge] }).map((issue) => issue.code))
+    expect(validateDraft({ nodes: [input, asr, textOutput, output], edges: [inputAsr, { id: 'bad', source: 'asr-1', source_port: 'transcript', target: 'output', target_port: 'audio' }, edge] }, testRegistry).map((issue) => issue.code))
       .toEqual(expect.arrayContaining(['INVALID_PORT']))
   })
 
@@ -237,16 +297,16 @@ describe('workflow validation and helpers', () => {
     expect(readAsrConfig({})).toEqual({ provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null })
     expect(readAsrConfig({ provider: null as unknown as string }).provider).toBeNull()
     expect(readAsrConfig({ provider_profile_id: 'profile-1' as unknown as null }).provider_profile_id).toBe('profile-1')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { provider: null, backend: 'qwen3-1.7b', model: 'mock', language: null, vad_enabled: null, chunk_seconds: null, provider_profile_id: 'profile-1' } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+    expect(validateDraft({ nodes: [input, { ...asr, config: { provider: null, backend: 'qwen3-1.7b', model: 'mock', language: null, vad_enabled: null, chunk_seconds: null, provider_profile_id: 'profile-1' } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
       .toEqual(expect.arrayContaining(['INVALID_ASR_PROVIDER', 'INVALID_ASR_LANGUAGE', 'INVALID_ASR_VAD', 'INVALID_ASR_CHUNK', 'INVALID_ASR_PROFILE']))
-    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: null, format: null } }], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: null, format: null } }], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
       .toEqual(expect.arrayContaining(['INVALID_FILENAME_STEM', 'INVALID_TEXT_FORMAT']))
-    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: 'transcript', format: ['srt'] } }], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: 'transcript', format: ['srt'] } }], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
       .toContain('INVALID_TEXT_FORMAT')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, model: 'safe.' } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_MODEL')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'ja' + String.fromCharCode(1) } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'x'.repeat(33) } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
-    expect(ASR_BACKENDS).toEqual(['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'])
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, model: 'safe.' } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_MODEL')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'ja' + String.fromCharCode(1) } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'x'.repeat(33) } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
+    expect(testRegistry.capabilities.asr.backends).toEqual(['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'])
   })
 
   it('keeps invalid explicit preprocessing null values visible while omitted fields use defaults', () => {
@@ -255,17 +315,19 @@ describe('workflow validation and helpers', () => {
     const invalid = validateDraft({
       nodes: [input, { ...preprocess, config: { provider: null, sample_rate: null, channels: null, preserve_original: null } }, output],
       edges: [preprocessEdge, preprocessToOutput],
-    }).map((issue) => issue.code)
+    }, testRegistry).map((issue) => issue.code)
     expect(invalid).toEqual(expect.arrayContaining(['INVALID_PREPROCESS_PROVIDER', 'INVALID_SAMPLE_RATE', 'INVALID_CHANNELS', 'INVALID_PRESERVE_ORIGINAL']))
-    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }))
-      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }))
-    expect(executionSignature({ nodes: [input, { ...preprocess, config: { provider: null } }, output], edges: [preprocessEdge, preprocessToOutput] }))
-      .not.toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }))
+    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
+      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
+    expect(executionSignature({ nodes: [input, { ...preprocess, config: { provider: null } }, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
+      .not.toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
   })
 
   it('fails a new connection at the 64-edge limit without removing the existing target edge', async () => {
     setActivePinia(createPinia())
     const store = useWorkflowStore()
+    vi.stubGlobal('fetch', vi.fn((request: RequestInfo | URL) => String(request).endsWith('/capabilities') ? Promise.resolve(response(testCapabilities)) : Promise.resolve(response(documentBody()))))
+    await store.load('p1', 'a1')
     store.beginDraftEditing()
     store.setDraft({
       nodes: [
@@ -292,6 +354,149 @@ describe('workflow validation and helpers', () => {
     expect(resolveArtifactUrl('outputs/output/download', 'https://api.example/api/v1', 'https://ui.example'))
       .toBe('https://api.example/api/v1/outputs/output/download')
     expect(resolveArtifactUrl('javascript:alert(1)', '/api/v1', 'https://ui.example')).toBe('')
+  })
+})
+
+describe('capability catalog and node registry', () => {
+  it('builds node validation and typed ports from the authoritative catalog, including a new node type', () => {
+    const extended = structuredClone(testCapabilities)
+    extended.workflow.nodes.push({
+      type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
+      required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
+        { key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+        { key: 'mode', label: '模式', type: 'select', required: false, default: 'soft', options: [{ id: 'soft', label: '柔和' }, { id: 'hard', label: '强力' }] },
+      ] }, position_x: 386,
+    })
+    const registry = createNodeRegistry(readCapabilities(extended))
+    const denoise = { id: 'denoise-1', type: 'denoise', config: { strength: 2, mode: 'soft' }, position: { x: 386, y: 120 } }
+    expect(registry.createDefaultConfig('denoise')).toEqual({ strength: 2, mode: 'soft' })
+    expect(registry.outputPortForNode('denoise')).toBe('audio')
+    expect(validateDraft({ nodes: [input, denoise, output], edges: [
+      { id: 'in-denoise', source: 'input', source_port: 'audio', target: 'denoise-1', target_port: 'audio' },
+      { id: 'denoise-out', source: 'denoise-1', source_port: 'audio', target: 'output', target_port: 'audio' },
+    ] }, registry)).toEqual([])
+    const invalid = validateDraft({ nodes: [input, { ...denoise, config: { strength: 9, mode: 'other' } }, output], edges: [
+      { id: 'in-denoise', source: 'input', source_port: 'audio', target: 'denoise-1', target_port: 'audio' },
+      { id: 'denoise-out', source: 'denoise-1', source_port: 'audio', target: 'output', target_port: 'audio' },
+    ] }, registry)
+    expect(invalid.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_NODE_CONFIG']))
+  })
+
+  it('adds and edits a catalog-only node through the generic editor without changing a fixed type branch', async () => {
+    const extended = structuredClone(testCapabilities)
+    extended.workflow.nodes.push({
+      type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
+      required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
+        { key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+      ] }, position_x: 386,
+    })
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    button('＋ 降噪')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(store.draft.nodes.find((item) => item.type === 'denoise')?.config).toEqual({ strength: 2 })
+    const denoiseNode = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node')).find((item) => item.getAttribute('class')?.includes('is-denoise'))!
+    denoiseNode.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
+    const strength = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="number"]')!
+    strength.value = '4'; strength.dispatchEvent(new Event('input', { bubbles: true }))
+    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(store.draft.nodes.find((item) => item.type === 'denoise')?.config).toEqual({ strength: 4 })
+  })
+
+  it('does not duplicate builtin fields in the generic editor for builtin nodes', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
+    store.selectNode(pre.id); await settle()
+    button('编辑节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(root!.querySelectorAll('.workflow-settings-modal .config-field').length).toBe(3)
+    expect(root!.textContent).not.toContain('字段由服务端能力目录定义')
+  })
+
+  it('renders and resaves a legacy graph through the live capability registry', async () => {
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(testCapabilities)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.document?.nodes.map((node) => node.type)).toEqual(['audio_input', 'audio_output'])
+    expect(root!.querySelectorAll('.workflow-node')).toHaveLength(2)
+    const before = JSON.stringify(store.draft)
+    expect(store.dirty).toBe(false)
+    button('校验并保存')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await settle()
+    // Unchanged legacy graph remains renderable and is not mutated by capability loading.
+    expect(JSON.stringify(store.draft)).toBe(before)
+  })
+
+  it('accepts the backend node registry shape without requiring frontend-only layout fields', () => {
+    const backendShape = {
+      schema_version: '1.0',
+      workflow: {
+        nodes: [
+          { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
+          { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [{ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, options: [] }] } },
+        ],
+        ports: ['audio'],
+      },
+      asr: { backends: ['qwen3'], status: 'available', message: null, truncated: false, warnings: [] },
+      export: { formats: [{ value: 'srt', label: 'SRT' }], naming_modes: [{ value: 'language', label: '按语言命名' }] },
+    }
+    const registry = createNodeRegistry(readCapabilities(backendShape))
+    expect(registry.kinds.map((kind) => kind.type)).toEqual(['audio_input', 'audio_output'])
+    expect(registry.outputPortForNode('audio_input')).toBe('audio')
+    expect(registry.createDefaultConfig('audio_output')).toEqual({ filename_stem: 'audio-copy' })
+  })
+
+  it('reads the live capabilities API response including providers and export options', () => {
+    const live = {
+      schema_version: '1.0',
+      workflow: {
+        schema_version: '1.0',
+        ports: ['audio', 'transcript', 'text'],
+        nodes: [
+          { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
+          { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
+        ],
+      },
+      asr: {
+        providers: [{ id: 'mock', label: 'Mock' }, { id: 'crispasr', label: 'CrispASR' }],
+        backends: ['qwen3'], status: 'unavailable', message: '当前无法读取本地 ASR 能力；Mock 节点仍可用', truncated: false, warnings: [],
+      },
+      export: {
+        formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }],
+        naming_modes: [{ id: 'language', label: '按语言命名' }, { id: 'original', label: 'original' }],
+      },
+    }
+    const parsed = readCapabilities(live)
+    expect(parsed.nodeTypes).toEqual(['audio_input', 'audio_output'])
+    expect(parsed.asr.status).toBe('unavailable')
+    expect(parsed.asr.providers.map((item) => item.value)).toEqual(['mock', 'crispasr'])
+    expect(parsed.export.formats.map((item) => item.value)).toEqual(['srt', 'vtt', 'lrc'])
+    expect(parsed.export.namingModes.map((item) => item.value)).toEqual(['language', 'original'])
+  })
+
+  it('rejects a non-current capabilities schema version', () => {
+    expect(() => readCapabilities({ ...testCapabilities, schema_version: '2.0' })).toThrow('schema_version')
+  })
+
+  it('rejects malformed or missing catalog data instead of falling back to local node defaults', () => {
+    const brokenPort = structuredClone(testCapabilities)
+    brokenPort.workflow.nodes[1].output_ports = ['video']
+    expect(() => readCapabilities(brokenPort)).toThrow('端口未声明')
+    const duplicate = structuredClone(testCapabilities)
+    duplicate.workflow.nodes.push({ ...duplicate.workflow.nodes[0] })
+    expect(() => readCapabilities(duplicate)).toThrow('节点类型重复')
+  })
+
+  it('blocks workflow loading with an actionable error when capability discovery is unavailable', async () => {
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response({ error: { message: '能力发现失败' } }, 503)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.capabilities).toBeNull()
+    expect(store.error).toContain('能力发现失败')
+    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
+    expect(store.draft.nodes).toEqual([])
   })
 })
 

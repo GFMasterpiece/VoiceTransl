@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..domain import (
     WorkflowDocument,
@@ -12,6 +12,7 @@ from ..domain import (
     WorkflowValidationResponse,
     validate_workflow_graph,
 )
+from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
 from ..storage import ProjectNotFound
 from ..storage.project_store import WorkflowRevisionConflict
 
@@ -25,6 +26,8 @@ def _error(code: str, message: str, details=None) -> dict:
 def _project(request: Request, pid: str):
     try:
         return request.app.state.store.load_project(pid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(404, detail=_error("PROJECT_NOT_FOUND", "项目不存在"))
 
@@ -40,20 +43,33 @@ def _run(request: Request, pid: str, aid: str, rid: str) -> WorkflowRun:
     _audio(request, pid, aid)
     try:
         return request.app.state.store.load_workflow_run(pid, aid, rid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(404, detail=_error("WORKFLOW_RUN_NOT_FOUND", "工作流运行不存在"))
 
 
 class WorkflowSaveRequest(BaseModel):
+    schema_version: str = SCHEMA_VERSION
     expected_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(max_length=64)
     edges: list[WorkflowEdge] = Field(max_length=64)
 
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "workflow request")
+
 
 class WorkflowValidateRequest(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = SCHEMA_VERSION
     nodes: list[WorkflowNode] = Field(max_length=64)
     edges: list[WorkflowEdge] = Field(max_length=64)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "workflow validation request")
 
 
 class WorkflowRunRequest(BaseModel):
@@ -65,10 +81,10 @@ async def get_workflow(pid: str, request: Request):
     _project(request, pid)
     try:
         return request.app.state.store.load_workflow(pid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
-        raise HTTPException(
-            422, detail=_error("INVALID_WORKFLOW", "已保存的工作流无法读取，请重新保存")
-        )
+        raise HTTPException(422, detail=_error("INVALID_WORKFLOW", "已保存的工作流无法读取"))
 
 
 @router.put("/projects/{pid}/workflow", response_model=WorkflowDocument)
@@ -102,6 +118,8 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
                 409,
                 detail=_error("WORKFLOW_REVISION_CONFLICT", "工作流已被修改，请刷新后重试"),
             )
+        except SchemaVersionError:
+            raise
         except ValueError:
             raise HTTPException(422, detail=_error("INVALID_WORKFLOW", "工作流无效"))
 
@@ -132,6 +150,23 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
             raise HTTPException(
                 409,
                 detail=_error("AUDIO_BUSY", "该音频已有任务正在运行或排队"),
+            )
+        if str(error) == "ASR_BACKEND_UNSUPPORTED":
+            raise HTTPException(
+                422,
+                detail=_error(
+                    "ASR_BACKEND_UNSUPPORTED",
+                    "所选 ASR 后端暂不支持，请重新选择可用后端",
+                ),
+            )
+        if str(error) == "ASR_BACKEND_DISCOVERY_FAILED":
+            raise HTTPException(
+                503,
+                detail=_error(
+                    "ASR_BACKEND_DISCOVERY_FAILED",
+                    "当前无法读取本地 ASR 能力，请稍后重试",
+                    {"retryable": True},
+                ),
             )
         raise HTTPException(500, detail=_error("INTERNAL_ERROR", "工作流启动失败")) from error
     except ValueError as error:

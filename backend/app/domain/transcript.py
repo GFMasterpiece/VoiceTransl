@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .schema import require_schema_version
 
 
 class Segment(BaseModel):
@@ -32,3 +34,8 @@ class Transcript(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     segments: list[Segment] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_schema_version(value, "transcript")

@@ -9,19 +9,23 @@ from uuid import uuid4
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ..config import load_preset
 from ..domain import (
+    ASRConfig,
     Job,
     JobStatus,
     PipelineConfig,
@@ -32,9 +36,11 @@ from ..domain import (
     StageState,
     StageStatus,
     Transcript,
+    TranslationConfig,
     default_stages,
 )
 from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
+from ..domain.schema import SchemaVersionError, require_schema_version
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
 router = APIRouter(prefix="/api/v1")
@@ -47,15 +53,49 @@ def deps(request):
 def get_project(state, pid):
     try:
         return state.store.load_project(pid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             404, detail={"error": {"code": "PROJECT_NOT_FOUND", "message": "项目不存在"}}
         )
 
 
+def _language_error(field: str, message: str) -> RequestValidationError:
+    return RequestValidationError(
+        [{"type": "value_error", "loc": ("body", field), "msg": message, "input": None}]
+    )
+
+
+def _language_form(field: str, value: str) -> str:
+    if not value or value != value.strip():
+        raise _language_error(field, f"{field} 不能为空或包含首尾空白")
+    if len(value) > 32:
+        raise _language_error(field, f"{field} 不能超过 32 个字符")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise _language_error(field, f"{field} 不能包含控制字符")
+    return value
+
+
+def source_language_form(source_language: str = Form(...)) -> str:
+    return _language_form("source_language", source_language)
+
+
+def project_languages_form(
+    source_language: str = Depends(source_language_form),
+    target_language: str = Form(...),
+) -> tuple[str, str]:
+    target = _language_form("target_language", target_language)
+    if source_language.casefold() == target.casefold():
+        raise _language_error("target_language", "source_language 和 target_language 不能相同")
+    return source_language, target
+
+
 def get_job(state, pid):
     try:
         return state.store.load_job(pid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             404, detail={"error": {"code": "PROJECT_NOT_FOUND", "message": "项目不存在"}}
@@ -82,6 +122,8 @@ def audio_request(request, pid, aid):
     get_project(state, pid)
     try:
         store = state.store.scope(pid, aid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             404, detail={"error": {"code": "AUDIO_NOT_FOUND", "message": "音频不存在"}}
@@ -107,6 +149,9 @@ class UploadPolicyResponse(BaseModel):
 
 class ProjectListResponse(BaseModel):
     items: list[Project]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
 
 
 class ProviderProfileListResponse(BaseModel):
@@ -142,6 +187,12 @@ class OutputItem(BaseModel):
     name: str
     size_bytes: int
     download_url: str
+    format: str | None = None
+    kind: str | None = None
+    source_language: str | None = None
+    target_language: str | None = None
+    bilingual: bool | None = None
+    sha256: str | None = None
 
 
 class OutputsResponse(BaseModel):
@@ -183,6 +234,8 @@ class StageDetailResponse(BaseModel):
 def get_provider_profile(state, profile_id: str) -> ProviderProfile:
     try:
         profile = state.store.provider_profile(profile_id)
+    except SchemaVersionError:
+        raise
     except (FileNotFoundError, ValueError):
         profile = None
     if profile is None:
@@ -216,6 +269,8 @@ async def upload_policy(request: Request):
 async def provider_profiles(request: Request):
     try:
         profiles = deps(request).store.load_provider_profiles()
+    except SchemaVersionError:
+        raise
     except (FileNotFoundError, ValueError):
         raise HTTPException(
             422,
@@ -313,9 +368,10 @@ async def create_project(
     request: Request,
     file: UploadFile = File(...),
     name: str | None = Form(None),
-    source_language: str = Form("ja"),
+    languages: tuple[str, str] = Depends(project_languages_form),
     preset: str = Form("mock"),
 ):
+    source_language, target_language = languages
     state = deps(request)
     suffix = Path(file.filename or "").suffix.lower().lstrip(".")
     if suffix not in state.settings.allowed_extensions:
@@ -345,7 +401,16 @@ async def create_project(
     try:
         job = Job(id=jid, project_id=pid, stages=default_stages())
         project, job = await state.store.create_project_from_upload(
-            project, job, file, state.settings.max_upload_mb * 1024 * 1024
+            project,
+            job,
+            file,
+            state.settings.max_upload_mb * 1024 * 1024,
+            config=PipelineConfig(
+                source_language=source_language,
+                target_language=target_language,
+                asr=ASRConfig(language=source_language),
+                translation=TranslationConfig(target_language=target_language),
+            ),
         )
         return {"project": project, "job": job}
     except SourceUploadTooLarge:
@@ -361,8 +426,13 @@ async def create_project(
 
 
 @router.get("/projects", response_model=ProjectListResponse)
-async def list_projects(request: Request):
-    return {"items": deps(request).store.list_projects()}
+async def list_projects(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    items, total = deps(request).store.list_projects_page(limit=limit, offset=offset)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/projects/{pid}", response_model=Project)
@@ -385,6 +455,8 @@ async def delete_project(pid: str, request: Request):
                 },
             )
         raise
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             404, detail={"error": {"code": "PROJECT_NOT_FOUND", "message": "项目不存在"}}
@@ -397,6 +469,8 @@ async def pipeline_config(pid: str, request: Request):
     get_project(state, pid)
     try:
         return state.store.load_pipeline_config(pid)
+    except SchemaVersionError:
+        raise
     except (ProjectNotFound, ValueError):
         raise HTTPException(
             422,
@@ -497,6 +571,8 @@ async def run(pid: str, body: RunRequest, request: Request):
                 "error": {"code": "INTERNAL_ERROR", "message": "任务启动失败", "details": None}
             },
         ) from error
+    except SchemaVersionError:
+        raise
     except ValueError as error:
         raise HTTPException(
             422,
@@ -554,6 +630,8 @@ async def transcript(pid: str, request: Request):
             continue
         try:
             return {"stage": stage, "transcript": state.store.load_transcript(pid, stage)}
+        except SchemaVersionError:
+            raise
         except (FileNotFoundError, ValueError):
             pass
     raise HTTPException(
@@ -569,16 +647,38 @@ async def outputs(pid: str, request: Request):
     export = current.stages.get("export")
     if export is None or export.status.value != "completed":
         return {"items": []}
-    return {
-        "items": [
+    manifest_entries = (
+        state.store.load_export_manifest(pid) if state.store.has_export_manifest(pid) else []
+    )
+    manifest = {str(item["name"]): item for item in manifest_entries}
+    items = []
+    for path in state.store.list_outputs(pid):
+        if path.name == "manifest.json":
+            continue
+        metadata = manifest.get(path.name, {})
+        language = metadata.get("language")
+        items.append(
             {
-                "name": p.name,
-                "size_bytes": p.stat().st_size,
-                "download_url": f"/api/v1/projects/{pid}/outputs/{p.name}",
+                "name": path.name,
+                "size_bytes": path.stat().st_size,
+                "download_url": f"/api/v1/projects/{pid}/outputs/{path.name}",
+                "format": metadata.get("format", path.suffix.lstrip(".")),
+                "kind": metadata.get("kind"),
+                "source_language": (
+                    current.config_snapshot.source_language
+                    if current.config_snapshot is not None
+                    else None
+                ),
+                "target_language": (
+                    current.config_snapshot.target_language
+                    if current.config_snapshot is not None
+                    else language
+                ),
+                "bilingual": metadata.get("bilingual"),
+                "sha256": metadata.get("sha256"),
             }
-            for p in state.store.list_outputs(pid)
-        ]
-    }
+        )
+    return {"items": items}
 
 
 @router.get("/projects/{pid}/outputs/{filename}")
@@ -592,12 +692,21 @@ async def output(pid: str, filename: str, request: Request):
             404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
         )
     try:
-        path = state.store.resolve_output(pid, filename)
-    except ValueError:
+        manifest_entries = (
+            state.store.load_export_manifest(pid) if state.store.has_export_manifest(pid) else None
+        )
+        if manifest_entries is not None and filename not in {
+            str(item["name"]) for item in manifest_entries
+        }:
+            raise ValueError("output is not managed by the current manifest")
+        path = state.store._direct_output_path(pid, filename)
+    except SchemaVersionError:
+        raise
+    except (ValueError, OSError):
         raise HTTPException(
             404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
         )
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         raise HTTPException(
             404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
         )
@@ -610,6 +719,9 @@ async def events(ws: WebSocket, pid: str, audio_id: str | None = None):
     try:
         state.store.load_project(pid)
         store = state.store.scope(pid, audio_id or PRIMARY_AUDIO_ID)
+    except SchemaVersionError:
+        await ws.close(code=4402)
+        return
     except Exception:
         await ws.close(code=4404)
         return
@@ -620,6 +732,9 @@ async def events(ws: WebSocket, pid: str, audio_id: str | None = None):
     try:
         try:
             job = store.load_job(pid)
+        except SchemaVersionError:
+            await ws.close(code=4402)
+            return
         except (ProjectNotFound, ValueError):
             await ws.close(code=4404)
             return
@@ -690,7 +805,7 @@ async def append_audio(
     pid: str,
     request: Request,
     file: UploadFile = File(...),
-    source_language: str = Form("ja"),
+    source_language: str = Depends(source_language_form),
     name: str | None = Form(None),
 ):
     state = deps(request)
@@ -809,6 +924,13 @@ async def audio_stage_detail(pid: str, aid: str, stage: PipelineStageName, reque
             expected = store.resolve_project_path(pid, f"transcript/{transcript_name}.json")
             if artifact != expected:
                 raise ValueError("wrong transcript artifact")
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("invalid transcript")
+            # A malformed artifact is reported through result_error. Only an
+            # explicit, present version mismatch is an API schema rejection.
+            if "schema_version" in payload:
+                require_schema_version(payload["schema_version"], "transcript")
             value = Transcript.model_validate_json(artifact.read_text(encoding="utf-8"))
             if value.project_id != pid or value.stage != transcript_name:
                 raise ValueError("wrong transcript identity")
@@ -827,6 +949,8 @@ async def audio_stage_detail(pid: str, aid: str, stage: PipelineStageName, reque
             if not result["items"]:
                 raise ValueError("missing outputs")
             detail.result = OutputsResult(items=result["items"])
+    except SchemaVersionError:
+        raise
     except (OSError, ValueError):
         detail.result_error = StageResultError()
     return detail

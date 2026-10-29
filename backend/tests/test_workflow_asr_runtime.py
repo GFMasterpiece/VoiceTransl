@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 import threading
 import wave
@@ -6,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from app.application.platform_process import ContainedProcess
 from app.main import create_app
 from httpx import ASGITransport, AsyncClient
 
@@ -38,6 +40,7 @@ async def create_project(client, payload=None):
     response = await client.post(
         "/api/v1/projects",
         files={"file": ("input.wav", payload or wav_bytes(), "audio/wav")},
+        data={"source_language": "ja", "target_language": "zh-CN"},
     )
     assert response.status_code == 201, response.text
     project = response.json()["project"]
@@ -60,6 +63,42 @@ async def run(client, app, pid, aid, revision):
     assert response.status_code == 202, response.text
     await asyncio.gather(*list(app.state.jobs.tasks.values()))
     return response.json()["id"]
+
+
+class _DiscoveryStream:
+    def __init__(self, payload: bytes):
+        self._reader = asyncio.StreamReader()
+        self._reader.feed_data(payload)
+        self._reader.feed_eof()
+
+    async def read(self, size=-1):
+        return await self._reader.read(size)
+
+
+class _DiscoveryProcess:
+    def __init__(self, backends):
+        payload = json.dumps({"backends": backends}).encode("utf-8")
+        self.returncode = 0
+        self.stdout = _DiscoveryStream(payload)
+        self.stderr = _DiscoveryStream(b"")
+
+    async def wait(self):
+        return 0
+
+    def terminate(self):
+        self.returncode = -15
+
+    def kill(self):
+        self.returncode = -9
+
+
+def discovery_factory(backends, calls=None):
+    async def factory(executable):
+        if calls is not None:
+            calls.append(executable)
+        return ContainedProcess(_DiscoveryProcess(backends))
+
+    return factory
 
 
 @pytest.mark.asyncio
@@ -224,6 +263,7 @@ async def test_text_only_cancel_is_terminal_cancelled_and_has_no_late_artifact(t
 async def test_mixed_graph_crisp_cancel_and_shutdown_reap_fake_process(tmp_path):
 
     processes = []
+    discovery_calls = []
 
     class Process:
         def __init__(self):
@@ -256,6 +296,9 @@ async def test_mixed_graph_crisp_cancel_and_shutdown_reap_fake_process(tmp_path)
 
     app = create_app(tmp_path)
     app.state.jobs.crispasr_process_factory = factory
+    app.state.jobs.crispasr_discovery_factory = discovery_factory(
+        [{"name": "qwen3-1.7b", "caps": ["timestamps-native"]}], discovery_calls
+    )
     executable = tmp_path / "crispasr"
     executable.write_bytes(b"fake")
     executable.chmod(0o755)
@@ -293,6 +336,7 @@ async def test_mixed_graph_crisp_cancel_and_shutdown_reap_fake_process(tmp_path)
                 break
             await asyncio.sleep(0.01)
         assert processes
+        assert discovery_calls == [str(executable)]
         cancel = await client.post(
             f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{rid}/cancel"
         )
@@ -399,6 +443,7 @@ async def test_repeated_cancel_and_task_cancel_join_thread_without_late_publish(
 async def test_queued_workflow_captures_asr_and_ffmpeg_settings_at_enqueue(tmp_path, monkeypatch):
     calls = []
     ffmpeg_calls = []
+    discovery_calls = []
 
     class Process:
         def __init__(self, command):
@@ -450,6 +495,9 @@ async def test_queued_workflow_captures_asr_and_ffmpeg_settings_at_enqueue(tmp_p
     app.state.jobs.crispasr_executable = old_executable
     app.state.jobs.crispasr_model_dir = old_models
     app.state.jobs.crispasr_process_factory = factory
+    app.state.jobs.crispasr_discovery_factory = discovery_factory(
+        [{"name": "qwen3-1.7b", "caps": ["timestamps-native"]}], discovery_calls
+    )
     app.state.jobs.ffmpeg_path = "/old/ffmpeg"
     await app.state.jobs.semaphore.acquire()
     try:
@@ -478,6 +526,11 @@ async def test_queued_workflow_captures_asr_and_ffmpeg_settings_at_enqueue(tmp_p
             app.state.jobs.crispasr_executable = new_executable
             app.state.jobs.crispasr_model_dir = new_models
             app.state.jobs.ffmpeg_path = "/new/ffmpeg"
+
+            async def discovery_unavailable(_executable):
+                raise RuntimeError("discovery unavailable after enqueue")
+
+            app.state.jobs.crispasr_discovery_factory = discovery_unavailable
             app.state.jobs.semaphore.release()
             await asyncio.gather(*list(app.state.jobs.tasks.values()))
             detail = (
@@ -486,12 +539,16 @@ async def test_queued_workflow_captures_asr_and_ffmpeg_settings_at_enqueue(tmp_p
                 )
             ).json()
             assert detail["status"] == "completed", detail
+            assert discovery_calls == [str(old_executable)]
             assert ffmpeg_calls[0][0] == "/old/ffmpeg"
             assert calls[0][0] == str(old_executable)
             model = Path(calls[0][calls[0].index("--model") + 1])
             assert model.parent == old_models.resolve()
             assert model.name == "old.gguf"
 
+            app.state.jobs.crispasr_discovery_factory = discovery_factory(
+                [{"name": "qwen3-1.7b", "caps": ["timestamps-native"]}], discovery_calls
+            )
             graph["nodes"][2]["config"]["model"] = "new.gguf"
             second_document = await save(client, pid, graph, document["revision"])
             second = await client.post(
@@ -500,6 +557,7 @@ async def test_queued_workflow_captures_asr_and_ffmpeg_settings_at_enqueue(tmp_p
             )
             assert second.status_code == 202
             await asyncio.gather(*list(app.state.jobs.tasks.values()))
+            assert discovery_calls[-1] == str(new_executable)
             assert ffmpeg_calls[1][0] == "/new/ffmpeg"
             assert calls[1][0] == str(new_executable)
             assert Path(calls[1][calls[1].index("--model") + 1]).name == "new.gguf"

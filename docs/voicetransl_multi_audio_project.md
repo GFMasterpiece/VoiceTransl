@@ -4,7 +4,7 @@
 
 ## 1. 资源与作用范围
 
-一个项目包含一个或多个音频。用户上传一组音频到同一项目，在项目中选择一个、多个或全部音频，配置流程后开始处理。项目组织资源并提供公共默认配置；每个音频拥有独立任务、进度、字幕、时间轴和输出。
+一个项目包含一个或多个音频。用户上传一组音频到同一项目，在项目中选择一个、多个或全部音频，配置流程后开始处理。项目组织资源并提供公共默认配置；每个音频拥有独立任务、进度、字幕、时间轴和输出。新建项目必须由用户明确提供源语言和目标语言，不猜测目标；初始公共配置与项目/任务在同一临时目录完整写入后发布。
 
 “共同处理”指向选中的音频应用同一套配置，再启动各自任务。不拼接源文件、不合并时间轴或输出；跨音频联合翻译上下文需后续单独设计。
 
@@ -44,8 +44,9 @@ data/projects/<project-id>/
 
 | 方法与路径 | 语义 |
 | --- | --- |
-| `POST /projects` | multipart：`file`、`name`、`source_language`、`preset`；创建父项目及首个音频，201 返回 `{project, job}`，不启动 |
-| `POST /projects/{pid}/audios` | multipart：`file`、可选 `source_language`（默认 `ja`）、`name`；添加音频，201 返回 `{audio, job}`，不启动 |
+| `GET /projects` | `limit` 默认20、最大100，`offset` 默认0；按更新时间和ID倒序稳定分页，返回 `{items,total,limit,offset}`，无200项访问上限 |
+| `POST /projects` | multipart：必填 `file`、`source_language`、`target_language`，可选 `name`、`preset`；语言须非空、无首尾空白/控制字符、<=32，大小写不敏感不能相同；创建父项目及首个音频与有效初始公共配置，201 返回 `{project, job}`，不启动 |
+| `POST /projects/{pid}/audios` | multipart：必填 `file`、`source_language`，可选 `name`；语言遵守创建校验，不猜默认；添加音频，201 返回 `{audio, job}`，不启动 |
 | `GET /projects/{pid}/audios` | 返回 `{items: [{id, source, name, job}]}`，包含主音频和所有新增音频 |
 | `GET/PUT /projects/{pid}/audios/{aid}/config` | 读取有效配置 / 保存该音频配置，规则与旧配置接口一致 |
 | `GET /projects/{pid}/audios/{aid}/job` | 该音频当前 Job |
@@ -79,10 +80,19 @@ data/projects/<project-id>/
 
 WebSocket `/projects/{pid}/audios/{aid}/events` 先发送该音频 `job.snapshot`，后续仅通知该音频事件。事件同时包含父 `project_id`、`audio_id` 与 `job_id`。`/projects/{pid}/events` 默认首先发送主音频快照，后续可收到全项目事件；也可用 `?audio_id=...` 筛选。重连后通过 REST 恢复对应音频状态，事件不是持久状态或历史重放。
 
-## 4. 兼容与不变量
+## 4. 导出命名与结构化结果
+
+- `export.naming` 支持 `language`（默认）和 `original`（源文件名主体），后者可用 `filename_stem` 显式设置主体；`filename_template` 可覆盖命名规则，支持 `{source_language}`、`{target_language}`、`{kind}`、`{format}`，当前模板须包含语言变量及 `{kind}` 以区分译文/双语输出，扩展名由格式补齐。
+- 默认日语到中文的历史文件名保持 `zh.srt`、`ja-zh.srt`、`zh.vtt`、`ja-zh.vtt`、`zh.lrc`。译文文件与双语字幕分别生成，不能因支持模板而把两者合成同一个文件。
+- 新输出在当前音频 `output/manifest.json` 记录文件、格式、业务种类、语言、双语标志、大小和 SHA256；API 在此基础上提供下载地址及源/目标语言，不再从自定义文件名推断语义。没有 manifest 的旧输出使用独立兼容读取路径，不迁移历史文件。显式空清单表示没有受管结果，不重新扫描旧文件；人工附加文件不自动作为生成结果暴露。受管文件若与原清单摘要不一致，拒绝覆盖或清理，避免删除人工修改。
+- 模板与最终文件名都需安全校验：拒绝路径分隔符、控制字符、Windows 设备保留名称、危险字符、尾点/空格、过长名称、大小写不敏感冲突及内部 manifest 名称；不能覆盖源文件或无关用户文件。
+- 新文件先暂存，逐文件发布后发布 manifest，再清理旧受管文件；单个文件原子发布不等同于整个文件集合具有事务性。旧 Pipeline 仍只维护当前结果，并非图工作流的不可变运行历史。
+
+## 5. 兼容与不变量
 
 - 旧 `/projects/{pid}/job|run|cancel|transcript|outputs` 路径保留，操作主音频，不暗中操作全部音频。旧 `/projects/{pid}/config` 保留为公共默认与主音频配置回退；逐音频配置路径操作独立覆盖，包含主音频。
-- `schema_version` 保持兼容的 `1.0`，新增字段提供旧数据默认值，无强制迁移。项目仍是可独立复制的完整目录。
+- 当前 `schema_version` 为 `1.0`，仅接受相同版本，不做跨版本迁移或静默降级；错误版本文件保持原样。既有同版本字段兼容按各专题规则执行。项目仍是可独立复制的完整目录。
+- 创建项目语言必填与列表分页属于本轮用户确认的 API 调整；旧客户端缺少语言字段返回422，不能依赖过去的日语/中文默认值。
 - 上传每项遵守同一 `upload-policy`，先写临时资源，完整后发布成员；失败不删除已有项目或成功音频。并发添加与删除须串行化成员变更。
 - 同一音频最多一个运行/排队任务；不同音频可独立排队并遵守全局并发限制。
 - 项目删除检查所有成员，任一运行、取消中或已提交排队的任务都使父项目忙碌。

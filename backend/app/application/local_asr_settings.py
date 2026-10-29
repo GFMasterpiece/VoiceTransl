@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import hashlib
 import ipaddress
 import os
 import re
-import signal
-import stat
 import tempfile
 import unicodedata
 from pathlib import Path
@@ -20,6 +17,8 @@ from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import AppSettings
+from .platform_io import FileLock, set_mode_from
+from .platform_process import spawn_contained, terminate_contained
 
 FIELDS = ("crispasr_executable", "crispasr_model_dir")
 VERSION = re.compile(r"\bcrispasr\b[^\r\n]*?\bv?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)", re.I)
@@ -126,13 +125,11 @@ def require_local_request(request: Request):
 
 
 async def _create_process(executable: str):
-    return await asyncio.create_subprocess_exec(
-        executable,
-        "--version",
+    return await spawn_contained(
+        [executable, "--version"],
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
     )
 
 
@@ -295,12 +292,9 @@ class LocalASRSettings:
             result["message"] = "无法执行 CrispASR 版本检查，或输出超出限制"
         finally:
             if process is not None:
-                # The session also covers descendants holding stdout/stderr open.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+                # The process group/session also covers descendants holding
+                # stdout/stderr open.
+                await terminate_contained(process)
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -333,7 +327,7 @@ class LocalASRSettings:
         temporary = Path(name)
         try:
             with os.fdopen(descriptor, "wb") as file:
-                os.fchmod(file.fileno(), stat.S_IMODE(self.config_path.stat().st_mode))
+                set_mode_from(self.config_path, file)
                 file.write(data)
                 file.flush()
                 os.fsync(file.fileno())
@@ -361,13 +355,7 @@ class LocalASRSettings:
             if not current["editable"]:
                 raise error(503, "SETTINGS_NOT_EDITABLE", "设置文件不可写，请检查文件和目录权限")
             try:
-                with self.config_path.with_suffix(".yaml.lock").open("a+b") as lock_file:
-                    try:
-                        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError as exc:
-                        raise error(
-                            409, "SETTINGS_REVISION_CONFLICT", "设置正在更新，请稍后重新加载"
-                        ) from exc
+                with FileLock(self.config_path.with_suffix(".yaml.lock")):
                     data, raw = self._read()
                     if hashlib.sha256(data).hexdigest() != values.revision:
                         raise error(

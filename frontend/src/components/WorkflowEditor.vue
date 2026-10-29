@@ -6,15 +6,15 @@ import {
   WORKFLOW_NODE_WIDTH,
   defaultAsrConfig,
   executionSignature,
-  inputPortForNode,
+  inputPortForNode as registeredInputPortForNode,
   isTerminalNode,
-  nodeLabel,
-  outputPortForNode,
+  nodeLabel as registeredNodeLabel,
+  outputPortForNode as registeredOutputPortForNode,
   readAsrConfig,
   readPreprocessConfig,
   readTextOutputConfig,
   useWorkflowStore,
-  validateNodeConfig,
+  validateNodeConfig as registeredValidateNodeConfig,
   type AsrNodeConfig,
   type PreprocessChannels,
   type PreprocessProvider,
@@ -42,7 +42,32 @@ const sampleRateDraft = ref('16000')
 const channelsDraft = ref<PreprocessChannels>(1)
 const preserveOriginalDraft = ref(true)
 const asrDraft = ref<AsrNodeConfig>(defaultAsrConfig())
+const genericDraft = ref<Record<string, unknown>>({})
 const settingsError = ref('')
+const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
+const builtinConfigKinds = new Set(['none', 'preprocess', 'asr', 'audio_output', 'text_output'])
+const genericFields = computed(() => selectedKind.value && !builtinConfigKinds.has(selectedKind.value.configKind) ? selectedKind.value.fields : [])
+const asrProviders = computed(() => (store.capabilities?.asr.providers || []).map((item) => ({ value: item.value, label: item.label })))
+const asrBackendDetails = computed(() => store.capabilities?.asr.backendDetails || [])
+function fieldValue(field: { key: string; default: unknown }) {
+  const value = genericDraft.value[field.key]
+  return value === undefined ? (field.default ?? '') : value
+}
+function setFieldValue(field: { key: string; type: string }, value: unknown) {
+  genericDraft.value = { ...genericDraft.value, [field.key]: field.type === 'integer' || field.type === 'number' ? Number(value) : value }
+}
+function jsonFieldValue(field: { key: string }) {
+  const value = genericDraft.value[field.key]
+  return value === undefined ? '{}' : JSON.stringify(value, null, 2)
+}
+function setJsonFieldValue(field: { key: string }, event: Event) {
+  try {
+    const value = JSON.parse((event.target as HTMLTextAreaElement).value) as unknown
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { settingsError.value = '此字段必须是 JSON 对象。'; return }
+    genericDraft.value = { ...genericDraft.value, [field.key]: value }
+    settingsError.value = ''
+  } catch { settingsError.value = '此字段不是有效 JSON。' }
+}
 const selected = computed(() => store.selectedNode)
 const currentInput = computed(() => store.draft.nodes.find((node) => node.type === 'audio_input'))
 const connectionSources = computed(() => store.draft.nodes.filter((node) => !!outputPortForNode(node.type)))
@@ -54,6 +79,12 @@ const canRun = computed(() => !store.dirty && !store.saving && !!store.document 
 
 const nodeWidth = WORKFLOW_NODE_WIDTH
 const nodeHeight = WORKFLOW_NODE_HEIGHT
+const registry = computed(() => store.registry)
+const nodeKinds = computed(() => registry.value?.kinds || [])
+function outputPortForNode(type: string) { return registry.value ? registeredOutputPortForNode(type, registry.value) : null }
+function inputPortForNode(type: string) { return registry.value ? registeredInputPortForNode(type, registry.value) : null }
+function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
+function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>) { return registry.value ? registeredValidateNodeConfig(node, registry.value) : [{ code: 'CAPABILITIES_UNAVAILABLE', message: '能力目录不可用' }] }
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
 
 function nodeStatus(node: WorkflowNode) {
@@ -98,10 +129,11 @@ function openNode(node: WorkflowNode) {
   channelsDraft.value = preprocess.channels
   preserveOriginalDraft.value = preprocess.preserve_original
   asrDraft.value = readAsrConfig(node.config)
+  genericDraft.value = { ...node.config }
   settingsError.value = ''
   settingsOpen.value = true
   void nextTick(() => {
-    const target = document.getElementById(node.type === 'audio_output' || node.type === 'text_output' ? 'workflow-filename-stem' : node.type === 'preprocess' ? 'workflow-sample-rate' : 'workflow-settings-title')
+    const target = document.getElementById(node.type === 'audio_output' || node.type === 'text_output' ? 'workflow-filename-stem' : node.type === 'preprocess' ? 'workflow-sample-rate' : node.type === 'asr' ? 'workflow-settings-title' : 'workflow-settings-title')
     const focusTarget = target || document.querySelector<HTMLElement>('.workflow-settings-modal select, .workflow-settings-modal input, .workflow-settings-modal button')
     focusTarget?.focus()
   })
@@ -159,12 +191,20 @@ function commitSettings() {
         preserve_original: preserveOriginalDraft.value,
       },
     })
+  } else {
+    const config = { ...genericDraft.value }
+    const issues = validateNodeConfig({ id: selected.value.id, type: selected.value.type, config })
+    if (issues.length) {
+      settingsError.value = issues[0].message
+      return
+    }
+    store.updateNode(selected.value.id, { config })
   }
   settingsOpen.value = false
 }
 
 function removeSelected() {
-  if (!selected.value || selected.value.type === 'audio_input') return
+  if (!selected.value || selected.value.type === 'audio_input' || registry.value?.kind(selected.value.type)?.removable === false) return
   if (!window.confirm(`删除节点“${nodeLabel(selected.value)}”？相关连线也会删除。`)) return
   store.removeNode(selected.value.id)
   settingsOpen.value = false
@@ -267,11 +307,11 @@ function removeEdge(edgeId: string) {
 
 async function validateAndSave() {
   settingsOpen.value = false
-  const signature = executionSignature(store.draft)
+  const signature = executionSignature(store.draft, registry.value || undefined)
   try {
     const issues = await store.validate()
     if (issues.length || store.error) return
-    if (executionSignature(store.draft) !== signature) {
+    if (executionSignature(store.draft, registry.value || undefined) !== signature) {
       store.error = '草稿在校验期间已修改，请重新校验并保存。'
       return
     }
@@ -279,6 +319,11 @@ async function validateAndSave() {
   } catch {
     // Keep the current draft and node context; the store exposes the API error.
   }
+}
+
+async function reloadCapabilities() {
+  store.capabilities = null
+  await store.load(props.projectId, props.audioId)
 }
 
 async function runWorkflow() {
@@ -340,7 +385,7 @@ function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
     event.preventDefault()
     openNode(node)
   }
-  if (event.key === 'Delete' && node.type !== 'audio_input' && !store.activeRun) {
+  if (event.key === 'Delete' && node.type !== 'audio_input' && registry.value?.kind(node.type)?.removable !== false && !store.activeRun) {
     event.preventDefault()
     if (window.confirm(`删除节点“${nodeLabel(node)}”？`)) store.removeNode(node.id)
   }
@@ -446,7 +491,7 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div v-if="store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.error }}</span><button type="button" aria-label="关闭节点工作流提示" @click="store.error = ''">×</button></div>
+    <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" aria-label="关闭节点工作流提示" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">重试能力目录</button></div>
     <div v-if="store.notice" class="workflow-notice" role="status">{{ store.notice }}</div>
         <div v-if="discardPrompt" class="workflow-discard" role="alertdialog" aria-labelledby="discard-title"><div><strong id="discard-title">放弃未保存的节点工作流修改？</strong><p>离开节点工作流后，画布和节点设置修改将丢失。已启动的任务不受影响。</p></div><div><button class="secondary-button" type="button" @click="discardPrompt = false">继续编辑</button><button class="primary-button" type="button" @click="discardAndClose">放弃修改</button></div></div>
 
@@ -454,11 +499,7 @@ onUnmounted(() => {
     <template v-else>
       <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>ASR 与文本输出</strong><span>输入绑定当前音频：{{ props.audioName }}。audio / transcript 端口必须同类型连接；新增节点不会静默替换原有连线。</span></div>
       <div class="workflow-toolbar" role="toolbar" aria-label="节点工作流工具">
-        <button class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || !!currentInput" @click="store.addNode('audio_input')">＋ 输入节点</button>
-        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('preprocess')">＋ 预处理</button>
-        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('asr')">＋ ASR</button>
-        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('audio_output')">＋ 输出节点</button>
-        <button class="secondary-button compact-button" type="button" :disabled="controlsLocked" @click="store.addNode('text_output')">＋ 文本输出</button>
+        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || (kind.type === 'audio_input' && !!currentInput) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
         <span class="toolbar-rule" aria-hidden="true"></span>
         <button class="secondary-button compact-button" type="button" :disabled="!connectionSource || !connectionTargets.length || !!store.activeRun" @click="connectionSource && startConnection(connectionSource)">连线模式</button>
         <span v-if="connectFrom" class="connection-hint" role="status">{{ connectFromLabel() }}</span>
@@ -504,7 +545,7 @@ onUnmounted(() => {
             <div class="workflow-field"><span>节点 ID</span><code>{{ selected.id }}</code></div>
             <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">编辑节点设置</button>
             <button v-if="selected.type !== 'audio_input'" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">删除{{ selected.type === 'preprocess' ? '预处理' : selected.type === 'asr' ? 'ASR' : '输出' }}节点</button>
-            <p v-if="selected.type === 'audio_input'" class="inspector-help">输入只使用当前音频 {{ props.audioName }}，不提供路径输入。</p>
+          <p v-if="selected.type === 'audio_input'" class="inspector-help">输入只使用当前音频 {{ props.audioName }}，不提供路径输入。</p>
             <p v-else-if="selected.type === 'preprocess'" class="inspector-help">{{ readPreprocessConfig(selected.config).provider === 'mock' ? 'Mock 只复制上游原字节，用于验证链路，不实际转换采样率或声道。' : 'FFmpeg 由服务端固定配置调用并输出独立 WAV。' }} 无论是否勾选保留源文件，源文件都不会删除或覆盖。</p>
             <p v-else-if="selected.type === 'asr'" class="inspector-help">识别语言为当前节点独立配置，不会随音频 Pipeline 语言静默改变。CrispASR 需要直接上游是 16 kHz 单声道 PCM WAV；不满足时请先接 FFmpeg 预处理。</p>
             <p v-else-if="selected.type === 'text_output'" class="inspector-help">TXT 可无时间戳；SRT、VTT、LRC 需要完整有效时间范围。缺失时间戳只会让该文本输出失败，不影响音频分支。</p>
@@ -550,13 +591,23 @@ onUnmounted(() => {
           </div>
           <div v-if="selected.type === 'preprocess'" class="workflow-preprocess-note"><strong>{{ providerDraft === 'mock' ? 'Mock 只验证链路' : 'FFmpeg 真实转换' }}</strong><p>{{ providerDraft === 'mock' ? '复制直接上游文件的原始字节，不实际转换采样率或声道；采样率与声道设置仅用于验证配置快照。' : '由服务端配置的 FFmpeg 生成独立 WAV；不接受自定义命令、附加参数或路径。' }}</p><p>无论此选项是否勾选，源文件都会保留。FFmpeg 预处理产物固定为 WAV/WAV 媒体类型；Mock 预处理及输出节点沿用直接上游的字节、后缀和媒体类型。</p></div>
           <div v-if="selected.type === 'asr'" class="workflow-asr-settings">
-            <AsrConfigFields :key="`${props.projectId}/${props.audioId}/${selected.id}`" :config="asrDraft" :audio-key="`${props.projectId}/${props.audioId}/${selected.id}`" :locked="controlsLocked" @change="updateAsrDraft" />
+            <AsrConfigFields :key="`${props.projectId}/${props.audioId}/${selected.id}`" :config="asrDraft" :audio-key="`${props.projectId}/${props.audioId}/${selected.id}`" :locked="controlsLocked" :providers="asrProviders" :backend-details="asrBackendDetails" @change="updateAsrDraft" />
             <p class="workflow-preprocess-note">语言只属于当前 ASR 节点，不读取或修改音频的 Pipeline 语言。模型必须是受限文件名标识符；CrispASR 的运行路径、超时与模型目录由服务端设置决定。</p>
             <p class="settings-help">真实 CrispASR 的模型目录选项需在后端全局设置中检查；此节点不会保存本机路径、密钥或 Provider Profile。</p>
           </div>
           <label v-if="selected.type === 'audio_output' || selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-filename-stem"><span>输出文件名（不含扩展名）</span><input id="workflow-filename-stem" v-model="filenameDraft" type="text" maxlength="128" :disabled="controlsLocked" :placeholder="selected.type === 'text_output' ? 'transcript' : 'audio-copy'" /><small v-if="selected.type === 'text_output'">最多 128 个字符；后端按 {{ textFormatDraft.toUpperCase() }} 格式补扩展名。这里不是本机路径。</small><small v-else>最多 128 个字符；后端生成安全文件名并按直接上游的媒体类型补扩展名。这里不是本机路径。</small></label>
           <label v-if="selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-text-format"><span>文本格式</span><select id="workflow-text-format" v-model="textFormatDraft" :disabled="controlsLocked"><option value="txt">TXT · 纯识别原文</option><option value="srt">SRT · 字幕</option><option value="vtt">VTT · 字幕</option><option value="lrc">LRC · 歌词</option></select><small>TXT 允许片段没有时间戳；SRT、VTT、LRC 需要完整时间范围。每个文本输出节点只生成一种格式。</small></label>
           <p v-if="selected.type === 'audio_input'" class="inspector-help">输入节点只绑定当前焦点音频「{{ props.audioName }}」，不接受路径输入。</p>
+            <div v-if="genericFields.length" class="modal-field-grid">
+            <label v-for="field in genericFields" :key="field.key" class="config-field" :class="{ 'modal-wide-field': field.type === 'json' }">
+              <span>{{ field.label }}<template v-if="field.required"> *</template></span>
+              <select v-if="field.type === 'boolean'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value === 'true')"><option value="true">是</option><option value="false">否</option></select>
+              <select v-else-if="field.type === 'select'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value)"><option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option></select>
+              <textarea v-else-if="field.type === 'json'" :value="jsonFieldValue(field)" rows="4" :disabled="controlsLocked" @change="setJsonFieldValue(field, $event)"></textarea>
+              <input v-else :value="fieldValue(field)" :type="field.type === 'integer' || field.type === 'number' ? 'number' : 'text'" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :step="field.type === 'integer' ? 1 : 'any'" :disabled="controlsLocked" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)" />
+              <small>字段由服务端能力目录定义。</small>
+            </label>
+          </div>
           <p v-if="settingsError" class="settings-feedback settings-error" role="alert">{{ settingsError }}</p>
           <div class="config-modal-footer"><span>{{ store.dirty ? '有未保存修改' : '当前节点已同步' }}</span><div><button class="secondary-button" type="button" @click="closeSettings">取消</button><button class="primary-button" type="submit" :disabled="controlsLocked">应用节点设置</button></div></div>
         </form>

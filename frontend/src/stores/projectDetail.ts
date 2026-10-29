@@ -37,7 +37,9 @@ export interface PipelineConfig {
     model: string
     target_language: string
     batch_size: number
-    temperature: number
+    additional_parameters?: Record<string, unknown> | null
+    // Legacy explicit field, omitted from new configs and requests.
+    temperature?: number | null
     glossary: Record<string, string>
     instructions: string | null
     timeout_seconds: number
@@ -46,6 +48,8 @@ export interface PipelineConfig {
     formats: string[]
     bilingual: boolean
     naming: string
+    filename_template?: string | null
+    filename_stem?: string | null
   }
 }
 
@@ -110,6 +114,12 @@ export interface Output {
   name: string
   size_bytes: number
   download_url: string
+  artifact_id?: string
+  artifact_kind?: 'subtitle' | 'transcript' | 'audio' | 'text' | string
+  format?: string
+  language?: string
+  bilingual?: boolean
+  source_name?: string
 }
 
 export interface StageDetail {
@@ -140,12 +150,14 @@ interface EventMessage {
   data?: Record<string, unknown>
 }
 
-function defaultConfig(sourceLanguage = 'ja'): PipelineConfig {
-  const targetLanguage = sourceLanguage.toLowerCase() === 'zh' ? 'en' : 'zh-CN'
+export function defaultConfig(sourceLanguage = 'ja', targetLanguage?: string): PipelineConfig {
+  // This is an unloaded UI placeholder only. Persisted project configs are
+  // validated from the backend and newly created projects require explicit languages.
+  const target = targetLanguage ?? (sourceLanguage.toLowerCase() === 'zh' ? 'en' : 'zh-CN')
   return {
     schema_version: '1.0',
     source_language: sourceLanguage,
-    target_language: targetLanguage,
+    target_language: target,
     preprocess: { provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true },
     asr: { provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: sourceLanguage, vad_enabled: true, chunk_seconds: 30 },
     alignment: { enabled: true, provider: 'mock', model: 'mock', fallback: 'keep_asr_timestamps' },
@@ -154,9 +166,9 @@ function defaultConfig(sourceLanguage = 'ja'): PipelineConfig {
       base_url: null,
       api_key_env: null,
       model: 'mock',
-      target_language: targetLanguage,
+      target_language: target,
       batch_size: 8,
-      temperature: 0.2,
+      additional_parameters: {},
       glossary: {},
       instructions: null,
       timeout_seconds: 120,
@@ -198,9 +210,15 @@ function validateConfig(value: PipelineConfig | null): string[] {
   if (value.translation.provider !== 'mock' && !value.translation.base_url?.trim()) errors.push('真实翻译 Provider 需要设置接口地址')
   if (value.translation.api_key_env && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.translation.api_key_env)) errors.push('API Key 环境变量名格式不正确')
   if (value.translation.batch_size < 1 || value.translation.batch_size > 128) errors.push('翻译批量大小必须在 1–128 之间')
-  if (value.translation.temperature < 0 || value.translation.temperature > 2) errors.push('翻译温度必须在 0–2 之间')
+  if (value.translation.temperature !== undefined && value.translation.temperature !== null && (value.translation.temperature < 0 || value.translation.temperature > 2)) errors.push('旧版翻译温度必须在 0–2 之间')
+  if (value.translation.additional_parameters !== undefined && value.translation.additional_parameters !== null && (typeof value.translation.additional_parameters !== 'object' || Array.isArray(value.translation.additional_parameters))) errors.push('翻译附加参数必须是 JSON 对象')
   if (value.translation.timeout_seconds < 1 || value.translation.timeout_seconds > 3600) errors.push('翻译请求超时必须在 1–3600 秒之间')
   if (!value.export.formats.length) errors.push('至少选择一种导出格式')
+  if (value.export.filename_template !== undefined && value.export.filename_template !== null) {
+    const template = value.export.filename_template
+    if (!template.trim() || template !== template.trim() || template.length > 128 || /[\\/\u0000-\u001f\u007f]/.test(template)) errors.push('导出文件名模板不安全')
+    else if (!/\{(?:source_language|target_language)\}.*\{?/.test(template) || !template.includes('{kind}')) errors.push('导出文件名模板必须包含语言变量和 {kind}')
+  }
   return errors
 }
 

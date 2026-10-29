@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from ..application.platform_process import ContainedProcess, spawn_contained, terminate_contained
 from ..domain import ASRConfig, Project, Segment, Transcript
 
 MAX_DIAGNOSTIC_BYTES = 256 * 1024
@@ -37,9 +38,6 @@ _TIMESTAMP = re.compile(r"^(?P<h>\d{1,4}):(?P<m>[0-5]?\d):(?P<s>[0-5]?\d)(?:[,.]
 _SRT_TIMING = re.compile(
     r"(?P<start>\d{1,4}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*"
     r"(?P<end>\d{1,4}:\d{2}:\d{2}[,.]\d{1,3})"
-)
-SUPPORTED_BACKENDS = frozenset(
-    {"qwen3", "qwen3-1.7b", "whisper", "mega-asr", "voxtral", "voxtral4b", "granite"}
 )
 
 
@@ -173,14 +171,13 @@ ProcessFactory = Callable[..., Awaitable[Any]]
 
 
 async def _default_process_factory(*command: str):
-    return await asyncio.create_subprocess_exec(
-        *command,
+    return await spawn_contained(
+        command,
         stdin=asyncio.subprocess.DEVNULL,
         # The workflow only needs exit status and the generated subtitle file.
         # Discard diagnostics instead of buffering unbounded provider output.
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
     )
 
 
@@ -242,7 +239,7 @@ class CrispASRProvider:
 
     def command(self, audio: Path, output_base: Path) -> list[str]:
         backend = self.config.backend
-        if not _SAFE_IDENTIFIER.fullmatch(backend) or backend not in SUPPORTED_BACKENDS:
+        if not _SAFE_IDENTIFIER.fullmatch(backend):
             raise CrispASRError("ASR_BACKEND_UNSUPPORTED", "不支持所选 CrispASR 后端")
         return [
             str(self.executable),
@@ -281,8 +278,17 @@ class CrispASRProvider:
         await self._reap(process)
 
     async def _terminate(self, process: Any) -> None:
-        """Terminate, escalate with kill, and reap without abandoning waits."""
+        """Terminate the contained tree and wait without abandoning cleanup."""
 
+        if isinstance(process, ContainedProcess):
+            cleanup = asyncio.create_task(terminate_contained(process))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            await cleanup
+            return
         wait_task: asyncio.Task[None] | None = None
         if getattr(process, "returncode", None) is None:
             try:
@@ -301,11 +307,8 @@ class CrispASRProvider:
                 except ProcessLookupError:
                     pass
         if wait_task is not None:
-            # Reuse the same wait after SIGKILL; a second wait would race and
-            # the first could be abandoned by a repeated outer cancellation.
             await asyncio.shield(wait_task)
         else:
-            # Even an exited process must be waited on to reap it.
             wait_task = asyncio.create_task(self._reap_uncancelled(process))
             await asyncio.shield(wait_task)
 
@@ -513,7 +516,6 @@ class CrispASRProvider:
 __all__ = [
     "CrispASRError",
     "CrispASRProvider",
-    "SUPPORTED_BACKENDS",
     "parse_json_transcript",
     "parse_srt",
     "parse_transcript",

@@ -4,7 +4,14 @@ from pathlib import Path
 
 import app.storage.project_store as project_store_module
 import pytest
-from app.domain import Job, JobStatus, Project, SourceAsset, default_stages
+from app.domain import (
+    Job,
+    JobStatus,
+    Project,
+    SourceAsset,
+    default_pipeline_config,
+    default_stages,
+)
 from app.storage import FileSystemProjectStore
 
 
@@ -87,6 +94,27 @@ async def test_rename_failure_preserves_formal_project(tmp_path: Path, monkeypat
         await store.create_project_from_upload(project, job, upload, max_bytes=100)
 
     assert (final_dir / "sentinel").read_text(encoding="utf-8") == "keep"
+    assert not list(store.projects_dir.glob(f".{project.id}.tmp_*"))
+
+
+@pytest.mark.asyncio
+async def test_config_write_failure_leaves_no_published_project(tmp_path: Path, monkeypatch):
+    store = FileSystemProjectStore(tmp_path)
+    project, job = _models("prj_config_failure")
+    upload = type("Upload", (), {"read": _read_once})()
+    original_write_json = project_store_module.atomic_write_json
+
+    def fail_config(path, payload):
+        if Path(path).name == "config.json" and ".tmp_" in str(path):
+            raise OSError("config write failed")
+        return original_write_json(path, payload)
+
+    monkeypatch.setattr(project_store_module, "atomic_write_json", fail_config)
+    config = default_pipeline_config("ja", target_language="zh-CN")
+    with pytest.raises(OSError, match="config write failed"):
+        await store.create_project_from_upload(project, job, upload, max_bytes=100, config=config)
+
+    assert not (store.projects_dir / project.id).exists()
     assert not list(store.projects_dir.glob(f".{project.id}.tmp_*"))
 
 

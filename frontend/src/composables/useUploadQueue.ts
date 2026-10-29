@@ -6,7 +6,7 @@ export interface UploadPolicy {
 }
 
 export type UploadStatus = 'invalid' | 'ready' | 'uploading' | 'created' | 'failed'
-export interface UploadOptions { name: string; language: string }
+export interface UploadOptions { name: string; language: string; targetLanguage: string }
 export interface UploadItem {
   id: number
   file: File
@@ -46,6 +46,14 @@ export function validateUpload(file: File, policy: UploadPolicy | null): string 
   return ''
 }
 
+export function validateLanguages(sourceLanguage: string, targetLanguage: string): string {
+  const valid = (value: string) => !!value && value === value.trim() && value.length <= 32 && !/[\u0000-\u001f\u007f]/.test(value)
+  if (!valid(sourceLanguage)) return '源语言必须非空、无首尾空白且最多 32 个字符。'
+  if (!valid(targetLanguage)) return '目标语言必须非空、无首尾空白且最多 32 个字符。'
+  if (sourceLanguage.toLowerCase() === targetLanguage.toLowerCase()) return '源语言与目标语言不能相同。'
+  return ''
+}
+
 function uploadError(reason: unknown) {
   if (reason instanceof TypeError) return '无法连接后端，请检查服务和网络后重试此文件。'
   const message = reason instanceof Error ? reason.message : '音频上传失败'
@@ -53,7 +61,7 @@ function uploadError(reason: unknown) {
 }
 
 export function useUploadQueue(
-  createProject: (file: File, name: string, language: string) => Promise<{ id: string; audios?: { id: string }[] }>,
+  createProject: (file: File, name: string, language: string, targetLanguage: string) => Promise<{ id: string; audios?: { id: string }[] }>,
   addAudio: (projectId: string, file: File, language: string) => Promise<{ id: string }>,
 ) {
   const items = ref<UploadItem[]>([])
@@ -137,7 +145,7 @@ export function useUploadQueue(
             const audio = await addAudio(targetProjectId.value, item.file, item.snapshot!.language)
             item.audioId = audio.id
           } else {
-            const project = await createProject(item.file, projectSnapshot!.name, item.snapshot!.language)
+            const project = await createProject(item.file, projectSnapshot!.name, item.snapshot!.language, item.snapshot!.targetLanguage)
             targetProjectId.value = project.id
             targetName.value = projectSnapshot!.name
             item.audioId = project.audios?.[0]?.id || 'aud_primary'
@@ -157,9 +165,16 @@ export function useUploadQueue(
   async function submit(options: UploadOptions) {
     if (busy.value) return
     const selected = items.value.filter((item) => item.status === 'ready')
-    if (!projectSnapshot && selected.length) projectSnapshot = { name: options.name.trim() || fileStem(selected[0].file.name), language: options.language }
+    // A new project requires both languages; appending validates only the
+    // new audio's source because the parent project owns the target.
+    feedback.value = targetProjectId.value
+      ? (options.language.trim() ? '' : '源语言不能为空。')
+      : validateLanguages(options.language, options.targetLanguage)
+    if (feedback.value) return
+    if (!projectSnapshot && selected.length) projectSnapshot = { name: options.name.trim() || fileStem(selected[0].file.name), language: options.language, targetLanguage: options.targetLanguage }
     for (const item of selected) {
-      item.snapshot = { name: projectSnapshot!.name, language: options.language }
+      // Retry reuses the immutable snapshot, never the current form values.
+      if (!item.snapshot) item.snapshot = { name: projectSnapshot!.name, language: options.language, targetLanguage: options.targetLanguage }
     }
     await process(selected)
   }
