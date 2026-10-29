@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from app.config import AppSettings, load_preset, load_settings
+from app.config import AppSettings, load_settings
 
 
 def test_environment_overrides_yaml_settings(tmp_path, monkeypatch):
@@ -50,35 +50,12 @@ def test_missing_or_invalid_config_is_explicit(tmp_path):
         load_settings(broken)
 
 
-def test_crispasr_nested_executable_path_is_resolved_from_repository_root(tmp_path):
-    config = tmp_path / "config" / "app.yaml"
-    config.parent.mkdir()
-    config.write_text(
-        "app:\n"
-        "  crispasr_executable: ./crispasr/linux-v0.8.38/crispasr-linux-x86_64-cuda13/crispasr\n"
-        "  crispasr_model_dir: ./crispasr/models\n",
-        encoding="utf-8",
-    )
-
+def test_runtime_settings_contains_no_local_asr_or_ffmpeg_fields(tmp_path):
+    config = tmp_path / "app.yaml"
+    config.write_text("app:\n  host: 127.0.0.1\n", encoding="utf-8")
     settings = load_settings(config)
-
-    assert settings.crispasr_executable == (
-        tmp_path / "crispasr" / "linux-v0.8.38" / "crispasr-linux-x86_64-cuda13" / "crispasr"
-    )
-    assert settings.crispasr_model_dir == tmp_path / "crispasr" / "models"
-
-
-def test_preset_is_loaded_and_validated(tmp_path):
-    presets = tmp_path / "presets"
-    presets.mkdir()
-    (presets / "mock.yaml").write_text(
-        "name: mock\nstages: [preprocess, asr, alignment, translation, export]\n"
-        "providers: {asr: mock, aligner: mock, translator: mock}\nmock: {delay_ms: 1}\n",
-        encoding="utf-8",
-    )
-    assert load_preset(presets, "mock").mock["delay_ms"] == 1
-    with pytest.raises(FileNotFoundError):
-        load_preset(presets, "missing")
+    payload = settings.model_dump()
+    assert not any("crispasr" in key or "ffmpeg" in key for key in payload)
 
 
 @pytest.mark.parametrize(

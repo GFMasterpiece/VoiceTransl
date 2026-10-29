@@ -12,7 +12,7 @@ from uuid import uuid4
 from ..domain import (
     Job,
     JobStatus,
-    PipelineConfig,
+    LegacyPipelineConfig,
     Project,
     ProviderProfile,
     ProviderProfilesDocument,
@@ -23,7 +23,7 @@ from ..domain import (
     WorkflowNodeStatus,
     WorkflowRun,
     WorkflowRunStatus,
-    default_pipeline_config,
+    default_legacy_pipeline_config,
     default_workflow,
     normalize_workflow_graph,
     validate_workflow_graph,
@@ -431,7 +431,7 @@ class FileSystemProjectStore:
         upload,
         max_bytes: int,
         *,
-        config: PipelineConfig | None = None,
+        config: LegacyPipelineConfig | None = None,
     ) -> tuple[Project, Job]:
         """Publish project metadata and optional initial config atomically."""
         final_dir = self.project_dir(project.id)
@@ -560,7 +560,7 @@ class FileSystemProjectStore:
         )
         self._touch_project(job.project_id)
 
-    def load_pipeline_config(self, project_id: str) -> PipelineConfig:
+    def load_pipeline_config(self, project_id: str) -> LegacyPipelineConfig:
         """Load a project's editable config, providing a legacy-safe default."""
 
         path = self.project_dir(project_id) / "config.json"
@@ -568,13 +568,13 @@ class FileSystemProjectStore:
             raise ValueError("config must not be a symlink")
         if not path.exists():
             project = self.load_project(project_id)
-            return default_pipeline_config(project.source.language)
-        return PipelineConfig.model_validate(self._load_json(path, "pipeline config"))
+            return default_legacy_pipeline_config(project.source.language)
+        return LegacyPipelineConfig.model_validate(self._load_json(path, "pipeline config"))
 
-    def save_pipeline_config(self, project_id: str, value: PipelineConfig) -> None:
+    def save_pipeline_config(self, project_id: str, value: LegacyPipelineConfig) -> None:
         self.save_initial_pipeline_config(project_id, value)
 
-    def save_initial_pipeline_config(self, project_id: str, value: PipelineConfig) -> None:
+    def save_initial_pipeline_config(self, project_id: str, value: LegacyPipelineConfig) -> None:
         """Persist the initial config without requiring a second metadata write."""
         atomic_write_json(
             self.project_dir(project_id) / "config.json", value.model_dump(mode="json")
@@ -978,7 +978,9 @@ class PrimaryAudioProjectStore:
         if path.is_symlink():
             raise ValueError("config must not be a symlink")
         if path.exists():
-            return PipelineConfig.model_validate(self.parent._load_json(path, "pipeline config"))
+            return LegacyPipelineConfig.model_validate(
+                self.parent._load_json(path, "pipeline config")
+            )
         return self.parent.load_pipeline_config(project_id)
 
     def save_pipeline_config(self, project_id, value):
@@ -1062,12 +1064,14 @@ class AudioProjectStore(FileSystemProjectStore):
         if path.is_symlink():
             raise ValueError("config must not be a symlink")
         if path.exists():
-            return PipelineConfig.model_validate(self.parent._load_json(path, "pipeline config"))
+            return LegacyPipelineConfig.model_validate(
+                self.parent._load_json(path, "pipeline config")
+            )
         payload = self.parent.load_pipeline_config(project_id).model_dump(mode="json")
         language = self.parent.audio(project_id, self.audio_id).source.language
         payload["source_language"] = language
         payload["asr"]["language"] = language
-        return PipelineConfig.model_validate(payload)
+        return LegacyPipelineConfig.model_validate(payload)
 
     def save_pipeline_config(self, project_id, value):
         self.project_dir(project_id)

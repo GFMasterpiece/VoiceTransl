@@ -1,4 +1,3 @@
-import asyncio
 import tempfile
 
 import pytest
@@ -7,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_upload_run_and_outputs():
+async def test_upload_creates_new_default_audio_passthrough_workflow():
     with tempfile.TemporaryDirectory() as data_dir:
         app = create_app(data_dir)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -16,28 +15,30 @@ async def test_upload_run_and_outputs():
                 files={"file": ("sample.wav", b"RIFF", "audio/wav")},
                 data={"source_language": "ja", "target_language": "zh-CN"},
             )
-            assert response.status_code == 201
-            project_id = response.json()["project"]["id"]
-            assert (
-                await client.post(f"/api/v1/projects/{project_id}/run", json={"resume": True})
-            ).status_code == 202
-            for _ in range(100):
-                job = (await client.get(f"/api/v1/projects/{project_id}/job")).json()
-                if job["status"] in {"completed", "failed", "cancelled"}:
-                    break
-                await asyncio.sleep(0.05)
-            assert job["status"] == "completed"
-            names = {
-                item["name"]
-                for item in (await client.get(f"/api/v1/projects/{project_id}/outputs")).json()[
-                    "items"
-                ]
-            }
-            assert names == {"zh.srt", "ja-zh.srt", "zh.lrc"}
+            assert response.status_code == 201, response.text
+            project = response.json()["project"]
+            workflow = await client.get(f"/api/v1/projects/{project['id']}/workflow")
+            assert workflow.status_code == 200
+            document = workflow.json()
+            assert [node["type"] for node in document["nodes"]] == [
+                "audio_input",
+                "audio_output",
+            ]
+            assert document["edges"] == [
+                {
+                    "id": "input-output",
+                    "source": "input",
+                    "source_port": "audio",
+                    "target": "output",
+                    "target_port": "audio",
+                }
+            ]
+            assert project["audios"][0]["id"] == "aud_primary"
+            assert not (app.state.store.project_dir(project["id"]) / "workflow.json").exists()
 
 
 @pytest.mark.asyncio
-async def test_upload_commits_complete_directory_and_validation_errors_are_normalized():
+async def test_project_creation_is_atomic_and_validation_errors_are_normalized():
     with tempfile.TemporaryDirectory() as data_dir:
         app = create_app(data_dir)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -54,7 +55,7 @@ async def test_upload_commits_complete_directory_and_validation_errors_are_norma
             assert (project_dir / "source" / "original.wav").read_bytes() == b"RIFF"
             assert all(item.name.startswith("prj_") for item in project_dir.parent.iterdir())
 
-            invalid = await client.post(f"/api/v1/projects/{project_id}/run")
+            invalid = await client.post("/api/v1/projects")
             assert invalid.status_code == 422
             body = invalid.json()
             assert body["error"]["code"] == "VALIDATION_ERROR"

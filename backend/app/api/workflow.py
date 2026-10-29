@@ -151,23 +151,6 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
                 409,
                 detail=_error("AUDIO_BUSY", "该音频已有任务正在运行或排队"),
             )
-        if str(error) == "ASR_BACKEND_UNSUPPORTED":
-            raise HTTPException(
-                422,
-                detail=_error(
-                    "ASR_BACKEND_UNSUPPORTED",
-                    "所选 ASR 后端暂不支持，请重新选择可用后端",
-                ),
-            )
-        if str(error) == "ASR_BACKEND_DISCOVERY_FAILED":
-            raise HTTPException(
-                503,
-                detail=_error(
-                    "ASR_BACKEND_DISCOVERY_FAILED",
-                    "当前无法读取本地 ASR 能力，请稍后重试",
-                    {"retryable": True},
-                ),
-            )
         raise HTTPException(500, detail=_error("INTERNAL_ERROR", "工作流启动失败")) from error
     except ValueError as error:
         raise HTTPException(

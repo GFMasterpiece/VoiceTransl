@@ -8,7 +8,9 @@
 
 <p align="center">简体中文 | <a href="README_EN.md">English</a></p>
 
-VoiceTransl聆译是一站式离线AI视频字幕生成和翻译软件，支持Windows。从视频下载，音频提取，听写打轴，字幕翻译，视频合成，字幕总结各个环节为翻译者提供便利。本项目基于[Galtransl](https://github.com/xd2333/GalTransl)，采用GPLv3许可。
+VoiceTransl聆译是 Windows 字幕处理与翻译软件，提供视频下载、音频提取、已有字幕翻译、视频合成和字幕总结等工具。本项目基于[Galtransl](https://github.com/xd2333/GalTransl)，采用GPLv3许可。当前桌面端不再提供自动听写；音视频翻译需要同名 SRT 字幕。
+
+Web 开发版目前只保留最简音频输入/输出节点工作流及 Mock 验证能力，不执行真实识别或翻译。当前范围见[开发线路图](docs/roadmap.md)与[架构约定](docs/architecture.md)，下列工具特性主要对应桌面端。
 
 ## 特色
 
@@ -17,8 +19,7 @@ VoiceTransl聆译是一站式离线AI视频字幕生成和翻译软件，支持W
 * 支持多种输入格式，包括音频、视频、SRT字幕。
 * 支持多种输出格式，包括SRT字幕、LRC字幕。
 * 支持多种语言，包括日语，英语，韩语，俄语，法语。
-* 使用CrispASR的Qwen3-ASR与强制对齐工作流生成带时间轴字幕。
-* 支持VAD（语音活动检测），自动识别音频中的语音段落。
+* 可导入已有SRT字幕并继续转换、翻译和合并处理。
 * 支持字典功能，可以自定义翻译字典，替换输入输出。
 * 支持世界书/台本输入，可以自定义翻译参考资料。
 * 支持从YouTube/Bilibili及媒体链接直接下载视频。

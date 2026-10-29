@@ -18,7 +18,7 @@
 
 ## 当前版本与目标的区别
 
-当前保留固定的 `preprocess → asr → alignment → translation → export` 五阶段，并新增独立的节点图编辑器：能连接一个音频输入、多个 Mock/FFmpeg 预处理、Mock/CrispASR 识别与音频/文本输出，支持直出、串联与分支，独立配置节点，保存工作流修订并运行、查看历史和下载。文本输出支持 TXT/SRT/VTT/LRC 识别原文。当前不含对齐/翻译节点、视频图输出、从节点重跑或产物清理，不能等同于完整 ComfyUI 式处理图。现行契约见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)和 `spec/` 中[音频直通](../spec/workflow-audio-mvp.md)、[预处理](../spec/workflow-preprocess.md)、[ASR/文本输出](../spec/workflow-asr.md)里程碑。
+当前 Web 实现已退役旧五阶段工作区及真实 Provider 配置，工作流仅保留音频输入、音频输出和 Mock 验证节点。默认图为 `audio_input -> audio_output`；该路径只复制输入字节，不做实际处理。旧项目/任务文件不批量迁移或改写。过往里程碑规格标记为 Retired，仅供历史追溯，不是当前行为契约。云端 ASR 还未实现。现行范围见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)和[开发线路图](roadmap.md)。
 
 ## 初步验收方向
 

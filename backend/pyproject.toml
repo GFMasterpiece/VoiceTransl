@@ -26,4 +26,4 @@ indent-style = "space"
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
 fixable = ["I"]
-per-file-ignores = { "**/__init__.py" = ["F401"], "app/pipeline/stages/__init__.py" = ["F403"] }
+per-file-ignores = { "**/__init__.py" = ["F401"] }

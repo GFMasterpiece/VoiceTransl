@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field, field_validator
 
 from .enums import JobStatus, PipelineStageName, StageStatus
-from .pipeline_config import PipelineConfig
+from .legacy_config import LegacyPipelineConfig
 from .project import PRIMARY_AUDIO_ID
 from .provider_profile import ProviderProfile
 from .schema import require_schema_version
@@ -44,7 +44,7 @@ class Job(BaseModel):
     error: JobError | None = None
     # The exact non-secret configuration used for this run.  Older jobs do
     # not have this field and remain valid when loaded by Pydantic.
-    config_snapshot: PipelineConfig | None = None
+    config_snapshot: LegacyPipelineConfig | None = None
     # Resolved, secret-free provider profiles used by this run.
     provider_profiles_snapshot: dict[str, ProviderProfile] = Field(default_factory=dict)
     # Local capability identities are captured at queue time. Runtime paths

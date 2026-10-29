@@ -9,36 +9,32 @@ from .schema import require_schema_version
 
 
 class _ConfigModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
 
-class PreprocessConfig(_ConfigModel):
+class LegacyPreprocessConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
     sample_rate: int = Field(default=16_000, ge=8_000, le=192_000)
     channels: int = Field(default=1, ge=1, le=2)
     preserve_original: bool = True
 
 
-class ASRConfig(_ConfigModel):
+class LegacyASRConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
-    # The profile is resolved and copied into the job snapshot when a run
-    # starts. It does not contain credentials.
     provider_profile_id: str | None = Field(
         default=None,
         min_length=1,
         max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
     )
-    # CrispASR backend is a safe identifier selected from the server's
-    # supported capability list. It is never interpreted as a command or path.
-    backend: str = Field(default="qwen3-1.7b", min_length=1, max_length=64)
+    backend: str = Field(default="mock", min_length=1, max_length=64)
     model: str = Field(default="mock", min_length=1, max_length=128)
     language: str = Field(default="ja", min_length=1, max_length=32)
     vad_enabled: bool = True
     chunk_seconds: int = Field(default=30, ge=1, le=600)
 
 
-class AlignmentConfig(_ConfigModel):
+class LegacyAlignmentConfig(_ConfigModel):
     enabled: bool = True
     provider: str = Field(default="mock", min_length=1, max_length=64)
     model: str = Field(default="mock", min_length=1, max_length=128)
@@ -120,8 +116,6 @@ def validate_translation_parameters(value: dict[str, object]) -> None:
 
 
 def merge_translation_parameters(core: dict, parameters: dict[str, object]) -> dict:
-    """Core protocol fields win; extra values are revalidated after model copies."""
-
     validate_translation_parameters(parameters)
     merged = {**parameters, **core}
     validate_translation_parameters(
@@ -130,7 +124,7 @@ def merge_translation_parameters(core: dict, parameters: dict[str, object]) -> d
     return merged
 
 
-class TranslationConfig(_ConfigModel):
+class LegacyTranslationConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
     base_url: str | None = Field(default=None, max_length=2_048)
     api_key_env: str | None = Field(default=None, min_length=1, max_length=128)
@@ -138,8 +132,6 @@ class TranslationConfig(_ConfigModel):
     target_language: str = Field(default="zh-CN", min_length=1, max_length=32)
     batch_size: int = Field(default=8, ge=1, le=128)
     additional_parameters: dict[str, object] = Field(default_factory=dict)
-    # Legacy field kept only so same-version snapshots written before
-    # additional_parameters existed remain readable; it is migrated below.
     temperature: float | None = Field(default=None, ge=0, le=2)
     glossary: dict[str, str] = Field(default_factory=dict)
     instructions: str | None = Field(default=None, max_length=4_000)
@@ -152,22 +144,13 @@ class TranslationConfig(_ConfigModel):
         validate_translation_parameters(value)
         return value
 
-    @model_validator(mode="after")
-    def migrate_legacy_temperature(self) -> Self:
-        if self.temperature is not None and "temperature" not in self.additional_parameters:
-            self.additional_parameters = {
-                **self.additional_parameters,
-                "temperature": self.temperature,
-            }
-        return self
-
 
 EXPORT_FORMATS = frozenset({"srt", "vtt", "lrc"})
 EXPORT_NAMING_MODES = ("language", "original")
 EXPORT_TEMPLATE_VARIABLES = frozenset({"source_language", "target_language", "kind", "format"})
 
 
-class ExportConfig(_ConfigModel):
+class LegacyExportConfig(_ConfigModel):
     formats: list[str] = Field(default_factory=lambda: ["srt", "lrc"], min_length=1)
     bilingual: bool = True
     naming: Literal["language", "original"] = "language"
@@ -211,7 +194,7 @@ class ExportConfig(_ConfigModel):
     @classmethod
     def validate_filename_stem(cls, value: str | None) -> str | None:
         if value is None:
-            return None
+            return value
         if (
             value != value.strip()
             or value in {".", ".."}
@@ -225,15 +208,15 @@ class ExportConfig(_ConfigModel):
         return value
 
 
-class PipelineConfig(_ConfigModel):
+class LegacyPipelineConfig(_ConfigModel):
     schema_version: str = "1.0"
     source_language: str = Field(default="ja", min_length=1, max_length=32)
     target_language: str = Field(default="zh-CN", min_length=1, max_length=32)
-    preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
-    asr: ASRConfig = Field(default_factory=ASRConfig)
-    alignment: AlignmentConfig = Field(default_factory=AlignmentConfig)
-    translation: TranslationConfig = Field(default_factory=TranslationConfig)
-    export: ExportConfig = Field(default_factory=ExportConfig)
+    preprocess: LegacyPreprocessConfig = Field(default_factory=LegacyPreprocessConfig)
+    asr: LegacyASRConfig = Field(default_factory=LegacyASRConfig)
+    alignment: LegacyAlignmentConfig = Field(default_factory=LegacyAlignmentConfig)
+    translation: LegacyTranslationConfig = Field(default_factory=LegacyTranslationConfig)
+    export: LegacyExportConfig = Field(default_factory=LegacyExportConfig)
 
     @field_validator("schema_version")
     @classmethod
@@ -242,25 +225,12 @@ class PipelineConfig(_ConfigModel):
 
     @model_validator(mode="after")
     def validate_languages(self) -> Self:
-        if self.preprocess.provider not in {"mock", "ffmpeg"}:
-            raise ValueError("unsupported preprocess provider")
-        if self.asr.provider not in {"mock", "crispasr"}:
-            raise ValueError("unsupported asr provider")
-        if self.asr.provider == "crispasr" and self.preprocess.provider != "ffmpeg":
-            raise ValueError("crispasr ASR requires ffmpeg preprocessing for normalized WAV input")
         if self.source_language.casefold() == self.target_language.casefold():
             raise ValueError("source and target languages must differ")
         if self.asr.language != self.source_language:
             raise ValueError("asr language must match source language")
         if self.translation.target_language != self.target_language:
             raise ValueError("translation target language must match target language")
-        if self.translation.provider not in {
-            "mock",
-            "openai_chat",
-            "openai_responses",
-            "anthropic_messages",
-        }:
-            raise ValueError("unsupported translation provider")
         if self.translation.api_key_env and not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_]*", self.translation.api_key_env
         ):
@@ -268,31 +238,27 @@ class PipelineConfig(_ConfigModel):
         return self
 
 
-def default_pipeline_config(
+def default_legacy_pipeline_config(
     source_language: str = "ja", *, target_language: str | None = None
-) -> PipelineConfig:
-    """Return a safe mock configuration for new and legacy projects."""
-
+) -> LegacyPipelineConfig:
     target = target_language or ("zh-CN" if source_language.casefold() != "zh" else "en")
-    return PipelineConfig(
+    return LegacyPipelineConfig(
         source_language=source_language,
         target_language=target,
-        asr=ASRConfig(language=source_language),
-        translation=TranslationConfig(target_language=target),
+        asr=LegacyASRConfig(language=source_language),
+        translation=LegacyTranslationConfig(target_language=target),
     )
 
 
 __all__ = [
-    "ASRConfig",
     "EXPORT_FORMATS",
     "EXPORT_NAMING_MODES",
     "EXPORT_TEMPLATE_VARIABLES",
-    "AlignmentConfig",
-    "ExportConfig",
-    "EXPORT_FORMATS",
-    "EXPORT_NAMING_MODES",
-    "PipelineConfig",
-    "PreprocessConfig",
-    "TranslationConfig",
-    "default_pipeline_config",
+    "LegacyASRConfig",
+    "LegacyAlignmentConfig",
+    "LegacyExportConfig",
+    "LegacyPipelineConfig",
+    "LegacyPreprocessConfig",
+    "LegacyTranslationConfig",
+    "default_legacy_pipeline_config",
 ]

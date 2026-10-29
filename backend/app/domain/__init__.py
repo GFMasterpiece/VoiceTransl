@@ -1,14 +1,7 @@
 from .enums import JobStatus, PipelineStageName, StageStatus
 from .job import Job, JobError, StageState, default_stages
-from .pipeline_config import (
-    AlignmentConfig,
-    ASRConfig,
-    ExportConfig,
-    PipelineConfig,
-    PreprocessConfig,
-    TranslationConfig,
-    default_pipeline_config,
-)
+from .legacy_config import LegacyPipelineConfig, default_legacy_pipeline_config
+from .node_config import MockASRNodeConfig, MockPreprocessNodeConfig
 from .project import AudioAsset, Project, SourceAsset
 from .provider_profile import ProviderProfile, ProviderProfilesDocument
 from .transcript import Segment, Transcript
@@ -71,13 +64,10 @@ __all__ = [
     "ProviderProfilesDocument",
     "Segment",
     "Transcript",
-    "ASRConfig",
-    "AlignmentConfig",
-    "ExportConfig",
-    "PipelineConfig",
-    "PreprocessConfig",
-    "TranslationConfig",
-    "default_pipeline_config",
+    "LegacyPipelineConfig",
+    "MockASRNodeConfig",
+    "MockPreprocessNodeConfig",
+    "default_legacy_pipeline_config",
     "ASR_NODE_TYPE",
     "AUDIO_OUTPUT_NODE_TYPE",
     "AUDIO_PORT",

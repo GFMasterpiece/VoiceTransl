@@ -2,9 +2,7 @@ import asyncio
 import hashlib
 import logging
 import os
-import subprocess
 import threading
-import wave
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +10,6 @@ from uuid import uuid4
 
 from ..domain import (
     PREPROCESS_NODE_TYPE,
-    PreprocessConfig,
     WorkflowArtifact,
     WorkflowNode,
     WorkflowNodeError,
@@ -28,18 +25,9 @@ from ..domain.node_registry import (
     register_port,
     validate_node_result,
 )
-from ..providers import FFmpegPreprocessProvider, PreprocessError
-from .platform_process import spawn_contained, terminate_contained
-from .workflow_asr import (
-    ASRSettings,
-    TranscriptData,
-    WorkflowASRCancelled,
-    WorkflowASRError,
-)
+from .workflow_asr import TranscriptData, WorkflowASRCancelled, WorkflowASRError
 
 COPY_CHUNK_SIZE = 1024 * 1024
-FFMPEG_TIMEOUT_SECONDS = 300.0
-FFMPEG_TERMINATE_SECONDS = 2.0
 
 logger = logging.getLogger("voicetransl.workflow")
 
@@ -146,85 +134,6 @@ def _download_url(run: WorkflowRun, node_id: str) -> str:
     )
 
 
-async def _terminate_process(process) -> None:
-    """Terminate and reap a contained child before callers observe completion."""
-
-    await terminate_contained(process)
-
-
-async def _ffmpeg_process_runner(command: list[str], cancel_event: asyncio.Event):
-    if cancel_event.is_set():
-        raise WorkflowRunCancelled
-    spawn_task = asyncio.create_task(
-        spawn_contained(
-            command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    )
-    cancel_wait = asyncio.create_task(cancel_event.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {spawn_task, cancel_wait},
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if not done or (cancel_wait in done and cancel_wait.result()):
-            spawn_task.cancel()
-            spawned = await asyncio.gather(spawn_task, return_exceptions=True)
-            process = spawned[0]
-            if not isinstance(process, BaseException):
-                await _terminate_process(process)
-            if not done:
-                raise PreprocessError("PREPROCESS_FFMPEG_TIMEOUT", "FFmpeg 音频转换超时")
-            raise WorkflowRunCancelled
-        process = await spawn_task
-    except asyncio.CancelledError:
-        spawn_task.cancel()
-        spawned = await asyncio.gather(spawn_task, return_exceptions=True)
-        process = spawned[0]
-        if not isinstance(process, BaseException):
-            await _terminate_process(process)
-        raise
-    finally:
-        cancel_wait.cancel()
-        await asyncio.gather(cancel_wait, return_exceptions=True)
-
-    wait_task = asyncio.create_task(process.wait())
-    cancel_wait = asyncio.create_task(cancel_event.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {wait_task, cancel_wait},
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if not done:
-            await _terminate_process(process)
-            await asyncio.gather(wait_task, return_exceptions=True)
-            raise PreprocessError("PREPROCESS_FFMPEG_TIMEOUT", "FFmpeg 音频转换超时")
-        if cancel_wait in done and cancel_wait.result():
-            await _terminate_process(process)
-            await asyncio.gather(wait_task, return_exceptions=True)
-            raise WorkflowRunCancelled
-        return_code = await wait_task
-        return subprocess.CompletedProcess(command, int(return_code), b"", b"")
-    except asyncio.CancelledError:
-        await _terminate_process(process)
-        await asyncio.gather(wait_task, return_exceptions=True)
-        raise
-    finally:
-        cancel_wait.cancel()
-        await asyncio.gather(cancel_wait, return_exceptions=True)
-
-
-def _make_ffmpeg_runner(cancel_event: asyncio.Event):
-    async def runner(command: list[str]):
-        return await _ffmpeg_process_runner(command, cancel_event)
-
-    return runner
-
-
 def _artifact(
     run: WorkflowRun, node_id: str, filename: str, media_type: str, size: int, digest: str
 ) -> WorkflowArtifact:
@@ -236,40 +145,6 @@ def _artifact(
         sha256=digest,
         download_url=_download_url(run, node_id),
     )
-
-
-def _validate_wav_output(path: Path, *, sample_rate: int, channels: int) -> None:
-    """Validate the WAV format rather than trusting FFmpeg's exit code."""
-
-    if path.is_symlink() or not path.is_file():
-        raise PreprocessError("PREPROCESS_OUTPUT_MISSING", "FFmpeg 未生成预处理音频")
-    try:
-        with wave.open(str(path), "rb") as wav_file:
-            if (
-                wav_file.getcomptype() != "NONE"
-                or wav_file.getnchannels() != channels
-                or wav_file.getframerate() != sample_rate
-                or wav_file.getsampwidth() not in {1, 2, 3, 4}
-                or wav_file.getnframes() <= 0
-            ):
-                raise PreprocessError(
-                    "PREPROCESS_OUTPUT_INVALID",
-                    "FFmpeg 生成的 WAV 参数与配置不一致",
-                )
-            frame_count = wav_file.getnframes()
-            frame_size = wav_file.getnchannels() * wav_file.getsampwidth()
-            remaining = frame_count * frame_size
-            while remaining:
-                chunk = wav_file.readframes(min(remaining // frame_size, 64 * 1024))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-            if remaining:
-                raise PreprocessError("PREPROCESS_OUTPUT_INVALID", "FFmpeg 生成的 WAV 数据不完整")
-    except PreprocessError:
-        raise
-    except (EOFError, OSError, wave.Error) as error:
-        raise PreprocessError("PREPROCESS_OUTPUT_INVALID", "FFmpeg 生成的音频无法读取") from error
 
 
 def _dependency_edges(run: WorkflowRun) -> tuple[dict[str, str], list[str]]:
@@ -337,75 +212,22 @@ async def _execute_copy_node(
     return _artifact(run, node.id, filename, upstream.media_type, size, digest)
 
 
-async def _execute_ffmpeg_node(
-    store,
-    run: WorkflowRun,
-    node: WorkflowNode,
-    upstream: AudioData,
-    cancel_event: asyncio.Event,
-    ffmpeg_path: str,
-) -> tuple[WorkflowArtifact, AudioData]:
-    config = PreprocessConfig.model_validate(node.config, strict=True)
-    filename = "preprocessed.wav"
-    target = store.workflow_artifact_path(run.project_id, run.audio_id, run.id, node.id, filename)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp = target.with_name(f".{target.name}.{uuid4().hex}.tmp.wav")
-    runner = _make_ffmpeg_runner(cancel_event)
-    try:
-        await FFmpegPreprocessProvider(ffmpeg_path, runner=runner).preprocess(
-            upstream.path, temp, config
-        )
-        if cancel_event.is_set():
-            raise WorkflowRunCancelled
-        validation = asyncio.create_task(
-            asyncio.to_thread(
-                _validate_wav_output, temp, sample_rate=config.sample_rate, channels=config.channels
-            )
-        )
-        try:
-            await asyncio.shield(validation)
-        except asyncio.CancelledError:
-            # The validation thread is short and only reads a local temporary
-            # file. Do not let it keep using a path after cancellation cleanup.
-            try:
-                await asyncio.shield(validation)
-            except PreprocessError:
-                pass
-            raise
-        size = temp.stat().st_size
-        published_size, digest = await _copy_audio(temp, target, cancel_event, expected_size=size)
-        artifact = _artifact(run, node.id, filename, "audio/wav", published_size, digest)
-        return artifact, AudioData(
-            path=target, suffix=".wav", media_type="audio/wav", size_bytes=published_size
-        )
-    except asyncio.CancelledError:
-        raise
-    finally:
-        temp.unlink(missing_ok=True)
-
-
 async def _execute_preprocess_node(
     store,
     run: WorkflowRun,
     node: WorkflowNode,
     upstream: AudioData,
     cancel_event: asyncio.Event,
-    ffmpeg_path: str,
 ) -> tuple[WorkflowArtifact, AudioData]:
-    config = PreprocessConfig.model_validate(node.config, strict=True)
-    if config.provider == "mock":
-        artifact = await _execute_copy_node(store, run, node, upstream, cancel_event)
-        return artifact, AudioData(
-            path=store.workflow_artifact_path(
-                run.project_id, run.audio_id, run.id, node.id, artifact.filename
-            ),
-            suffix=upstream.suffix,
-            media_type=upstream.media_type,
-            size_bytes=artifact.size_bytes,
-        )
-    if config.provider == "ffmpeg":
-        return await _execute_ffmpeg_node(store, run, node, upstream, cancel_event, ffmpeg_path)
-    raise PreprocessError("PREPROCESS_PROVIDER_INVALID", "预处理 Provider 不受支持")
+    artifact = await _execute_copy_node(store, run, node, upstream, cancel_event)
+    return artifact, AudioData(
+        path=store.workflow_artifact_path(
+            run.project_id, run.audio_id, run.id, node.id, artifact.filename
+        ),
+        suffix=upstream.suffix,
+        media_type=upstream.media_type,
+        size_bytes=artifact.size_bytes,
+    )
 
 
 async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
@@ -425,8 +247,7 @@ async def execute_workflow_run(
     run: WorkflowRun,
     cancel_event: asyncio.Event,
     *,
-    ffmpeg_path: str = "ffmpeg",
-    asr_settings: ASRSettings | None = None,
+    mock_delay_ms: int = 0,
 ) -> WorkflowRun:
     run.status = WorkflowRunStatus.RUNNING
     run.started_at = now()
@@ -446,7 +267,6 @@ async def execute_workflow_run(
         for node in run.workflow.nodes
         if NODE_DEFINITIONS.get(node.type) is not None and NODE_DEFINITIONS[node.type].is_source
     ]
-    asr_settings = asr_settings or ASRSettings()
     input_record = records.get(input_nodes[0].id) if input_nodes else None
     incoming, order = _dependency_edges(run)
 
@@ -534,8 +354,7 @@ async def execute_workflow_run(
                         inputs={input_port: upstream},
                         project=project,
                         cancel_event=cancel_event,
-                        ffmpeg_path=ffmpeg_path,
-                        asr_settings=asr_settings,
+                        mock_delay_ms=mock_delay_ms,
                     )
                 )
                 record.artifact = result.artifact
@@ -545,7 +364,7 @@ async def execute_workflow_run(
                 store.save_workflow_run(run)
             except (WorkflowRunCancelled, WorkflowASRCancelled):
                 raise WorkflowRunCancelled
-            except (PreprocessError, WorkflowASRError) as error:
+            except WorkflowASRError as error:
                 record.status = WorkflowNodeStatus.FAILED
                 record.finished_at = now()
                 record.error = WorkflowNodeError(type=error.code, message=str(error))

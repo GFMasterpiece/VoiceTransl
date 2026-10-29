@@ -144,17 +144,20 @@ describe('upload queue', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
-  it('appends to an existing project without requiring a target language', async () => {
+  it('appends to an existing project with source language only', async () => {
     const create = vi.fn()
     const append = vi.fn().mockResolvedValue({ id: 'aud_extra' })
     const queue = useUploadQueue(create, append)
     queue.setPolicy({ allowed_extensions: ['wav'], max_upload_bytes: 1024 })
     queue.setTarget('parent', 'Existing')
     queue.add([new File(['wav'], 'extra.wav')])
-    await queue.submit({ name: 'Existing', language: 'fr-CA', targetLanguage: '' })
+    await queue.submit({ name: 'Existing', language: 'fr-CA' })
     expect(append).toHaveBeenCalledWith('parent', expect.any(File), 'fr-CA')
     expect(create).not.toHaveBeenCalled()
     expect(queue.feedback.value).toBe('')
+    await queue.submit({ name: 'Existing', language: ' fr-CA', targetLanguage: 'zh-CN' })
+    expect(queue.feedback.value).toContain('源语言')
+    expect(append).toHaveBeenCalledTimes(1)
   })
 
   it('excludes invalid files while applying the user project name to valid files', async () => {

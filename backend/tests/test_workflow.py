@@ -304,7 +304,7 @@ async def test_workflow_run_copies_independent_bytes_and_isolated_history(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_workflow_run_is_audio_scoped_and_shares_legacy_busy_state(tmp_path):
+async def test_workflow_run_is_audio_scoped_and_rejects_removed_legacy_run_routes(tmp_path):
     app = create_app(tmp_path)
     await app.state.jobs.semaphore.acquire()
     try:
@@ -328,11 +328,9 @@ async def test_workflow_run_is_audio_scoped_and_shares_legacy_busy_state(tmp_pat
             busy = await client.post(
                 f"/api/v1/projects/{pid}/audios/{aid}/run", json={"resume": True}
             )
-            assert busy.status_code == 409
-            assert busy.json()["error"]["code"] == "AUDIO_BUSY"
+            assert busy.status_code == 404
             legacy_cancel = await client.post(f"/api/v1/projects/{pid}/audios/{aid}/cancel")
-            assert legacy_cancel.status_code == 409
-            assert legacy_cancel.json()["error"]["code"] == "AUDIO_BUSY_WORKFLOW"
+            assert legacy_cancel.status_code == 404
             assert (await client.delete(f"/api/v1/projects/{pid}")).status_code == 409
 
             other_run = await client.post(
@@ -725,6 +723,99 @@ async def test_shutdown_waits_for_copy_worker_and_never_publishes(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_mock_workflow_runs_preprocess_asr_and_audio_and_text_terminals(tmp_path):
+    app = create_app(tmp_path)
+    payload = tiny_wav(bytes((0, 3)) + b"mock-nodes")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, aid = await create_project(client, payload)
+        graph = {
+            "nodes": [
+                {"id": "input", "type": "audio_input", "config": {}},
+                {"id": "pre", "type": "preprocess", "config": {"provider": "mock"}},
+                {
+                    "id": "asr",
+                    "type": "asr",
+                    "config": {"provider": "mock", "language": "ja"},
+                },
+                {
+                    "id": "text",
+                    "type": "text_output",
+                    "config": {"filename_stem": "transcript", "format": "srt"},
+                },
+                {
+                    "id": "audio",
+                    "type": "audio_output",
+                    "config": {"filename_stem": "copy"},
+                },
+            ],
+            "edges": [
+                {
+                    "id": "e1",
+                    "source": "input",
+                    "source_port": "audio",
+                    "target": "pre",
+                    "target_port": "audio",
+                },
+                {
+                    "id": "e2",
+                    "source": "pre",
+                    "source_port": "audio",
+                    "target": "asr",
+                    "target_port": "audio",
+                },
+                {
+                    "id": "e3",
+                    "source": "asr",
+                    "source_port": "transcript",
+                    "target": "text",
+                    "target_port": "transcript",
+                },
+                {
+                    "id": "e4",
+                    "source": "pre",
+                    "source_port": "audio",
+                    "target": "audio",
+                    "target_port": "audio",
+                },
+            ],
+            "schema_version": "1.0",
+        }
+        document = await save_graph(client, pid, 0, graph)
+        response = await client.post(
+            f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs",
+            json={"workflow_revision": document["workflow_revision"]},
+        )
+        assert response.status_code == 202, response.text
+        await asyncio.gather(*app.state.jobs.tasks.values())
+        run = (
+            await client.get(
+                f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{response.json()['id']}"
+            )
+        ).json()
+        assert run["status"] == "completed", run
+        records = {node["node_id"]: node for node in run["nodes"]}
+        assert all(node["status"] == "completed" for node in records.values())
+        assert records["pre"]["artifact"]["filename"] == "preprocessed.wav"
+        assert records["audio"]["artifact"]["filename"] == "copy.wav"
+        assert records["text"]["artifact"]["filename"] == "transcript.srt"
+
+        transcript_path = app.state.store.workflow_artifact_path(
+            pid, aid, run["id"], "asr", "transcript.json"
+        )
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+        assert transcript["metadata"] == {"provider": "mock"}
+        assert transcript["language"] == "ja"
+        text_path = app.state.store.workflow_artifact_path(
+            pid, aid, run["id"], "text", "transcript.srt"
+        )
+        assert "こんにちは" in text_path.read_text(encoding="utf-8")
+        audio_path = app.state.store.workflow_artifact_path(
+            pid, aid, run["id"], "audio", "copy.wav"
+        )
+        assert audio_path.read_bytes() == payload
+
+
+@pytest.mark.asyncio
 async def test_unexpected_runner_error_persists_stable_failure_state(tmp_path, monkeypatch):
     import app.application.job_manager as manager_module
 
@@ -756,42 +847,3 @@ async def test_unexpected_runner_error_persists_stable_failure_state(tmp_path, m
         assert run["nodes"]
         assert {node["status"] for node in run["nodes"]} == {"blocked"}
         assert all(node["error"]["type"] == "DEPENDENCY_BLOCKED" for node in run["nodes"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error_code", "status", "message"),
-    [
-        (
-            "ASR_BACKEND_UNSUPPORTED",
-            422,
-            "所选 ASR 后端暂不支持，请重新选择可用后端",
-        ),
-        (
-            "ASR_BACKEND_DISCOVERY_FAILED",
-            503,
-            "当前无法读取本地 ASR 能力，请稍后重试",
-        ),
-    ],
-)
-async def test_workflow_asr_start_errors_have_specific_api_status(
-    tmp_path, monkeypatch, error_code, status, message
-):
-    app = create_app(tmp_path)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        pid, aid = await create_project(client)
-        document = await get_default_workflow(client, pid)
-
-        async def fail(*_args, **_kwargs):
-            raise RuntimeError(error_code)
-
-        monkeypatch.setattr(app.state.jobs, "start_workflow", fail)
-        response = await client.post(
-            f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs",
-            json={"workflow_revision": document["workflow_revision"]},
-        )
-
-    assert response.status_code == status
-    assert response.json()["error"]["code"] == error_code
-    assert response.json()["error"]["message"] == message
-    assert str(tmp_path) not in response.text

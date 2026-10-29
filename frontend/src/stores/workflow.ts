@@ -1,14 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { API_BASE_URL } from './projectDetail'
+import { API_BASE_URL } from '../api'
 import { computed as vueComputed } from 'vue'
 import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
-export type OutputPortName = 'audio' | 'transcript'
-export type InputPortName = 'audio' | 'transcript'
+export type OutputPortName = string
+export type InputPortName = string
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled' | 'interrupted'
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted'
 export const WORKFLOW_NODE_WIDTH = 188
@@ -16,76 +16,6 @@ export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_ROW_GAP = 28
 export const MAX_WORKFLOW_NODES = 64
 export const MAX_WORKFLOW_EDGES = 64
-
-export type PreprocessProvider = 'mock' | 'ffmpeg'
-export type PreprocessChannels = 1 | 2
-
-export interface PreprocessNodeConfig {
-  provider: PreprocessProvider
-  sample_rate: number
-  channels: PreprocessChannels
-  preserve_original: boolean
-}
-
-export const DEFAULT_PREPROCESS_CONFIG: Readonly<PreprocessNodeConfig> = Object.freeze({
-  provider: 'mock',
-  sample_rate: 16000,
-  channels: 1,
-  preserve_original: true,
-})
-
-export function defaultPreprocessConfig(): PreprocessNodeConfig {
-  return { ...DEFAULT_PREPROCESS_CONFIG }
-}
-
-export function readPreprocessConfig(config: Record<string, unknown>): PreprocessNodeConfig {
-  return {
-    provider: config.provider === undefined ? DEFAULT_PREPROCESS_CONFIG.provider : config.provider as PreprocessProvider,
-    sample_rate: config.sample_rate === undefined ? DEFAULT_PREPROCESS_CONFIG.sample_rate : config.sample_rate as number,
-    channels: config.channels === undefined ? DEFAULT_PREPROCESS_CONFIG.channels : config.channels as PreprocessChannels,
-    preserve_original: config.preserve_original === undefined ? DEFAULT_PREPROCESS_CONFIG.preserve_original : config.preserve_original as boolean,
-  }
-}
-
-export type AsrProvider = 'mock' | 'crispasr'
-
-export interface AsrNodeConfig {
-  provider: AsrProvider
-  backend: string
-  model: string
-  language: string
-  vad_enabled: boolean
-  chunk_seconds: number
-  provider_profile_id: null
-}
-
-export const DEFAULT_ASR_CONFIG: Readonly<AsrNodeConfig> = Object.freeze({
-  provider: 'mock',
-  backend: 'qwen3-1.7b',
-  model: 'mock',
-  language: 'ja',
-  vad_enabled: true,
-  chunk_seconds: 30,
-  provider_profile_id: null,
-})
-
-export function defaultAsrConfig(): AsrNodeConfig {
-  return { ...DEFAULT_ASR_CONFIG }
-}
-
-export function readAsrConfig(config: Record<string, unknown>): AsrNodeConfig {
-  return {
-    provider: config.provider === undefined ? DEFAULT_ASR_CONFIG.provider : config.provider as AsrProvider,
-    backend: config.backend === undefined ? DEFAULT_ASR_CONFIG.backend : config.backend as string,
-    model: config.model === undefined ? DEFAULT_ASR_CONFIG.model : config.model as string,
-    language: config.language === undefined ? DEFAULT_ASR_CONFIG.language : config.language as string,
-    vad_enabled: config.vad_enabled === undefined ? DEFAULT_ASR_CONFIG.vad_enabled : config.vad_enabled as boolean,
-    chunk_seconds: config.chunk_seconds === undefined ? DEFAULT_ASR_CONFIG.chunk_seconds : config.chunk_seconds as number,
-    provider_profile_id: config.provider_profile_id === undefined || config.provider_profile_id === null
-      ? null
-      : config.provider_profile_id as unknown as null,
-  }
-}
 
 export type TextOutputFormat = 'txt' | 'srt' | 'vtt' | 'lrc'
 
@@ -249,40 +179,15 @@ export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInp
 }
 
 function canonicalNodeConfig(node: WorkflowNode, registry?: NodeRegistry): Record<string, unknown> {
-  if (registry && !['preprocess', 'asr', 'text_output', 'audio_output'].includes(node.type)) {
-    return { ...registry.createDefaultConfig(node.type), ...(node.config || {}) }
-  }
-  const config = { ...node.config }
-  if (node.type === 'preprocess') {
-    if (config.provider === undefined) config.provider = DEFAULT_PREPROCESS_CONFIG.provider
-    if (config.sample_rate === undefined) config.sample_rate = DEFAULT_PREPROCESS_CONFIG.sample_rate
-    if (config.channels === undefined) config.channels = DEFAULT_PREPROCESS_CONFIG.channels
-    if (config.preserve_original === undefined) config.preserve_original = DEFAULT_PREPROCESS_CONFIG.preserve_original
-  } else if (node.type === 'audio_output' && config.filename_stem === undefined) {
-    config.filename_stem = 'audio-copy'
-  } else if (node.type === 'asr') {
-    if (config.provider === undefined) config.provider = DEFAULT_ASR_CONFIG.provider
-    if (config.backend === undefined) config.backend = DEFAULT_ASR_CONFIG.backend
-    if (config.model === undefined) config.model = DEFAULT_ASR_CONFIG.model
-    if (config.language === undefined) config.language = DEFAULT_ASR_CONFIG.language
-    if (config.vad_enabled === undefined) config.vad_enabled = DEFAULT_ASR_CONFIG.vad_enabled
-    if (config.chunk_seconds === undefined) config.chunk_seconds = DEFAULT_ASR_CONFIG.chunk_seconds
-    if (config.provider_profile_id === undefined) config.provider_profile_id = null
-  } else if (node.type === 'text_output') {
-    if (config.filename_stem === undefined) config.filename_stem = DEFAULT_TEXT_OUTPUT_CONFIG.filename_stem
-    if (config.format === undefined) config.format = DEFAULT_TEXT_OUTPUT_CONFIG.format
-  }
-  return config
+  return { ...(registry?.createDefaultConfig(node.type) || {}), ...(node.config || {}) }
 }
 
 export function outputPortForNode(type: NodeType, registry: NodeRegistry): OutputPortName | null {
-  const port = registry.outputPortForNode(type)
-  return port === 'audio' || port === 'transcript' ? port : null
+  return registry.outputPortForNode(type)
 }
 
 export function inputPortForNode(type: NodeType, registry: NodeRegistry): InputPortName | null {
-  const port = registry.inputPortForNode(type)
-  return port === 'audio' || port === 'transcript' ? port : null
+  return registry.inputPortForNode(type)
 }
 
 export function isTerminalNode(type: NodeType, registry: NodeRegistry): boolean {
@@ -373,7 +278,7 @@ function readRun(value: unknown): WorkflowRun {
     throw new Error('节点工作流运行响应不完整，请检查后端版本后重试。')
   }
   for (const node of run.nodes) {
-    if (!node || typeof node.node_id !== 'string' || !['audio_input', 'preprocess', 'asr', 'audio_output', 'text_output'].includes(node.node_type)
+    if (!node || typeof node.node_id !== 'string' || typeof node.node_type !== 'string'
       || typeof node.status !== 'string') {
       throw new Error('节点工作流运行响应不完整，请检查后端版本后重试。')
     }
@@ -412,9 +317,7 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
     const unexpected = keys.filter((key) => key !== 'filename_stem')
     if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `音频输出只支持 filename_stem，未知字段：${unexpected.join(', ')}`, node_id: node.id })
     const stem = node.config.filename_stem === undefined ? 'audio-copy' : node.config.filename_stem
-    if (!isSafeFilenameStem(stem)) {
-      issues.push({ code: 'INVALID_FILENAME_STEM', message: '输出文件名必须是无路径的安全文件名主体', node_id: node.id })
-    }
+    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', message: '输出文件名必须是无路径的安全文件名主体', node_id: node.id })
   } else if (node.type === 'text_output') {
     const allowed = new Set(['filename_stem', 'format'])
     const unexpected = keys.filter((key) => !allowed.has(key))
@@ -425,48 +328,8 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
     if (typeof format !== 'string' || !['txt', 'srt', 'vtt', 'lrc'].includes(format)) {
       issues.push({ code: 'INVALID_TEXT_FORMAT', message: '文本输出格式只能是 txt、srt、vtt 或 lrc', node_id: node.id })
     }
-  } else if (node.type === 'asr') {
-    const allowed = new Set(['provider', 'backend', 'model', 'language', 'vad_enabled', 'chunk_seconds', 'provider_profile_id'])
-    const unexpected = keys.filter((key) => !allowed.has(key))
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `ASR 配置包含未知字段：${unexpected.join(', ')}`, node_id: node.id })
-    const provider = node.config.provider === undefined ? DEFAULT_ASR_CONFIG.provider : node.config.provider
-    if (provider !== 'mock' && provider !== 'crispasr') issues.push({ code: 'INVALID_ASR_PROVIDER', message: 'ASR Provider 只能是 mock 或 crispasr', node_id: node.id })
-    const backend = node.config.backend === undefined ? DEFAULT_ASR_CONFIG.backend : node.config.backend
-    if (typeof backend !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(backend)) {
-      issues.push({ code: 'INVALID_ASR_BACKEND', message: 'ASR 后端必须是安全的标识符；可用性以服务端能力目录为准', node_id: node.id })
-    }
-    const model = node.config.model === undefined ? DEFAULT_ASR_CONFIG.model : node.config.model
-    if (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(model) || model.endsWith('.')) {
-      issues.push({ code: 'INVALID_ASR_MODEL', message: 'ASR 模型必须是受限文件名标识符，不能包含路径', node_id: node.id })
-    }
-    const language = node.config.language === undefined ? DEFAULT_ASR_CONFIG.language : node.config.language
-    if (typeof language !== 'string' || !language.trim() || language !== language.trim() || language.length > 32 || /[\u0000-\u001f\u007f]/.test(language)) {
-      issues.push({ code: 'INVALID_ASR_LANGUAGE', message: 'ASR 语言必须是非空、最多 32 字符且无首尾空白', node_id: node.id })
-    }
-    const vad = node.config.vad_enabled === undefined ? DEFAULT_ASR_CONFIG.vad_enabled : node.config.vad_enabled
-    if (typeof vad !== 'boolean') issues.push({ code: 'INVALID_ASR_VAD', message: 'VAD 开关必须是布尔值', node_id: node.id })
-    const chunk = node.config.chunk_seconds === undefined ? DEFAULT_ASR_CONFIG.chunk_seconds : node.config.chunk_seconds
-    if (typeof chunk !== 'number' || !Number.isInteger(chunk) || chunk < 1 || chunk > 600) {
-      issues.push({ code: 'INVALID_ASR_CHUNK', message: '分段时长必须是 1–600 之间的整数', node_id: node.id })
-    }
-    const profile = node.config.provider_profile_id === undefined ? null : node.config.provider_profile_id
-    if (profile !== null) issues.push({ code: 'INVALID_ASR_PROFILE', message: '本轮 ASR 节点不能引用 Provider Profile', node_id: node.id })
-  } else if (!['preprocess', 'audio_input', 'audio_output', 'text_output', 'asr'].includes(node.type)) {
+  } else {
     for (const issue of registry.validateConfig(node.type, node.config)) issues.push({ ...issue, node_id: node.id })
-  } else if (node.type === 'preprocess') {
-    const allowed = new Set(['provider', 'sample_rate', 'channels', 'preserve_original'])
-    const unexpected = keys.filter((key) => !allowed.has(key))
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `预处理配置包含未知字段：${unexpected.join(', ')}`, node_id: node.id })
-    const provider = node.config.provider === undefined ? DEFAULT_PREPROCESS_CONFIG.provider : node.config.provider
-    if (provider !== 'mock' && provider !== 'ffmpeg') issues.push({ code: 'INVALID_PREPROCESS_PROVIDER', message: '预处理 Provider 只能是 mock 或 ffmpeg', node_id: node.id })
-    const sampleRate = node.config.sample_rate === undefined ? DEFAULT_PREPROCESS_CONFIG.sample_rate : node.config.sample_rate
-    if (typeof sampleRate !== 'number' || !Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
-      issues.push({ code: 'INVALID_SAMPLE_RATE', message: '采样率必须是 8000–192000 之间的整数', node_id: node.id })
-    }
-    const channels = node.config.channels === undefined ? DEFAULT_PREPROCESS_CONFIG.channels : node.config.channels
-    if (channels !== 1 && channels !== 2) issues.push({ code: 'INVALID_CHANNELS', message: '声道数只能是 1 或 2', node_id: node.id })
-    const preserveOriginal = node.config.preserve_original === undefined ? DEFAULT_PREPROCESS_CONFIG.preserve_original : node.config.preserve_original
-    if (typeof preserveOriginal !== 'boolean') issues.push({ code: 'INVALID_PRESERVE_ORIGINAL', message: '保留源文件选项必须是布尔值', node_id: node.id })
   }
   return issues
 }
@@ -746,6 +609,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     validating.value = false
     validationIssues.value = []
     notice.value = ''
+  }
+
+  function setCleanBaseline(value: WorkflowDocumentInput) {
+    setDraft(value)
+    savedSignature.value = executionSignature(value, registry.value || undefined)
   }
 
   async function validate(): Promise<WorkflowIssue[]> {
@@ -1127,14 +995,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       return
     }
     const id = nextNodeId(type, nodes, registry.value)
-    const standardConfig = type === 'preprocess' ? { ...defaultPreprocessConfig() }
-      : type === 'asr' ? { ...defaultAsrConfig() }
-        : type === 'text_output' ? { ...defaultTextOutputConfig() }
-          : type === 'audio_output' ? { filename_stem: 'audio-copy' } : null
     const node: WorkflowNode = {
       id,
       type,
-      config: standardConfig || registry.value.createDefaultConfig(type),
+      config: registry.value.createDefaultConfig(type),
       position: nextNodePosition(type, nodes, registry.value),
     }
     draft.value.nodes = [...nodes, node]
@@ -1260,7 +1124,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty,
     runMatchesDraft,
     load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
-    updateNode, connect, disconnect, selectNode, setDraft, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
+    updateNode, connect, disconnect, selectNode, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
     discardDraft,
   }
 })

@@ -17,7 +17,6 @@ TRANSLATIONS = {
         "tab_clip": "分离工具",
         "tab_synth": "合成工具",
         "tab_summarize": "总结工具",
-        "tab_settings": "语音模型",
         "tab_advanced_settings": "语言模型",
         "tab_dict": "字典设置",
         "tab_log": "日志",
@@ -27,7 +26,6 @@ TRANSLATIONS = {
         "tab_tools": "实用工具",
         "tab_actions_title": "操作",
         "realtime_output_title": "实时输出信息",
-        "models_asr_actions": "听写模型",
         "models_translation_actions": "翻译模型",
         "tools_file_actions": "文件选择",
         "tools_run_actions": "运行工具",
@@ -44,7 +42,6 @@ TRANSLATIONS = {
             "- 分离工具：选择分离模型，分离人声和伴奏，或切分音频文件。\n"
             "- 合成工具：将音频和图片合成为视频，将字幕文件加入视频。\n"
             "- 总结工具：对字幕文件内容进行总结，生成带时间戳的摘要。\n"
-            "- 语音模型：选择CrispASR模型，设置听写语言和附加参数。\n"
             "- 语言模型：选择翻译模型类别，配置在线模型令牌、地址和名称。\n"
             "- 字典设置：配置翻译前、中、后使用的字典，以及额外提示信息。\n"
             "- 日志：实时查看输出信息和日志文件。"
@@ -60,7 +57,7 @@ TRANSLATIONS = {
         "io_input_label": "📥 输入文件或链接",
         "io_input_tip": "支持拖拽音视频或SRT文件，也可每行输入一个B站BV号、YouTube或其他视频链接。",
         "io_input_placeholder": "例如：C:/video.mp4或https://www.youtube.com/watch?v=...或BV1Lxt5e8EJF",
-        "io_transcription_group_title": "🎙️ 听写设置",
+        "io_transcription_group_title": "🎙️ 听写语言",
         "io_translation_group_title": "🌐 翻译设置",
         "io_output_group_title": "📤 字幕输出",
         "io_proxy_label": "🌐 网络代理",
@@ -95,7 +92,6 @@ TRANSLATIONS = {
         "io_open_output_btn": "📁 打开输出目录",
         "io_clean_btn": "🧹 清空下载和缓存",
         "io_auto_shutdown_checkbox": "⏻ 完成后自动关机",
-        "io_enable_transcription_checkbox": "🎙️ 听写",
         "io_enable_translation_checkbox": "🌐 翻译",
         "io_transcription_lang_label": "🎤 听写语言",
         "io_target_lang_label": "🌐 翻译目标语言",
@@ -129,19 +125,8 @@ TRANSLATIONS = {
         "dict_prompt_mode_overwrite": "覆盖",
 
         # === Settings Tab (Speech) ===
-        "settings_asr_model_label": "🗣️ 识别模型",
-        "settings_asr_model_tip": "从crispasr目录选择用于语音识别的GGUF模型。",
-        "settings_asr_aligner_label": "📐 对齐模型",
-        "settings_asr_aligner_tip": "选择用于生成精确字幕时间轴的强制对齐模型。",
-        "settings_asr_backend_label": "⚙️ 识别后端",
-        "settings_asr_backend_tip": "后端必须与所选识别模型兼容。",
         "settings_lang_label": "🌍 输入语言",
         "settings_lang_tip": "语言代码：ja日语、en英语、ko韩语、ru俄语、fr法语、zh中文。",
-        "settings_asr_param_label": "🛠️ CrispASR 参数",
-        "settings_asr_param_placeholder": "支持占位符：$crispasr_executable、$backend、$model_file、$aligner_file、$language、$output_file、$input_file。",
-        "settings_open_crispasr_btn": "📁 打开CrispASR目录",
-        "settings_refresh_speech_btn": "🔄 刷新语音模型列表",
-        "settings_test_offline_asr_btn": "🧪 测试听写模型",
         "settings_uvr_label": "🎤 人声分离模型",
         "settings_uvr_tip": "从separate目录选择用于分离人声与伴奏的ONNX模型。",
         "settings_open_uvr_btn": "📁 打开UVR模型目录",
@@ -173,16 +158,9 @@ TRANSLATIONS = {
         "status_offline_test_busy": "[WARNING] 当前有任务正在运行，请等待完成或先取消。",
         "status_offline_test_cancelled": "[INFO] 离线模型测试已取消。",
         "offline_test_audio_missing": "应用内置的测试音频不存在，请重新安装完整应用包",
-        "offline_test_asr_model_missing": "请选择听写模型",
-        "offline_test_aligner_missing": "请选择对齐模型",
         "offline_test_translation_model_missing": "请选择离线翻译模型",
-        "offline_test_asr_timeout": "听写模型测试超过 5 分钟",
-        "offline_test_asr_no_output": "听写模型未生成有效 SRT，请确认测试音频包含清晰语音",
         "offline_test_no_response": "模型服务没有返回有效响应",
         "offline_test_translation_timeout": "离线翻译模型在 3 分钟内未就绪：{detail}",
-        "status_offline_asr_test_starting": "[INFO] 正在加载听写模型 {model} 并执行测试音频...",
-        "status_offline_asr_test_success": "[INFO] ✅ 离线听写模型测试通过，耗时 {seconds:.1f} 秒。",
-        "status_offline_asr_test_failed": "[ERROR] ❌ 离线听写模型测试失败：{error}",
         "status_offline_translation_test_starting": "[INFO] 正在加载离线翻译模型 {model} 并执行一次推理...",
         "status_offline_translation_test_success": "[INFO] ✅ 离线翻译模型测试通过，耗时 {seconds:.1f} 秒。",
         "status_offline_translation_test_failed": "[ERROR] ❌ 离线翻译模型测试失败：{error}",
@@ -290,6 +268,7 @@ TRANSLATIONS = {
         "status_srt_convert_done": "[INFO] 字幕转换完成！",
         "status_no_transcribe_skip": "[INFO] 不进行听写，跳过听写步骤...",
         "status_existing_srt_found": "[INFO] 检测到已有字幕文件：{file}，跳过听写步骤...",
+        "status_local_asr_unavailable": "[WARN] 未找到同名 SRT 字幕：{file}；桌面端不再运行本地听写，请先提供字幕文件或只输入 SRT。",
         "status_asr_done_cached": "[INFO] 语音识别完成！（使用已有字幕）",
         "status_submitting_translation": "[INFO] 正在提交文件进行翻译...",
         "status_extracting_audio": "[INFO] 正在进行音频提取...",
@@ -365,7 +344,6 @@ TRANSLATIONS = {
         "tab_clip": "Separation",
         "tab_synth": "Synthesis",
         "tab_summarize": "Summarize",
-        "tab_settings": "Speech Model",
         "tab_advanced_settings": "Language Model",
         "tab_dict": "Dictionary",
         "tab_log": "Log",
@@ -375,7 +353,6 @@ TRANSLATIONS = {
         "tab_tools": "Utilities",
         "tab_actions_title": "Actions",
         "realtime_output_title": "Realtime Output",
-        "models_asr_actions": "Transcription Model",
         "models_translation_actions": "Translation Model",
         "tools_file_actions": "File Selection",
         "tools_run_actions": "Run Tools",
@@ -394,7 +371,6 @@ TRANSLATIONS = {
             "- Separation: Select a separation model, split vocals and accompaniment, or clip audio files.\n"
             "- Synthesis: Combine audio and images into video, add subtitle files to video.\n"
             "- Summarize: Summarize subtitle content and generate timestamped abstracts.\n"
-            "- Speech Model: Select a CrispASR model and configure the transcription language and optional arguments.\n"
             "- Language Model: Select translation model type, configure online model token, address and name.\n"
             "- Dictionary: Configure pre/mid/post translation dictionaries and extra prompts.\n"
             "- Log: View real-time output and log files."
@@ -410,7 +386,7 @@ TRANSLATIONS = {
         "io_input_label": "📥 Files or Links",
         "io_input_tip": "Drop audio, video, or SRT files, or enter one Bilibili BV ID, YouTube URL, or other video link per line.",
         "io_input_placeholder": "Example: C:/video.mp4 or https://www.youtube.com/watch?v=... or BV1Lxt5e8EJF",
-        "io_transcription_group_title": "🎙️ Transcription",
+        "io_transcription_group_title": "🎙️ Source Language",
         "io_translation_group_title": "🌐 Translation",
         "io_output_group_title": "📤 Subtitle Output",
         "io_proxy_label": "🌐 Network Proxy",
@@ -445,7 +421,6 @@ TRANSLATIONS = {
         "io_open_output_btn": "📁 Open Output Directory",
         "io_clean_btn": "🧹 Clear Downloads & Cache",
         "io_auto_shutdown_checkbox": "⏻ Shut Down When Done",
-        "io_enable_transcription_checkbox": "🎙️ Transcribe",
         "io_enable_translation_checkbox": "🌐 Translate",
         "io_transcription_lang_label": "🎤 Transcription Language",
         "io_target_lang_label": "🌐 Target Translation Language",
@@ -479,19 +454,8 @@ TRANSLATIONS = {
         "dict_prompt_mode_overwrite": "Overwrite",
 
         # === Settings Tab (Speech) ===
-        "settings_asr_model_label": "🗣️ Recognition Model",
-        "settings_asr_model_tip": "Select a GGUF speech-recognition model from the crispasr directory.",
-        "settings_asr_aligner_label": "📐 Alignment Model",
-        "settings_asr_aligner_tip": "Select the forced-alignment model used to generate accurate subtitle timing.",
-        "settings_asr_backend_label": "⚙️ Recognition Backend",
-        "settings_asr_backend_tip": "The backend must be compatible with the selected recognition model.",
         "settings_lang_label": "🌍 Input Language",
         "settings_lang_tip": "Language codes: ja Japanese, en English, ko Korean, ru Russian, fr French, zh Chinese.",
-        "settings_asr_param_label": "🛠️ CrispASR Parameters",
-        "settings_asr_param_placeholder": "Placeholders: $crispasr_executable, $backend, $model_file, $aligner_file, $language, $output_file, and $input_file.",
-        "settings_open_crispasr_btn": "📁 Open CrispASR Directory",
-        "settings_refresh_speech_btn": "🔄 Refresh Speech Model List",
-        "settings_test_offline_asr_btn": "🧪 Test Offline Transcription",
         "settings_uvr_label": "🎤 Vocal Separation Model",
         "settings_uvr_tip": "Select an ONNX model from the separate directory to split vocals and accompaniment.",
         "settings_open_uvr_btn": "📁 Open UVR Model Directory",
@@ -523,16 +487,9 @@ TRANSLATIONS = {
         "status_offline_test_busy": "[WARNING] Another task is running. Wait for it to finish or cancel it first.",
         "status_offline_test_cancelled": "[INFO] Offline model test cancelled.",
         "offline_test_audio_missing": "The bundled test audio is missing; reinstall the complete application package",
-        "offline_test_asr_model_missing": "Select a transcription model",
-        "offline_test_aligner_missing": "Select an alignment model",
         "offline_test_translation_model_missing": "Select an offline translation model",
-        "offline_test_asr_timeout": "The transcription model test exceeded 5 minutes",
-        "offline_test_asr_no_output": "The transcription model did not create a valid SRT; use a sample with clear speech",
         "offline_test_no_response": "The model server returned no valid response",
         "offline_test_translation_timeout": "The offline translation model was not ready within 3 minutes: {detail}",
-        "status_offline_asr_test_starting": "[INFO] Loading transcription model {model} and processing the test audio...",
-        "status_offline_asr_test_success": "[INFO] ✅ Offline transcription test passed in {seconds:.1f} seconds.",
-        "status_offline_asr_test_failed": "[ERROR] ❌ Offline transcription test failed: {error}",
         "status_offline_translation_test_starting": "[INFO] Loading offline translation model {model} and running one inference...",
         "status_offline_translation_test_success": "[INFO] ✅ Offline translation test passed in {seconds:.1f} seconds.",
         "status_offline_translation_test_failed": "[ERROR] ❌ Offline translation test failed: {error}",
@@ -640,6 +597,7 @@ TRANSLATIONS = {
         "status_srt_convert_done": "[INFO] Subtitle conversion complete!",
         "status_no_transcribe_skip": "[INFO] No transcription selected, skipping transcription step...",
         "status_existing_srt_found": "[INFO] Existing subtitle file found: {file}, skipping transcription step...",
+        "status_local_asr_unavailable": "[WARN] No sidecar SRT found for {file}; local transcription is no longer available in the desktop app. Provide a subtitle file or use SRT input.",
         "status_asr_done_cached": "[INFO] Speech recognition complete! (using existing subtitles)",
         "status_submitting_translation": "[INFO] Submitting file for translation...",
         "status_extracting_audio": "[INFO] Extracting audio...",
@@ -715,7 +673,6 @@ TRANSLATIONS = {
         "tab_clip": "分離ツール",
         "tab_synth": "合成ツール",
         "tab_summarize": "要約ツール",
-        "tab_settings": "音声モデル",
         "tab_advanced_settings": "言語モデル",
         "tab_dict": "辞書設定",
         "tab_log": "ログ",
@@ -725,7 +682,6 @@ TRANSLATIONS = {
         "tab_tools": "ユーティリティ",
         "tab_actions_title": "操作",
         "realtime_output_title": "リアルタイム出力",
-        "models_asr_actions": "文字起こしモデル",
         "models_translation_actions": "翻訳モデル",
         "tools_file_actions": "ファイル選択",
         "tools_run_actions": "ツール実行",
@@ -743,7 +699,6 @@ TRANSLATIONS = {
             "- 分離ツール：分離モデルを選択し、ボーカルと伴奏を分離、または音声ファイルを分割。\n"
             "- 合成ツール：音声と画像を動画に合成し、字幕ファイルを動画に追加。\n"
             "- 要約ツール：字幕ファイルの内容を要約し、タイムスタンプ付きの概要を生成。\n"
-            "- 音声モデル：CrispASRモデルを選択し、文字起こし言語と追加パラメータを設定。\n"
             "- 言語モデル：翻訳モデルの種類を選択し、オンラインモデルのトークン、アドレス、名前を設定。\n"
             "- 辞書設定：翻訳前・中・後の辞書と追加プロンプト情報を設定。\n"
             "- ログ：リアルタイムの出力情報とログファイルを表示。"
@@ -759,7 +714,7 @@ TRANSLATIONS = {
         "io_input_label": "📥 ファイルまたはリンク",
         "io_input_tip": "音声・動画・SRTをドロップするか、BilibiliのBV番号、YouTubeなどの動画リンクを1行ずつ入力します。",
         "io_input_placeholder": "例：C:/video.mp4 または https://www.youtube.com/watch?v=... または BV1Lxt5e8EJF",
-        "io_transcription_group_title": "🎙️ 文字起こし設定",
+        "io_transcription_group_title": "🎙️ 入力言語",
         "io_translation_group_title": "🌐 翻訳設定",
         "io_output_group_title": "📤 字幕出力",
         "io_proxy_label": "🌐 ネットワークプロキシ",
@@ -794,7 +749,6 @@ TRANSLATIONS = {
         "io_open_output_btn": "📁 出力ディレクトリを開く",
         "io_clean_btn": "🧹 ダウンロードとキャッシュを削除",
         "io_auto_shutdown_checkbox": "⏻ 完了後にシャットダウン",
-        "io_enable_transcription_checkbox": "🎙️ 文字起こし",
         "io_enable_translation_checkbox": "🌐 翻訳",
         "io_transcription_lang_label": "🎤 文字起こし言語",
         "io_target_lang_label": "🌐 翻訳対象言語",
@@ -828,19 +782,8 @@ TRANSLATIONS = {
         "dict_prompt_mode_overwrite": "上書き",
 
         # === Settings Tab (Speech) ===
-        "settings_asr_model_label": "🗣️ 認識モデル",
-        "settings_asr_model_tip": "crispasrフォルダーから音声認識用GGUFモデルを選択します。",
-        "settings_asr_aligner_label": "📐 アライメントモデル",
-        "settings_asr_aligner_tip": "正確な字幕タイミングを生成する強制アライメントモデルを選択します。",
-        "settings_asr_backend_label": "⚙️ 認識バックエンド",
-        "settings_asr_backend_tip": "選択した認識モデルに対応するバックエンドを選びます。",
         "settings_lang_label": "🌍 入力言語",
         "settings_lang_tip": "言語コード：ja日本語、en英語、ko韓国語、ruロシア語、frフランス語、zh中国語。",
-        "settings_asr_param_label": "🛠️ CrispASR パラメータ",
-        "settings_asr_param_placeholder": "プレースホルダー：$crispasr_executable、$backend、$model_file、$aligner_file、$language、$output_file、$input_file。",
-        "settings_open_crispasr_btn": "📁 CrispASRディレクトリを開く",
-        "settings_refresh_speech_btn": "🔄 音声モデルリストを更新",
-        "settings_test_offline_asr_btn": "🧪 オフライン文字起こしをテスト",
         "settings_uvr_label": "🎤 ボーカル分離モデル",
         "settings_uvr_tip": "separateフォルダーからボーカルと伴奏を分離するONNXモデルを選択します。",
         "settings_open_uvr_btn": "📁 UVRモデルディレクトリを開く",
@@ -872,16 +815,9 @@ TRANSLATIONS = {
         "status_offline_test_busy": "[WARNING] 別のタスクが実行中です。完了を待つか、先にキャンセルしてください。",
         "status_offline_test_cancelled": "[INFO] オフラインモデルのテストをキャンセルしました。",
         "offline_test_audio_missing": "内蔵テスト音声がありません。完全なアプリパッケージを再インストールしてください",
-        "offline_test_asr_model_missing": "文字起こしモデルを選択してください",
-        "offline_test_aligner_missing": "アライメントモデルを選択してください",
         "offline_test_translation_model_missing": "オフライン翻訳モデルを選択してください",
-        "offline_test_asr_timeout": "文字起こしモデルのテストが5分を超えました",
-        "offline_test_asr_no_output": "有効なSRTが生成されませんでした。明瞭な音声を含むサンプルを使用してください",
         "offline_test_no_response": "モデルサーバーから有効な応答がありません",
         "offline_test_translation_timeout": "オフライン翻訳モデルが3分以内に準備できませんでした：{detail}",
-        "status_offline_asr_test_starting": "[INFO] 文字起こしモデル {model} を読み込み、テスト音声を処理中...",
-        "status_offline_asr_test_success": "[INFO] ✅ オフライン文字起こしテストに成功しました（{seconds:.1f}秒）。",
-        "status_offline_asr_test_failed": "[ERROR] ❌ オフライン文字起こしテストに失敗：{error}",
         "status_offline_translation_test_starting": "[INFO] オフライン翻訳モデル {model} を読み込み、推論を実行中...",
         "status_offline_translation_test_success": "[INFO] ✅ オフライン翻訳テストに成功しました（{seconds:.1f}秒）。",
         "status_offline_translation_test_failed": "[ERROR] ❌ オフライン翻訳テストに失敗：{error}",
@@ -989,6 +925,7 @@ TRANSLATIONS = {
         "status_srt_convert_done": "[INFO] 字幕変換完了！",
         "status_no_transcribe_skip": "[INFO] 文字起こしが選択されていません。文字起こしステップをスキップ...",
         "status_existing_srt_found": "[INFO] 既存の字幕ファイルが見つかりました：{file}、文字起こしステップをスキップ...",
+        "status_local_asr_unavailable": "[WARN] {file} に対応する SRT が見つかりません。デスクトップ版ではローカル文字起こしを実行しないため、字幕ファイルを用意するか SRT を入力してください。",
         "status_asr_done_cached": "[INFO] 音声認識完了！（既存の字幕を使用）",
         "status_submitting_translation": "[INFO] 翻訳用にファイルを送信中...",
         "status_extracting_audio": "[INFO] 音声を抽出中...",

@@ -8,6 +8,7 @@ from typing import Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .node_config import MockASRNodeConfig, MockPreprocessNodeConfig
 from .node_execution import NodeExecutionContext, NodeResult
 
 AUDIO_PORT = "audio"
@@ -78,18 +79,15 @@ def normalize_empty_config(config: dict[str, object]) -> dict[str, object]:
 
 
 def normalize_preprocess_config(config: dict[str, object]) -> dict[str, object]:
-    from .pipeline_config import PreprocessConfig
+    from .node_config import MockPreprocessNodeConfig
 
-    return PreprocessConfig.model_validate(config, strict=True).model_dump(mode="json")
+    return MockPreprocessNodeConfig.model_validate(config, strict=True).model_dump(mode="json")
 
 
 def validate_preprocess_config(config: dict[str, object]) -> dict[str, object]:
-    from .pipeline_config import PreprocessConfig
+    from .node_config import MockPreprocessNodeConfig
 
-    value = PreprocessConfig.model_validate(config, strict=True)
-    if value.provider not in {"mock", "ffmpeg"}:
-        raise ValueError("preprocess.provider 只能是 mock 或 ffmpeg")
-    return value.model_dump(mode="json")
+    return MockPreprocessNodeConfig.model_validate(config, strict=True).model_dump(mode="json")
 
 
 def normalize_asr_config(config: dict[str, object]) -> dict[str, object]:
@@ -147,7 +145,6 @@ async def preprocess_executor(context: NodeExecutionContext) -> NodeResult:
         context.node,
         upstream,
         context.cancel_event,
-        context.ffmpeg_path,
     )
     result = NodeResult(artifact=artifact)
     result.add("audio", output)
@@ -177,7 +174,7 @@ async def asr_executor(context: NodeExecutionContext) -> NodeResult:
         context.input("audio").value.path,
         context.project,
         context.cancel_event,
-        context.asr_settings,
+        context.mock_delay_ms,
     )
     result = NodeResult(artifact=artifact)
     result.add("transcript", transcript)
@@ -230,6 +227,20 @@ def _fields_from_model(
             )
         )
     return tuple(fields)
+
+
+def _config_fields(
+    model: type[BaseModel],
+    *,
+    provider_options: list[dict[str, object]],
+) -> tuple[CapabilityField, ...]:
+    return _fields_from_model(
+        model,
+        widgets={"provider": ("select", provider_options)},
+    )
+
+
+MOCK_PROVIDER_OPTIONS = [{"value": "mock", "label": "Mock"}]
 
 
 class PortDefinition(BaseModel):
@@ -305,6 +316,7 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
         output_ports=(AUDIO_PORT,),
         terminal=False,
         config_kind="preprocess",
+        fields=_config_fields(MockPreprocessNodeConfig, provider_options=MOCK_PROVIDER_OPTIONS),
         normalize_config=normalize_preprocess_config,
         validate_config=validate_preprocess_config,
         execute=preprocess_executor,
@@ -316,6 +328,7 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
         output_ports=(TRANSCRIPT_PORT,),
         terminal=False,
         config_kind="asr",
+        fields=_config_fields(MockASRNodeConfig, provider_options=MOCK_PROVIDER_OPTIONS),
         normalize_config=normalize_asr_config,
         validate_config=validate_asr_node_config,
         execute=asr_executor,
@@ -442,10 +455,7 @@ def validate_node_result(definition: NodeDefinition, result: NodeResult) -> Node
     return result
 
 
-ASR_PROVIDERS = (
-    {"id": "mock", "label": "Mock"},
-    {"id": "crispasr", "label": "CrispASR"},
-)
+ASR_PROVIDERS = ({"id": "mock", "label": "Mock"},)
 
 
 def asr_provider_catalog() -> list[dict[str, str]]:
@@ -456,44 +466,6 @@ def asr_provider_catalog() -> list[dict[str, str]]:
 def _capability_fields(definition: NodeDefinition) -> tuple[CapabilityField, ...]:
     if definition.fields:
         return definition.fields
-    if definition.config_kind == "preprocess":
-        from .pipeline_config import PreprocessConfig
-
-        return _fields_from_model(
-            PreprocessConfig,
-            widgets={
-                "provider": (
-                    "select",
-                    [
-                        {"value": "mock", "label": "Mock"},
-                        {"value": "ffmpeg", "label": "FFmpeg"},
-                    ],
-                )
-            },
-        )
-    if definition.config_kind == "asr":
-        from .pipeline_config import ASRConfig
-
-        fields = list(
-            _fields_from_model(
-                ASRConfig,
-                widgets={
-                    "provider": (
-                        "select",
-                        [
-                            {"value": "mock", "label": "Mock"},
-                            {"value": "crispasr", "label": "CrispASR"},
-                        ],
-                    )
-                },
-            )
-        )
-        if not any(item.key == "provider_profile_id" for item in fields):
-            fields.insert(
-                1,
-                CapabilityField(key="provider_profile_id", type="string", default=None),
-            )
-        return tuple(fields)
     if definition.config_kind == "text_output":
         return (
             CapabilityField(key="filename_stem", type="string", default=DEFAULT_TEXT_FILENAME_STEM),

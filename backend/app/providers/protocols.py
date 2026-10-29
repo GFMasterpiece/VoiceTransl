@@ -3,7 +3,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-from ..domain import PreprocessConfig, Project, Segment, Transcript
+from ..domain import MockPreprocessNodeConfig, Project, Segment, Transcript
 
 
 class TranslationContext(BaseModel):
@@ -19,16 +19,12 @@ class TranslationContext(BaseModel):
 
 class PreprocessProvider(Protocol):
     async def preprocess(
-        self, audio: Path, output: Path, config: PreprocessConfig
+        self, audio: Path, output: Path, config: MockPreprocessNodeConfig
     ) -> dict[str, object]: ...
 
 
 class ASRProvider(Protocol):
     async def transcribe(self, audio: Path, project: Project) -> Transcript: ...
-
-
-class AlignerProvider(Protocol):
-    async def align(self, audio: Path, transcript: Transcript) -> Transcript: ...
 
 
 class TranslatorProvider(Protocol):

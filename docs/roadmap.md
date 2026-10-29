@@ -4,37 +4,39 @@
 
 ## 已完成
 
-- **多音频项目工作流：**一个项目包含多个独立音频；支持批量上传/重试、逐音频任务、配置覆盖、进度查看、取消、恢复和重新处理。
-- **配置优先的 Pipeline：**建立预处理、ASR、对齐、翻译、导出五阶段流程；任务启动时保存配置快照，恢复任务沿用原快照。
-- **本地处理与翻译：**接入 FFmpeg 预处理、本地 CrispASR、OpenAI-compatible/Anthropic HTTP 翻译，以及 SRT、VTT、LRC 导出。
-- **本地 ASR 管理：**增加全局 CrispASR 路径设置、受限 GGUF 模型发现与显式选择；不自动下载模型。
-- **Provider Profile 基础：**增加后端 Profile CRUD、配置引用校验和任务级非密钥快照；API Key 不保存在 Profile 或任务文件中。
-- **节点工作流第一里程碑：**在旧 Pipeline 旁增加节点画布，支持音频输入向多个音频输出直通、独立输出配置、校验/版本化保存、逐音频运行与取消、不可变运行快照和历史产物下载。输出为字节一致的独立副本；尚未迁移 ASR/翻译等处理节点。见[首版范围](../spec/workflow-audio-mvp.md)和[当前架构](architecture.md#7-节点工作流首版)。
-- **节点工作流第二里程碑：**接入独立配置的 Mock/FFmpeg 预处理节点，支持原音直出与处理分支并存、串联处理和直接上游产物传递；按依赖顺序执行，失败阻塞下游而独立分支继续。预处理产物可下载，源文件和历史保留。见[预处理节点](../spec/workflow-preprocess.md)。
-- **节点工作流第三里程碑：**接入独立 Mock/CrispASR 识别、音频/识别结果类型端口、结构化识别快照及 TXT/SRT/VTT/LRC 原文输出；支持仅文本输出和混合分支，保留失败隔离、取消回收与历史下载。已通过真实本地识别、API、桌面及窄屏验收。见[ASR 与文本输出](../spec/workflow-asr.md)。
+- **多音频项目基础：**一个项目包含多个独立音频；支持上传、逐音频资源和节点运行历史。
+- **节点工作流最小入口：**工作流以项目为范围保存，当前默认图为 `audio_input -> audio_output`；任务执行保存不可变图快照并保留运行历史。
+- **运行基础：**Mock 节点用于验证图校验、调度、取消和产物持久化；预处理只保留 Mock，识别只保留 Mock 和示例结果语言，可将示例文本导出为 TXT/SRT/VTT/LRC，不执行真实识别或转换。
+- **兼容性基础：**项目/工作流 schema 采用严格同版本读取，不自动迁移或改写旧文件。详见[架构约定](architecture.md)。
+
+## 历史实现（已退役）
+
+- 早期 Web 版本曾提供固定的五阶段处理界面，以及可选的本地音频预处理、语音识别和字幕导出节点；随后改为以可视化工作流为主。真实处理 Provider 和五阶段入口现已退役，仍保留 Mock 验证节点；历史项目与任务文件不自动迁移。
+- 初期节点图曾扩展到预处理、识别和文本输出。当前为收敛产品范围，运行图只保留最小音频直通与 Mock 验证能力。
 
 ## 当前整改
 
-- **兼容性与扩展性（基础项通过，扩展性仍有未完成边界）：**严格持久化版本校验、能力目录、翻译可取消请求、显式语言、自定义命名与结构化输出、分页 API 已有回归覆盖。完整检查发现：工作流运行时当前仅支持单输入/单输出节点，产物端口及前端类型仍有限定；部分请求模型会为缺失的 schema_version 补当前默认值；项目分页仍扫描并排序全部项目目录。以上不应标记为完整验收，详见本轮检查结果。旧 CLI 能力未知时不自动启用；对齐配置继续暂缓。契约及范围见[整改规格](../spec/compatibility-extensibility.md)与[架构](architecture.md)。
+- **收敛为最小骨架：**删除本地听写实现、打包引用、运行设置及旧固定 Pipeline；节点去除非 Mock Provider 和无效处理参数，前端移除旧预设展示。保留音频直通、可选 Mock 验证、运行历史与安全产物下载；不删除或迁移既有项目、任务及本地模型文件。
+- **兼容性与扩展性：**既定验收项见[整改规格](../spec/compatibility-extensibility.md)。本轮删减不代表云端 ASR 已完成。
 
 ## 接下来
 
-1. **优先实现云端 ASR：**按 2026-10-29 用户决定，云端识别优先于本地 ASR 的进一步完善。以现有 OpenAI 草案为起点，先明确服务商/兼容协议、节点工作流接入范围、模型及时间戳能力、上传限制、音频外发提示和重试策略，再实施后端与 Profile 界面并用 fake HTTP 验证。具体契约仍待确认，见[云端 ASR 规格](../spec/cloud-asr-openai.md)。
-2. **明确节点重跑契约：**确定输入/配置/Provider 指纹及 artifact 引用格式，落实“强制重跑所选节点及下游、有效上游可复用、缺失上游拒绝启动”，保留旧运行；现有节点历史暂不能复用执行。
-3. **补齐历史管理：**设计空间统计、手动清理及共享引用保护；目前不自动清理，不以重跑覆盖历史。
+1. **继续完善节点图能力前先明确规格：**当前保持最简音频输入/输出图，不提前恢复真实 Provider 配置。
+2. **明确云端 ASR 契约：**实现前确认服务商/协议、模型与时间戳能力、上传限制、音频外发提示和重试策略。现有草案见[云端 ASR 规格](../spec/cloud-asr-openai.md)，尚未批准或实现。
+3. **后续工作流能力：**节点类型、图重跑/缓存、历史清理等事项应逐项明确契约后再排期。
 
 ## 已知问题与暂缓事项
 
-- **本地 ASR 能力契约（已验收）：**重复静态后端白名单已移除，当前 CrispASR CLI 能力目录驱动 API、配置选项和提交/队列校验。仅协议能力标记足以确认 ASR 的后端可选；其他或未知任务不启用。模型架构关联仍只采用已验证映射；不据此扩张本地推理功能，云端 ASR 仍优先。
-- **对齐配置（Deferred）：**保留当前 Mock/fallback，不在本轮改变 enabled/provider/model/fallback 的生效语义，后续专门设计。
+- **云端 ASR：**用户此前决定优先考虑云端模型，但服务商、协议和节点执行契约尚未确定；当前不得把云端 ASR 标为可用。
+- **历史数据：**旧项目和任务文件保留原样，不自动迁移；旧五阶段 Web 执行入口从本轮起退役。若后续需读取/迁移旧任务，另行设计显式兼容方案。
 
 ## 暂不纳入首版
 
-Deepgram、AssemblyAI、腾讯云等其他云端 Provider，异步对象存储批处理、说话人分离、自动语言检测、跨音频合并及实时流式识别。待 OpenAI 首版稳定后再评估。
+真实云端/本地 Provider、异步对象存储批处理、说话人分离、自动语言检测、跨音频合并及实时流式识别。后续先确认具体协议和验收范围，不以已有草案默认某个服务商已获批准。
 
 ## 长期产品目标
 
-最终目标是提供类似 ComfyUI 的可视化节点工作流：用户能配置节点和连接来决定处理路径，并独立设置各节点。目前已完成音频输入/预处理/ASR/音频与文本输出的有限图编辑，旧五阶段仍独立保留；尚未实现对齐/翻译节点、视频图输出、任意节点重跑或通用汇合。目标范围和待确认问题见[产品目标](product_requirements.md)及[节点工作流规格](../spec/workflow-editor.md)。
+最终目标是提供类似 ComfyUI 的可视化节点工作流。当前运行能力刻意收缩至音频直通与 Mock 验证，不代表完整处理图已实现；后续按独立规格逐步扩展。目标范围和待确认问题见[产品目标](product_requirements.md)及[节点工作流规格](../spec/workflow-editor.md)。
 
 ## 相关专题
 
@@ -42,6 +44,5 @@ Deepgram、AssemblyAI、腾讯云等其他云端 Provider，异步对象存储�
 - 整体产品目标：[`product_requirements.md`](product_requirements.md)
 - 多音频资源和 API：[`voicetransl_multi_audio_project.md`](voicetransl_multi_audio_project.md)
 - 前端工作流：[`frontend_workflow.md`](frontend_workflow.md)
-- 本地 ASR：[`crispasr_provider.md`](crispasr_provider.md)、[`voicetransl_global_settings.md`](voicetransl_global_settings.md)
-- 翻译 Provider：[`translation_providers.md`](translation_providers.md)
-- Provider Profile 当前实现：[`provider_profiles.md`](provider_profiles.md)
+- 留存翻译适配器边界：[`translation_providers.md`](translation_providers.md)
+- Provider Profile 兼容边界：[`provider_profiles.md`](provider_profiles.md)

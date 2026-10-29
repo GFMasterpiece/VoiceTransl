@@ -52,12 +52,7 @@ def test_workflow_asr_defaults_are_strict_and_same_as_explicit_values():
     default = validate_asr_config({})
     assert default.model_dump(mode="json") == {
         "provider": "mock",
-        "provider_profile_id": None,
-        "backend": "qwen3-1.7b",
-        "model": "mock",
         "language": "ja",
-        "vad_enabled": True,
-        "chunk_seconds": 30,
     }
     explicit = validate_asr_config(default.model_dump(mode="json"))
     assert explicit == default
@@ -72,9 +67,9 @@ def test_workflow_asr_defaults_are_strict_and_same_as_explicit_values():
         None,
         [],
         {"provider": "openai"},
-        {"backend": "../not-supported"},
-        {"model": "../model.gguf"},
-        {"model": "model.gguf."},
+        {"provider": "crispasr"},
+        {"backend": "mock"},
+        {"model": "mock"},
         {"model": " "},
         {"language": " "},
         {"language": " ja"},
@@ -92,22 +87,12 @@ def test_workflow_asr_rejects_unknown_nulls_paths_and_coercion(config):
         validate_asr_config(config)
 
 
-def test_workflow_asr_accepts_mock_and_safe_crispasr_identifiers():
-    mock = validate_asr_config({"provider": "mock", "model": "demo.gguf", "backend": "qwen3"})
-    assert mock.provider == "mock"
-    crisp = validate_asr_config(
-        {
-            "provider": "crispasr",
-            "backend": "whisper",
-            "model": "whisper-large-v3.gguf",
-            "language": "en",
-        }
-    )
-    assert crisp.provider == "crispasr"
-
-    # Availability is decided from live CLI capabilities, not a domain list.
-    future = validate_asr_config({"provider": "crispasr", "backend": "future-asr"})
-    assert future.backend == "future-asr"
+def test_workflow_asr_accepts_only_trimmed_mock_language():
+    mock = validate_asr_config({"provider": "mock", "language": "en-US"})
+    assert mock.model_dump(mode="json") == {"provider": "mock", "language": "en-US"}
+    for provider in ("crispasr", "openai", "whisper"):
+        with pytest.raises(ValueError):
+            validate_asr_config({"provider": provider})
 
 
 @pytest.mark.parametrize(
@@ -239,7 +224,7 @@ def test_workflow_transcript_result_contract():
 
 @pytest.mark.parametrize(
     "field",
-    ["provider", "backend", "model", "language", "vad_enabled", "chunk_seconds"],
+    ["provider", "language"],
 )
 def test_workflow_asr_rejects_explicit_null_fields(field):
     with pytest.raises(ValueError):

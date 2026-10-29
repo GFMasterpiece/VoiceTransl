@@ -12,7 +12,9 @@
 
 <p align="center"><a href="README.md">简体中文</a> | English</p>
 
-VoiceTransl is an all-in-one, offline AI application for generating and translating video subtitles on Windows. It provides a complete workflow for translators, including video downloading, audio extraction, transcription and timing, subtitle translation, video rendering, and subtitle summarization. This project is based on [GalTransl](https://github.com/xd2333/GalTransl) and is licensed under the GPLv3.
+VoiceTransl is a Windows subtitle-processing and translation application with tools for video downloading, audio extraction, existing-subtitle translation, video rendering, and subtitle summarization. This project is based on [GalTransl](https://github.com/xd2333/GalTransl) and is licensed under the GPLv3. Automatic transcription is no longer available in the desktop app; audio/video translation requires a matching SRT sidecar file.
+
+The Web development version currently provides only a minimal audio input/output workflow and Mock validation nodes, not real recognition or translation. See the [roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) for its scope. The features listed here primarily describe the desktop app.
 
 ## Features
 
@@ -21,8 +23,7 @@ VoiceTransl is an all-in-one, offline AI application for generating and translat
 - Accepts multiple input formats, including audio, video, and SRT subtitle files.
 - Produces SRT and LRC subtitles.
 - Supports Japanese, English, Korean, Russian, and French.
-- Uses CrispASR's Qwen3-ASR and forced alignment workflow to generate timestamped subtitles.
-- Supports voice activity detection (VAD) to identify speech segments automatically.
+- Accepts existing SRT subtitles and converts, translates, and merges them into the requested output formats.
 - Supports custom translation dictionaries for input and output replacement.
 - Accepts world-book and script content as custom translation reference material.
 - Downloads videos directly from YouTube, Bilibili, and other media links.

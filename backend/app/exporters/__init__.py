@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..domain.pipeline_config import EXPORT_FORMATS, ExportConfig
+from ..domain.legacy_config import EXPORT_FORMATS, LegacyExportConfig
 from .lrc import render_lrc
 from .srt import render_srt
 from .vtt import render_vtt
@@ -84,7 +84,7 @@ def _template_name(config, format_name: str, kind: str, source_stem: str) -> str
     return stem if stem.endswith(f".{format_name}") else f"{stem}.{format_name}"
 
 
-def export_files(config: ExportConfig, *, source_stem: str | None = None) -> list[ExportFile]:
+def export_files(config: LegacyExportConfig, *, source_stem: str | None = None) -> list[ExportFile]:
     """Describe every generated file; names never imply semantic fields."""
     source_stem = sanitize_export_stem(source_stem)
     files: list[ExportFile] = []

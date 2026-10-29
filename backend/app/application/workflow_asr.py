@@ -7,14 +7,12 @@ import hashlib
 import math
 import os
 import threading
-import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from ..domain import (
-    ASRConfig,
+    MockASRNodeConfig,
     Project,
     TextOutputConfig,
     Transcript,
@@ -25,7 +23,7 @@ from ..domain import (
     validate_workflow_transcript,
 )
 from ..exporters import render_lrc, render_srt, render_vtt
-from ..providers import CrispASRError, CrispASRProvider, MockASRProvider
+from ..providers import MockASRProvider
 
 
 class WorkflowASRError(RuntimeError):
@@ -36,15 +34,6 @@ class WorkflowASRError(RuntimeError):
 
 class WorkflowASRCancelled(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class ASRSettings:
-    executable: str | Path = "crispasr"
-    model_dir: str | Path = "crispasr/models"
-    timeout_seconds: float = 300
-    process_factory: Callable[..., Awaitable[Any]] | None = None
-    mock_delay_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -69,86 +58,13 @@ MEDIA_TYPES = {
 }
 
 
-def _validate_wav(path: Path) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise WorkflowASRError("ASR_INPUT_MISSING", "ASR 输入音频不存在")
-    try:
-        with wave.open(str(path), "rb") as stream:
-            if (
-                stream.getcomptype() != "NONE"
-                or stream.getframerate() != 16_000
-                or stream.getnchannels() != 1
-                or stream.getsampwidth() not in {1, 2, 3, 4}
-                or stream.getnframes() <= 0
-            ):
-                raise WorkflowASRError(
-                    "ASR_INPUT_FORMAT_INVALID",
-                    "CrispASR 需要非空、完整的 16 kHz 单声道 PCM WAV；请先使用 FFmpeg 预处理",
-                )
-            frame_size = stream.getnchannels() * stream.getsampwidth()
-            remaining = stream.getnframes() * frame_size
-            while remaining:
-                chunk = stream.readframes(min(remaining // frame_size, 64 * 1024))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-            if remaining:
-                raise WorkflowASRError(
-                    "ASR_INPUT_FORMAT_INVALID",
-                    "CrispASR 输入 WAV 数据不完整；请先使用 FFmpeg 预处理",
-                )
-    except WorkflowASRError:
-        raise
-    except (EOFError, OSError, wave.Error) as exc:
-        raise WorkflowASRError(
-            "ASR_INPUT_FORMAT_INVALID",
-            "CrispASR 输入不是可读取的 PCM WAV；请先使用 FFmpeg 预处理",
-        ) from exc
-
-
-async def _join_thread(task: asyncio.Task) -> None:
-    """Wait for a to_thread operation without cancelling its worker thread."""
-
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # Repeated shutdown/cancel requests must not abandon the worker.
-            continue
-        except Exception:
-            break
-    if task.done() and not task.cancelled():
-        task.exception()
-
-
-async def _validate_wav_cancellable(path: Path, cancel_event: asyncio.Event) -> None:
-    if cancel_event.is_set():
-        raise WorkflowASRCancelled
-    task = asyncio.create_task(asyncio.to_thread(_validate_wav, path))
-    cancel_wait = asyncio.create_task(cancel_event.wait())
-    try:
-        done, _ = await asyncio.wait({task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED)
-        if cancel_wait in done and cancel_wait.result():
-            await _join_thread(task)
-            raise WorkflowASRCancelled
-        return await task
-    except asyncio.CancelledError:
-        await _join_thread(task)
-        raise
-    finally:
-        cancel_wait.cancel()
-        await asyncio.gather(cancel_wait, return_exceptions=True)
-
-
-def _snapshot_transcript(transcript: Transcript, project_id: str, config: ASRConfig):
+def _snapshot_transcript(transcript: Transcript, project_id: str, config: MockASRNodeConfig):
     result = transcript.model_copy(deep=True)
     result.project_id = project_id
     result.stage = "raw"
     result.language = config.language
     result.metadata = {
         "provider": config.provider,
-        "backend": config.backend,
-        "model": config.model,
     }
     for segment in result.segments:
         segment.language = config.language
@@ -159,6 +75,20 @@ def _snapshot_transcript(transcript: Transcript, project_id: str, config: ASRCon
     if result.duration is not None and (not math.isfinite(result.duration) or result.duration < 0):
         raise WorkflowASRError("ASR_RESULT_INVALID", "ASR 结果时长无效")
     return result
+
+
+async def _join_thread(task: asyncio.Task) -> None:
+    """Wait for a to_thread operation without abandoning its worker."""
+
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    if task.done() and not task.cancelled():
+        task.exception()
 
 
 def _write_bytes_atomic(
@@ -226,66 +156,48 @@ async def execute_asr_node(
     audio_path: Path,
     project: Project,
     cancel_event: asyncio.Event,
-    settings: ASRSettings,
+    mock_delay_ms: int,
 ) -> tuple[WorkflowArtifact, TranscriptData]:
     config = validate_asr_config(node.config)
     output_path = store.workflow_artifact_path(
         run.project_id, run.audio_id, run.id, node.id, "transcript.json"
     )
-    if config.provider == "crispasr":
-        await _validate_wav_cancellable(audio_path, cancel_event)
-        provider = CrispASRProvider(
-            settings.executable,
-            settings.model_dir,
-            config,
-            timeout_seconds=settings.timeout_seconds,
-            cancel_event=cancel_event,
-            process_factory=settings.process_factory,
-        )
-        try:
-            transcript = await provider.transcribe(audio_path, project)
-        except CrispASRError as error:
-            if error.code == "ASR_CANCELLED" and cancel_event.is_set():
-                raise WorkflowASRCancelled from error
-            raise WorkflowASRError(error.code, str(error)) from error
-    else:
-        delay_task = asyncio.create_task(asyncio.sleep(settings.mock_delay_ms / 1000))
-        cancel_wait = asyncio.create_task(cancel_event.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {delay_task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if cancel_wait in done and cancel_wait.result():
-                delay_task.cancel()
-                await asyncio.gather(delay_task, return_exceptions=True)
-                raise WorkflowASRCancelled
-            await delay_task
-        except asyncio.CancelledError:
+    delay_task = asyncio.create_task(asyncio.sleep(mock_delay_ms / 1000))
+    cancel_wait = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _ = await asyncio.wait({delay_task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED)
+        if cancel_wait in done and cancel_wait.result():
             delay_task.cancel()
             await asyncio.gather(delay_task, return_exceptions=True)
-            raise
-        finally:
-            cancel_wait.cancel()
-            await asyncio.gather(cancel_wait, return_exceptions=True)
-        provider = MockASRProvider(0)
-        transcript_task = asyncio.create_task(provider.transcribe(audio_path, project))
-        cancel_wait = asyncio.create_task(cancel_event.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {transcript_task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if cancel_wait in done and cancel_wait.result():
-                transcript_task.cancel()
-                await asyncio.gather(transcript_task, return_exceptions=True)
-                raise WorkflowASRCancelled
-            transcript = await transcript_task
-        except asyncio.CancelledError:
+            raise WorkflowASRCancelled
+        await delay_task
+    except asyncio.CancelledError:
+        delay_task.cancel()
+        await asyncio.gather(delay_task, return_exceptions=True)
+        raise
+    finally:
+        cancel_wait.cancel()
+        await asyncio.gather(cancel_wait, return_exceptions=True)
+
+    provider = MockASRProvider(0)
+    transcript_task = asyncio.create_task(provider.transcribe(audio_path, project))
+    cancel_wait = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {transcript_task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if cancel_wait in done and cancel_wait.result():
             transcript_task.cancel()
             await asyncio.gather(transcript_task, return_exceptions=True)
-            raise
-        finally:
-            cancel_wait.cancel()
-            await asyncio.gather(cancel_wait, return_exceptions=True)
+            raise WorkflowASRCancelled
+        transcript = await transcript_task
+    except asyncio.CancelledError:
+        transcript_task.cancel()
+        await asyncio.gather(transcript_task, return_exceptions=True)
+        raise
+    finally:
+        cancel_wait.cancel()
+        await asyncio.gather(cancel_wait, return_exceptions=True)
     if cancel_event.is_set():
         raise WorkflowASRCancelled
     try:
@@ -367,7 +279,6 @@ async def execute_text_output_node(
 
 
 __all__ = [
-    "ASRSettings",
     "TranscriptData",
     "WorkflowASRCancelled",
     "WorkflowASRError",

@@ -8,12 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .api.capabilities import router as capabilities_router
-from .api.local_asr_settings import router as local_asr_router
 from .api.routes import router
 from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
-from .application.local_asr_models import LocalASRModels
-from .application.local_asr_settings import LocalASRSettings
 from .config import load_settings
 from .domain.schema import SCHEMA_VERSION, SchemaVersionError
 from .logging_utils import configure_logging
@@ -37,12 +34,7 @@ def create_app(data_dir=None):
         events,
         settings.mock_delay_ms,
         settings.max_concurrent,
-        settings.preset_dir,
-        settings.mock_delay_ms_explicit,
-        settings.ffmpeg_path,
-        crispasr_executable=settings.crispasr_executable,
-        crispasr_model_dir=settings.crispasr_model_dir,
-        crispasr_timeout_seconds=settings.crispasr_timeout_seconds,
+        False,
     )
 
     @asynccontextmanager
@@ -122,15 +114,12 @@ def create_app(data_dir=None):
         )
 
     app.state.settings = settings
-    app.state.local_asr_settings = LocalASRSettings(Path(config_path), settings)
-    app.state.local_asr_models = LocalASRModels(app.state.local_asr_settings)
     app.state.store = store
     app.state.events = events
     app.state.jobs = jobs
     app.include_router(router)
     app.include_router(capabilities_router)
     app.include_router(workflow_router)
-    app.include_router(local_asr_router)
     return app
 
 

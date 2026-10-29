@@ -1,4 +1,0 @@
-name: mock
-stages: [preprocess, asr, alignment, translation, export]
-providers: {asr: mock, aligner: mock, translator: mock}
-mock: {delay_ms: 500}

@@ -12,7 +12,7 @@ from typing import Callable
 import httpx
 
 from ..domain import Segment
-from ..domain.pipeline_config import merge_translation_parameters
+from ..domain.legacy_config import merge_translation_parameters
 from .protocols import TranslationContext
 
 

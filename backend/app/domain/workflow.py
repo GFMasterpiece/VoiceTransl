@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from . import node_registry as _nodes
+from .node_config import MockASRNodeConfig
 from .node_registry import (
     AUDIO_PORT,
     DEFAULT_FILENAME_STEM,
@@ -16,7 +17,6 @@ from .node_registry import (
     DEFAULT_TEXT_FORMAT,
     PORT_NAME,
 )
-from .pipeline_config import ASRConfig, PreprocessConfig
 from .schema import require_schema_version
 
 WORKFLOW_SCHEMA_VERSION = "1.0"
@@ -35,18 +35,6 @@ AUDIO_OUTPUT_NODE_TYPE = _nodes.AUDIO_OUTPUT_NODE_TYPE
 INPUT_NODE_TYPE = _nodes.INPUT_NODE_TYPE
 PREPROCESS_NODE_TYPE = _nodes.PREPROCESS_NODE_TYPE
 TEXT_OUTPUT_NODE_TYPE = _nodes.TEXT_OUTPUT_NODE_TYPE
-ASR_CONFIG_FIELDS = frozenset(
-    {
-        "provider",
-        "provider_profile_id",
-        "backend",
-        "model",
-        "language",
-        "vad_enabled",
-        "chunk_seconds",
-    }
-)
-TEXT_OUTPUT_CONFIG_FIELDS = frozenset({"filename_stem", "format"})
 ASR_LANGUAGE_MAX_LENGTH = 32
 
 
@@ -229,28 +217,14 @@ class TextOutputConfig(BaseModel):
         return self
 
 
-def _default_asr_config() -> dict[str, object]:
-    return ASRConfig().model_dump(mode="json")
-
-
-def validate_asr_config(config: object) -> ASRConfig:
-    """Validate workflow-only ASR settings without changing legacy pipeline semantics."""
+def validate_asr_config(config: object) -> MockASRNodeConfig:
+    """Validate only the mock ASR settings supported by workflow nodes."""
 
     if not isinstance(config, dict):
         raise ValueError("asr 配置必须是对象且不能为 null")
-    unexpected = set(config) - ASR_CONFIG_FIELDS
-    if unexpected:
-        raise ValueError(f"asr 配置包含未知字段: {sorted(unexpected)[0]}")
-    result = ASRConfig.model_validate(config, strict=True)
-    if result.provider not in {"mock", "crispasr"}:
-        raise ValueError("asr.provider 只能是 mock 或 crispasr")
-    if not _valid_asr_model(result.backend):
-        raise ValueError("asr.backend 必须是安全的后端标识符")
-    if not _valid_asr_model(result.model):
-        raise ValueError("asr.model 必须是安全的模型文件名标识符")
-    # Workflow language is independent from the audio language, but it must
-    # be an actual trimmed value rather than a blank string that happens to
-    # pass the legacy pipeline model's min_length constraint.
+    result = MockASRNodeConfig.model_validate(config, strict=True)
+    # Language is independent from the audio's language, but surrounding
+    # whitespace and control characters are never valid identifiers.
     if (
         not result.language
         or result.language != result.language.strip()
@@ -258,8 +232,6 @@ def validate_asr_config(config: object) -> ASRConfig:
         or any(ord(char) < 32 or ord(char) == 127 for char in result.language)
     ):
         raise ValueError("asr.language 必须非空、无首尾空白且不包含控制字符")
-    if result.provider_profile_id is not None:
-        raise ValueError("节点工作流不支持 provider_profile_id，必须为 null")
     return result
 
 
@@ -348,44 +320,6 @@ def _issue(
     return WorkflowValidationIssue(code=code, message=message, node_id=node_id, edge_id=edge_id)
 
 
-def _normalize_empty(config: dict[str, object]) -> dict[str, object]:
-    if config:
-        raise ValueError("audio_input 的 config 必须为空对象")
-    return {}
-
-
-def _normalize_preprocess(config: dict[str, object]) -> dict[str, object]:
-    if not set(config).issubset({"provider", "sample_rate", "channels", "preserve_original"}):
-        raise ValueError("preprocess config has unsupported fields")
-    return PreprocessConfig.model_validate(config, strict=True).model_dump(mode="json")
-
-
-def _validate_preprocess(config: dict[str, object]) -> dict[str, object]:
-    result = PreprocessConfig.model_validate(config, strict=True)
-    if result.provider not in {"mock", "ffmpeg"}:
-        raise ValueError("preprocess.provider 只能是 mock 或 ffmpeg")
-    return result.model_dump(mode="json")
-
-
-def _normalize_asr(config: dict[str, object]) -> dict[str, object]:
-    return validate_asr_config(config).model_dump(mode="json")
-
-
-def _normalize_text_output(config: dict[str, object]) -> dict[str, object]:
-    return validate_text_output_config(config).model_dump(mode="json")
-
-
-def _normalize_audio_output(config: dict[str, object]) -> dict[str, object]:
-    if not set(config).issubset({"filename_stem"}):
-        raise ValueError("audio_output 只支持 filename_stem")
-    result = dict(config)
-    result.setdefault("filename_stem", DEFAULT_FILENAME_STEM)
-    valid, message = _valid_filename_stem(result["filename_stem"])
-    if not valid:
-        raise ValueError(message or "filename_stem 无效")
-    return result
-
-
 def _valid_filename_stem(value: object) -> tuple[bool, str | None]:
     if not isinstance(value, str):
         return False, "filename_stem 必须是字符串"
@@ -431,18 +365,6 @@ def normalize_workflow_graph(
                 pass
         normalized.append(node.model_copy(update={"config": config}, deep=True))
     return normalized, [edge.model_copy(deep=True) for edge in edges]
-
-
-SAFE_ASR_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-
-
-def _valid_asr_model(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and SAFE_ASR_MODEL.fullmatch(value) is not None
-        and value not in {".", ".."}
-        and not value.endswith(".")
-    )
 
 
 def _config_issue(prefix: str, error: ValidationError, *, node_id: str):

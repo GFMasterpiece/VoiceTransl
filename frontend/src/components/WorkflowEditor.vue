@@ -1,29 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import AsrConfigFields from './AsrConfigFields.vue'
 import {
   WORKFLOW_NODE_HEIGHT,
   WORKFLOW_NODE_WIDTH,
-  defaultAsrConfig,
   executionSignature,
   inputPortForNode as registeredInputPortForNode,
   isTerminalNode,
   nodeLabel as registeredNodeLabel,
   outputPortForNode as registeredOutputPortForNode,
-  readAsrConfig,
-  readPreprocessConfig,
   readTextOutputConfig,
   useWorkflowStore,
   validateNodeConfig as registeredValidateNodeConfig,
-  type AsrNodeConfig,
-  type PreprocessChannels,
-  type PreprocessProvider,
   type TextOutputFormat,
   type WorkflowNode,
 } from '../stores/workflow'
 
 const props = defineProps<{ projectId: string; audioId: string; audioName: string }>()
-const emit = defineEmits<{ 'show-pipeline': [] }>()
 const store = useWorkflowStore()
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
@@ -37,18 +29,11 @@ const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
 const filenameDraft = ref('')
 const textFormatDraft = ref<TextOutputFormat>('txt')
-const providerDraft = ref<PreprocessProvider>('mock')
-const sampleRateDraft = ref('16000')
-const channelsDraft = ref<PreprocessChannels>(1)
-const preserveOriginalDraft = ref(true)
-const asrDraft = ref<AsrNodeConfig>(defaultAsrConfig())
 const genericDraft = ref<Record<string, unknown>>({})
 const settingsError = ref('')
 const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
-const builtinConfigKinds = new Set(['none', 'preprocess', 'asr', 'audio_output', 'text_output'])
-const genericFields = computed(() => selectedKind.value && !builtinConfigKinds.has(selectedKind.value.configKind) ? selectedKind.value.fields : [])
-const asrProviders = computed(() => (store.capabilities?.asr.providers || []).map((item) => ({ value: item.value, label: item.label })))
-const asrBackendDetails = computed(() => store.capabilities?.asr.backendDetails || [])
+const dedicatedOutputKinds = new Set(['audio_output', 'text_output'])
+const genericFields = computed(() => selectedKind.value && !dedicatedOutputKinds.has(selectedKind.value.configKind) ? selectedKind.value.fields : [])
 function fieldValue(field: { key: string; default: unknown }) {
   const value = genericDraft.value[field.key]
   return value === undefined ? (field.default ?? '') : value
@@ -123,23 +108,15 @@ function openNode(node: WorkflowNode) {
   store.selectNode(node.id)
   filenameDraft.value = typeof node.config.filename_stem === 'string' ? node.config.filename_stem : 'audio-copy'
   textFormatDraft.value = readTextOutputConfig(node.config).format
-  const preprocess = readPreprocessConfig(node.config)
-  providerDraft.value = preprocess.provider
-  sampleRateDraft.value = String(preprocess.sample_rate)
-  channelsDraft.value = preprocess.channels
-  preserveOriginalDraft.value = preprocess.preserve_original
-  asrDraft.value = readAsrConfig(node.config)
-  genericDraft.value = { ...node.config }
+  const defaults = registry.value?.createDefaultConfig(node.type) || {}
+  genericDraft.value = { ...defaults, ...node.config }
   settingsError.value = ''
   settingsOpen.value = true
   void nextTick(() => {
-    const target = document.getElementById(node.type === 'audio_output' || node.type === 'text_output' ? 'workflow-filename-stem' : node.type === 'preprocess' ? 'workflow-sample-rate' : node.type === 'asr' ? 'workflow-settings-title' : 'workflow-settings-title')
+    const target = document.getElementById(node.type === 'audio_output' || node.type === 'text_output' ? 'workflow-filename-stem' : 'workflow-config-provider')
     const focusTarget = target || document.querySelector<HTMLElement>('.workflow-settings-modal select, .workflow-settings-modal input, .workflow-settings-modal button')
     focusTarget?.focus()
   })
-}
-function updateAsrDraft(patch: Record<string, unknown>) {
-  asrDraft.value = { ...asrDraft.value, ...patch, provider_profile_id: null } as AsrNodeConfig
 }
 
 function closeSettings() {
@@ -160,36 +137,6 @@ function commitSettings() {
       config: selected.value.type === 'text_output'
         ? { filename_stem: stem, format: textFormatDraft.value }
         : { filename_stem: stem },
-    })
-  } else if (selected.value.type === 'asr') {
-    const config = { ...asrDraft.value, provider_profile_id: null as null }
-    const issues = validateNodeConfig({ id: selected.value.id, type: 'asr', config })
-    if (issues.length) {
-      settingsError.value = issues[0].message
-      return
-    }
-    store.updateNode(selected.value.id, { config })
-  } else if (selected.value.type === 'preprocess') {
-    const sampleRate = Number(sampleRateDraft.value)
-    if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
-      settingsError.value = '采样率必须是 8000–192000 之间的整数。'
-      return
-    }
-    if (providerDraft.value !== 'mock' && providerDraft.value !== 'ffmpeg') {
-      settingsError.value = '请选择 Mock 或 FFmpeg Provider。'
-      return
-    }
-    if (channelsDraft.value !== 1 && channelsDraft.value !== 2) {
-      settingsError.value = '声道数只能是 1 或 2。'
-      return
-    }
-    store.updateNode(selected.value.id, {
-      config: {
-        provider: providerDraft.value,
-        sample_rate: sampleRate,
-        channels: channelsDraft.value,
-        preserve_original: preserveOriginalDraft.value,
-      },
     })
   } else {
     const config = { ...genericDraft.value }
@@ -350,25 +297,23 @@ watch(() => controlsLocked.value, (locked) => {
   }
 })
 
-function closeEditor() {
-  requestClose(() => emit('show-pipeline'))
-}
-
-function requestClose(action: () => void) {
+export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
+function requestClose(action: () => void): CloseRequestResult {
   if (store.activeRun) {
     store.error = '节点运行尚未结束，请等待完成或取消后再离开。'
-    return
+    return 'blocked'
   }
   if (store.saving || store.validating) {
     store.error = '节点工作流正在校验或保存，请完成后再离开。'
-    return
+    return 'blocked'
   }
   if (store.dirty) {
     pendingClose = action
     discardPrompt.value = true
-    return
+    return 'pending'
   }
   action()
+  return 'completed'
 }
 
 function discardAndClose() {
@@ -410,14 +355,11 @@ async function retryOutputChecks() {
 }
 
 function nodeKindLabel(node: WorkflowNode) {
-  if (node.type === 'audio_input') return '音频输入'
-  if (node.type === 'preprocess') return readPreprocessConfig(node.config).provider === 'ffmpeg' ? 'FFmpeg 预处理' : 'Mock 预处理'
-  if (node.type === 'asr') {
-    const config = readAsrConfig(node.config)
-    return config.provider === 'crispasr' ? 'CrispASR 识别' : 'Mock 识别'
-  }
+  const label = registry.value?.label(node.type) || node.type
+  if (node.type === 'audio_input') return label
+  if (node.type === 'preprocess' || node.type === 'asr') return `Mock ${label}`
   if (node.type === 'text_output') return `${readTextOutputConfig(node.config).format.toUpperCase()} 文本输出`
-  return '音频输出'
+  return label
 }
 
 function nodeKicker(node: WorkflowNode) {
@@ -428,16 +370,22 @@ function nodeKicker(node: WorkflowNode) {
   return 'AUDIO OUTPUT'
 }
 
+function configFieldLabel(field: { type: string; options: readonly { value: string; label: string }[] }, value: unknown) {
+  if (field.type === 'select') return field.options.find((option) => option.value === value)?.label || String(value)
+  return String(value)
+}
+
 function nodeMeta(node: WorkflowNode) {
   if (node.type === 'audio_input') return '绑定当前音频'
-  if (node.type === 'preprocess') {
-    const config = readPreprocessConfig(node.config)
-    if (config.provider === 'mock') return 'Mock · 原字节直通'
-    return `${config.provider.toUpperCase()} · ${config.sample_rate / 1000} kHz · ${config.channels === 1 ? '单声道' : '双声道'}`
-  }
-  if (node.type === 'asr') {
-    const config = readAsrConfig(node.config)
-    return `${config.provider === 'mock' ? 'Mock' : config.backend} · ${config.language}${config.vad_enabled ? ' · VAD' : ''}`
+  if (node.type === 'preprocess' || node.type === 'asr') {
+    const fields = registry.value?.kind(node.type)?.fields || []
+    const values = fields
+      .map((field) => ({ field, value: node.config[field.key] === undefined ? field.default : node.config[field.key] }))
+      .filter((entry) => entry.value !== null && entry.value !== undefined && entry.value !== '')
+      .slice(0, 2)
+      .map((entry) => configFieldLabel(entry.field, entry.value))
+    const summary = values.join(' · ') || 'Mock'
+    return node.type === 'preprocess' ? `${summary} · 原字节直通` : summary
   }
   if (node.type === 'text_output') {
     const config = readTextOutputConfig(node.config)
@@ -483,10 +431,9 @@ onUnmounted(() => {
       <div>
         <span class="section-kicker">NODE WORKFLOW / MVP</span>
         <h2 id="node-workflow-title">节点工作流 <span class="mvp-badge">音频分支</span></h2>
-        <p>支持音频直出、预处理、语音识别与文本/音频输出分支。节点按直接上游和 typed 端口连接；每个处理节点生成独立产物，源文件始终保留。本轮不包含对齐、翻译或视频节点。</p>
+        <p>支持音频直出，以及固定的 Mock 预处理、Mock 语音识别验证示例。Mock 不执行真实识别或媒体转换；节点按直接上游和 typed 端口连接，源文件始终保留。</p>
       </div>
       <div class="node-workflow-actions">
-        <button class="secondary-button" type="button" :disabled="!!store.activeRun" @click="closeEditor">返回五阶段工作台</button>
         <button class="secondary-button" type="button" :disabled="!!store.activeRun" @click="historyOpen = !historyOpen">{{ historyOpen ? '收起历史' : `运行历史 · ${store.history.length}` }}</button>
       </div>
     </header>
@@ -497,7 +444,7 @@ onUnmounted(() => {
 
     <div v-if="store.loading" class="workflow-loading" role="status">正在读取项目节点工作流…</div>
     <template v-else>
-      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>ASR 与文本输出</strong><span>输入绑定当前音频：{{ props.audioName }}。audio / transcript 端口必须同类型连接；新增节点不会静默替换原有连线。</span></div>
+      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>ASR 与文本输出</strong><span>输入绑定当前音频：{{ props.audioName }}。端口必须同类型连接；新增节点不会静默替换原有连线。</span></div>
       <div class="workflow-toolbar" role="toolbar" aria-label="节点工作流工具">
         <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || (kind.type === 'audio_input' && !!currentInput) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
         <span class="toolbar-rule" aria-hidden="true"></span>
@@ -546,11 +493,11 @@ onUnmounted(() => {
             <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">编辑节点设置</button>
             <button v-if="selected.type !== 'audio_input'" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">删除{{ selected.type === 'preprocess' ? '预处理' : selected.type === 'asr' ? 'ASR' : '输出' }}节点</button>
           <p v-if="selected.type === 'audio_input'" class="inspector-help">输入只使用当前音频 {{ props.audioName }}，不提供路径输入。</p>
-            <p v-else-if="selected.type === 'preprocess'" class="inspector-help">{{ readPreprocessConfig(selected.config).provider === 'mock' ? 'Mock 只复制上游原字节，用于验证链路，不实际转换采样率或声道。' : 'FFmpeg 由服务端固定配置调用并输出独立 WAV。' }} 无论是否勾选保留源文件，源文件都不会删除或覆盖。</p>
-            <p v-else-if="selected.type === 'asr'" class="inspector-help">识别语言为当前节点独立配置，不会随音频 Pipeline 语言静默改变。CrispASR 需要直接上游是 16 kHz 单声道 PCM WAV；不满足时请先接 FFmpeg 预处理。</p>
+            <p v-else-if="selected.type === 'preprocess'" class="inspector-help">Mock 是固定示例，只复制上游原字节以验证链路，不执行真实预处理或媒体转换。源文件始终保留，不会被删除或覆盖。</p>
+            <p v-else-if="selected.type === 'asr'" class="inspector-help">Mock 是固定示例，不执行真实语音识别。语言只用于此节点的示例配置。</p>
             <p v-else-if="selected.type === 'text_output'" class="inspector-help">TXT 可无时间戳；SRT、VTT、LRC 需要完整有效时间范围。缺失时间戳只会让该文本输出失败，不影响音频分支。</p>
           </template>
-          <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>选择画布中的输入或输出节点，查看设置和执行状态。</p></div>
+          <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>选择画布中的节点，查看设置和执行状态。</p></div>
           <dl class="workflow-inspector-meta"><div><dt>工作流版本</dt><dd>{{ store.document?.workflow_revision ?? '—' }}</dd></div><div><dt>文档修订</dt><dd>{{ store.document?.revision ?? '—' }}</dd></div><div><dt>当前音频</dt><dd>{{ props.audioName }}</dd></div></dl>
         </aside>
       </div>
@@ -583,20 +530,9 @@ onUnmounted(() => {
       <section class="config-modal workflow-settings-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-settings-title">
         <div class="config-modal-header"><div><span class="section-kicker">{{ selected.type === 'audio_input' ? 'INPUT NODE' : selected.type === 'preprocess' ? 'PREPROCESS NODE' : selected.type === 'asr' ? 'ASR NODE' : selected.type === 'text_output' ? 'TEXT OUTPUT NODE' : 'OUTPUT NODE' }}</span><h3 id="workflow-settings-title">{{ selected.type === 'audio_input' ? '音频输入设置' : selected.type === 'preprocess' ? '音频预处理设置' : selected.type === 'asr' ? '语音识别设置' : selected.type === 'text_output' ? '文本输出设置' : '音频输出设置' }}</h3><p>只修改此节点的下次保存内容；运行中的任务使用固定快照。</p></div><button class="modal-close" type="button" aria-label="关闭节点设置" @click="closeSettings">×</button></div>
         <form class="config-modal-form" @submit.prevent="commitSettings">
-          <div v-if="selected.type === 'preprocess'" class="modal-field-grid">
-            <label class="config-field" for="workflow-preprocess-provider"><span>Provider</span><select id="workflow-preprocess-provider" v-model="providerDraft" :disabled="controlsLocked"><option value="mock">Mock · 验证链路</option><option value="ffmpeg">FFmpeg · 生成独立 WAV</option></select></label>
-            <label class="config-field" for="workflow-sample-rate"><span>采样率（Hz）</span><input id="workflow-sample-rate" v-model="sampleRateDraft" type="number" min="8000" max="192000" step="1" inputmode="numeric" :disabled="controlsLocked" /></label>
-            <label class="config-field" for="workflow-channels"><span>声道</span><select id="workflow-channels" v-model.number="channelsDraft" :disabled="controlsLocked"><option :value="1">单声道</option><option :value="2">双声道</option></select></label>
-            <label class="modal-check workflow-wide-field"><input v-model="preserveOriginalDraft" type="checkbox" :disabled="controlsLocked" />保留源文件（始终保留）</label>
-          </div>
-          <div v-if="selected.type === 'preprocess'" class="workflow-preprocess-note"><strong>{{ providerDraft === 'mock' ? 'Mock 只验证链路' : 'FFmpeg 真实转换' }}</strong><p>{{ providerDraft === 'mock' ? '复制直接上游文件的原始字节，不实际转换采样率或声道；采样率与声道设置仅用于验证配置快照。' : '由服务端配置的 FFmpeg 生成独立 WAV；不接受自定义命令、附加参数或路径。' }}</p><p>无论此选项是否勾选，源文件都会保留。FFmpeg 预处理产物固定为 WAV/WAV 媒体类型；Mock 预处理及输出节点沿用直接上游的字节、后缀和媒体类型。</p></div>
-          <div v-if="selected.type === 'asr'" class="workflow-asr-settings">
-            <AsrConfigFields :key="`${props.projectId}/${props.audioId}/${selected.id}`" :config="asrDraft" :audio-key="`${props.projectId}/${props.audioId}/${selected.id}`" :locked="controlsLocked" :providers="asrProviders" :backend-details="asrBackendDetails" @change="updateAsrDraft" />
-            <p class="workflow-preprocess-note">语言只属于当前 ASR 节点，不读取或修改音频的 Pipeline 语言。模型必须是受限文件名标识符；CrispASR 的运行路径、超时与模型目录由服务端设置决定。</p>
-            <p class="settings-help">真实 CrispASR 的模型目录选项需在后端全局设置中检查；此节点不会保存本机路径、密钥或 Provider Profile。</p>
-          </div>
           <label v-if="selected.type === 'audio_output' || selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-filename-stem"><span>输出文件名（不含扩展名）</span><input id="workflow-filename-stem" v-model="filenameDraft" type="text" maxlength="128" :disabled="controlsLocked" :placeholder="selected.type === 'text_output' ? 'transcript' : 'audio-copy'" /><small v-if="selected.type === 'text_output'">最多 128 个字符；后端按 {{ textFormatDraft.toUpperCase() }} 格式补扩展名。这里不是本机路径。</small><small v-else>最多 128 个字符；后端生成安全文件名并按直接上游的媒体类型补扩展名。这里不是本机路径。</small></label>
           <label v-if="selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-text-format"><span>文本格式</span><select id="workflow-text-format" v-model="textFormatDraft" :disabled="controlsLocked"><option value="txt">TXT · 纯识别原文</option><option value="srt">SRT · 字幕</option><option value="vtt">VTT · 字幕</option><option value="lrc">LRC · 歌词</option></select><small>TXT 允许片段没有时间戳；SRT、VTT、LRC 需要完整时间范围。每个文本输出节点只生成一种格式。</small></label>
+          <div v-if="selected.type === 'preprocess' || selected.type === 'asr'" class="workflow-preprocess-note"><strong>Mock 固定示例</strong><p>{{ selected.type === 'preprocess' ? '只复制上游原字节以验证链路，不执行真实预处理或媒体转换。' : '不执行真实语音识别；provider 与语言仅用于示例配置。' }}</p></div>
           <p v-if="selected.type === 'audio_input'" class="inspector-help">输入节点只绑定当前焦点音频「{{ props.audioName }}」，不接受路径输入。</p>
             <div v-if="genericFields.length" class="modal-field-grid">
             <label v-for="field in genericFields" :key="field.key" class="config-field" :class="{ 'modal-wide-field': field.type === 'json' }">

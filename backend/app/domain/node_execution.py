@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass(frozen=True)
@@ -35,8 +34,7 @@ class NodeExecutionContext:
     inputs: dict[str, NodeData]
     project: object
     cancel_event: object
-    ffmpeg_path: str = "ffmpeg"
-    asr_settings: Any = None
+    mock_delay_ms: int = 0
 
     def input(self, port: str) -> NodeData:
         try:

@@ -18,7 +18,7 @@ export interface Project {
   name: string
   created_at: string
   updated_at: string
-  preset: string
+  preset?: string
   audios?: Audio[]
   source: {
     original_name: string
@@ -80,7 +80,7 @@ export const useProjectsStore = defineStore('projects', () => {
     }
   }
 
-  async function createProject(file: File, name: string, language: string, preset = 'mock', targetLanguage?: string) {
+  async function createProject(file: File, name: string, language: string, targetLanguage?: string) {
     ++fetchGeneration
     creating.value = true
     error.value = ''
@@ -90,7 +90,6 @@ export const useProjectsStore = defineStore('projects', () => {
       if (name.trim()) form.append('name', name.trim())
       form.append('source_language', language)
       if (targetLanguage) form.append('target_language', targetLanguage)
-      form.append('preset', preset)
 
       const response = await fetch(`${API_BASE_URL}/projects`, { method: 'POST', body: form })
       if (!response.ok) throw await parseError(response)

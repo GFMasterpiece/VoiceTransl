@@ -13,7 +13,6 @@ on:
 
 env:
   LLAMA_CPP_VERSION: b10430
-  CRISPASR_VERSION: v0.8.28
   FFMPEG_VERSION: 9.0.1
   FFMPEG_SHA256: fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9
 
@@ -101,15 +100,14 @@ jobs:
           & 'ffmpeg/ffmpeg.exe' -version
           & 'ffmpeg/ffprobe.exe' -version
 
-      - name: Download llama-server and CrispASR (Windows)
+      - name: Download llama-server (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $nativeRoot = Join-Path $env:RUNNER_TEMP 'voicetransl-native'
           $llamaExtract = Join-Path $nativeRoot 'llama-extracted'
-          $crispExtract = Join-Path $nativeRoot 'crispasr-extracted'
-          New-Item -ItemType Directory -Force -Path $llamaExtract, $crispExtract | Out-Null
+          New-Item -ItemType Directory -Force -Path $llamaExtract | Out-Null
 
           $llamaVariant = '${{ matrix.llama_variant }}'
           $llamaAsset = switch ($llamaVariant) {
@@ -145,25 +143,7 @@ jobs:
             Copy-Item -Path (Join-Path $cudaRuntimeDll.Directory.FullName '*') -Destination 'llama' -Recurse -Force
           }
 
-          # CrispASR's Vulkan and CUDA CLI archives are self-contained.
-          $crispAsset = switch ($llamaVariant) {
-            'vulkan' { 'crispasr-windows-x86_64-vulkan.zip' }
-            'cuda-12.4' { 'crispasr-windows-x86_64-cuda.zip' }
-            default { throw "Unsupported Windows CrispASR variant: $llamaVariant" }
-          }
-          $crispArchive = Join-Path $nativeRoot 'crispasr.zip'
-          $crispUrl = "https://github.com/CrispStrobe/CrispASR/releases/download/$env:CRISPASR_VERSION/$crispAsset"
-          Invoke-WebRequest -Uri $crispUrl -OutFile $crispArchive
-          Expand-Archive -LiteralPath $crispArchive -DestinationPath $crispExtract -Force
-          $crispExecutable = Get-ChildItem -LiteralPath $crispExtract -Recurse -File -Filter 'crispasr.exe' | Select-Object -First 1
-          if (-not $crispExecutable) {
-            throw 'crispasr.exe was not found in the downloaded CrispASR archive'
-          }
-          New-Item -ItemType Directory -Force -Path 'crispasr' | Out-Null
-          Copy-Item -Path (Join-Path $crispExecutable.Directory.FullName '*') -Destination 'crispasr' -Recurse -Force
-
           Set-Content -LiteralPath 'llama/param.txt' -Encoding utf8 -Value 'llama/llama-server -m llama/$model_file -ngl $num_layers --port $port'
-          Set-Content -LiteralPath 'crispasr/param.txt' -Encoding utf8 -Value '$crispasr_executable --backend $backend --model $model_file --aligner-model $aligner_file --force-aligner --language $language --output-srt --output-file $output_file --file $input_file --vad --vad-max-speech-duration-s 12 --vad-min-silence-duration-ms 200 --max-new-tokens 96 --frequency-penalty 0.8'
 
       - name: Build auxiliary executables
         run: |
@@ -182,7 +162,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $requiredFiles = 'translate.exe', 'separate.exe', 'llama-server.exe', 'crispasr.exe', 'ffmpeg.exe', 'ffprobe.exe'
+          $requiredFiles = 'translate.exe', 'separate.exe', 'llama-server.exe', 'ffmpeg.exe', 'ffprobe.exe'
           if ('${{ matrix.llama_variant }}' -eq 'vulkan') {
             $requiredFiles += 'ggml-vulkan.dll'
           }

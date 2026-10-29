@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../stores/projectDetail'
+import { API_BASE_URL } from '../api'
 
 export type CapabilityPort = string
 export type CapabilityValue = unknown
@@ -29,15 +29,8 @@ export interface CapabilityNode {
   fields: readonly CapabilityField[]
   positionX: number | null
 }
-export interface CapabilityBackend { id: string; label: string; task: string }
 export interface CapabilityAsr {
   providers: readonly CapabilityOption[]
-  backends: readonly string[]
-  backendDetails: readonly CapabilityBackend[]
-  status: 'available' | 'unavailable'
-  message: string | null
-  truncated: boolean
-  warnings: readonly string[]
 }
 export interface CapabilityExport {
   formats: readonly CapabilityOption[]
@@ -129,28 +122,8 @@ function node(value: unknown): CapabilityNode {
 }
 function asr(value: unknown): CapabilityAsr {
   const item = object(value, '能力目录缺少 ASR 能力')
-  if (!Array.isArray(item.backends) || !item.backends.every(safeId)) fail('能力目录中的 ASR 后端列表无效')
-  if (new Set(item.backends).size !== item.backends.length) fail('能力目录中的 ASR 后端列表重复')
-  const status = item.status || 'available'
-  if (status !== 'available' && status !== 'unavailable') fail('能力目录中的 ASR 状态无效')
-  const knownBackends = item.backends as string[]
-  const backendDetails = item.backend_details === undefined ? [] : (() => {
-    if (!Array.isArray(item.backend_details)) fail('能力目录中的 ASR backend_details 无效')
-    return item.backend_details.map((entry) => {
-      const detail = object(entry, '能力目录中的 ASR backend_details 项无效')
-      if (!safeId(detail.id) || typeof detail.task !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(detail.task)) fail('能力目录中的 ASR backend_details 项无效')
-      if (!knownBackends.includes(detail.id)) fail('能力目录中的 ASR backend_details 未在 backends 中声明')
-      return { id: detail.id, label: typeof detail.label === 'string' && detail.label.trim() ? detail.label : detail.id, task: detail.task }
-    })
-  })()
   return {
     providers: item.providers === undefined ? [] : options(item.providers, '能力目录中的 ASR Provider 无效'),
-    backends: item.backends,
-    backendDetails,
-    status,
-    message: typeof item.message === 'string' ? item.message : null,
-    truncated: item.truncated === true,
-    warnings: Array.isArray(item.warnings) && item.warnings.every((entry) => typeof entry === 'string') ? item.warnings : [],
   }
 }
 

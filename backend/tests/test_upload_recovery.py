@@ -9,7 +9,7 @@ from app.domain import (
     JobStatus,
     Project,
     SourceAsset,
-    default_pipeline_config,
+    default_legacy_pipeline_config,
     default_stages,
 )
 from app.storage import FileSystemProjectStore
@@ -110,7 +110,7 @@ async def test_config_write_failure_leaves_no_published_project(tmp_path: Path, 
         return original_write_json(path, payload)
 
     monkeypatch.setattr(project_store_module, "atomic_write_json", fail_config)
-    config = default_pipeline_config("ja", target_language="zh-CN")
+    config = default_legacy_pipeline_config("ja", target_language="zh-CN")
     with pytest.raises(OSError, match="config write failed"):
         await store.create_project_from_upload(project, job, upload, max_bytes=100, config=config)
 

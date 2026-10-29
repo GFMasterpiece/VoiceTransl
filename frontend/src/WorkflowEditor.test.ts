@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
   MAX_WORKFLOW_EDGES, WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH,
-  cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition, readAsrConfig, readPreprocessConfig,
+  cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition,
   resolveArtifactUrl, useWorkflowStore, validateDraft,
   type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
 } from './stores/workflow'
@@ -16,32 +16,34 @@ const testCapabilities: Record<string, any> = {
   workflow: {
     nodes: [
       { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
-      { type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [] }, position_x: 286 },
-      { type: 'asr', label: '语音识别', add_label: 'ASR', id_prefix: 'asr', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [] }, position_x: 486 },
-      { type: 'audio_output', label: '音频输出', add_label: '输出节点', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] }, position_x: 500 },
-      { type: 'text_output', label: '文本输出', add_label: '文本输出', id_prefix: 'text', input_ports: ['transcript'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'text_output', fields: [] }, position_x: 686 },
+      { type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
+        { key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
+      ] }, position_x: 286 },
+      { type: 'asr', label: '语音识别', add_label: 'ASR', id_prefix: 'asr', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
+        { key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
+        { key: 'language', label: '语言', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, options: [] },
+      ] }, position_x: 486 },
+      { type: 'audio_output', label: '音频输出', add_label: '输出节点', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [
+        { key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, options: [] },
+      ] }, position_x: 500 },
+      { type: 'text_output', label: '文本输出', add_label: '文本输出', id_prefix: 'text', input_ports: ['transcript'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'text_output', fields: [
+        { key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'transcript', minimum: null, maximum: null, options: [] },
+        { key: 'format', label: '格式', type: 'select', required: false, default: 'txt', minimum: null, maximum: null, options: [{ value: 'txt', label: 'TXT' }, { value: 'srt', label: 'SRT' }, { value: 'vtt', label: 'VTT' }, { value: 'lrc', label: 'LRC' }] },
+      ] }, position_x: 686 },
     ],
     ports: ['audio', 'transcript', 'text'],
   },
-  asr: { backends: ['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'], backend_details: [
-    { id: 'qwen3', label: 'Qwen3 ASR', task: 'asr' },
-    { id: 'qwen3-1.7b', label: 'Qwen3 ASR 1.7B', task: 'asr' },
-    { id: 'whisper', label: 'Whisper ASR', task: 'asr' },
-    { id: 'mega-asr', label: 'Mega ASR', task: 'asr' },
-    { id: 'voxtral', label: 'Voxtral ASR', task: 'asr' },
-    { id: 'voxtral4b', label: 'Voxtral 4B ASR', task: 'asr' },
-    { id: 'granite', label: 'Granite ASR', task: 'asr' },
-  ], status: 'available' },
+  asr: { providers: [{ id: 'mock', label: 'Mock' }] },
   export: { formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }], naming_modes: [{ id: 'language', label: '按语言命名' }, { id: 'original', label: '沿用源文件名' }] },
 }
 const testRegistry: NodeRegistry = createNodeRegistry(readCapabilities(testCapabilities))
 const input = { id: 'input', type: 'audio_input' as const, config: {}, position: { x: 80, y: 120 } }
 const output = { id: 'output', type: 'audio_output' as const, config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }
 const edge = { id: 'input-output', source: 'input', source_port: 'audio' as const, target: 'output', target_port: 'audio' as const }
-const preprocess = { id: 'preprocess-1', type: 'preprocess' as const, config: { provider: 'mock' as const, sample_rate: 16000, channels: 1 as const, preserve_original: true }, position: { x: 260, y: 120 } }
+const preprocess = { id: 'preprocess-1', type: 'preprocess' as const, config: { provider: 'mock' as const }, position: { x: 260, y: 120 } }
 const preprocessEdge = { id: 'input-preprocess', source: 'input', source_port: 'audio' as const, target: 'preprocess-1', target_port: 'audio' as const }
 const preprocessToOutput = { id: 'preprocess-output', source: 'preprocess-1', source_port: 'audio' as const, target: 'output', target_port: 'audio' as const }
-const asr = { id: 'asr-1', type: 'asr' as const, config: { provider: 'mock' as const, backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null }, position: { x: 486, y: 120 } }
+const asr = { id: 'asr-1', type: 'asr' as const, config: { provider: 'mock' as const, language: 'ja' }, position: { x: 486, y: 120 } }
 const inputAsr = { id: 'input-asr', source: 'input', source_port: 'audio' as const, target: 'asr-1', target_port: 'audio' as const }
 const textOutput = { id: 'text-1', type: 'text_output' as const, config: { filename_stem: 'transcript', format: 'txt' as const }, position: { x: 700, y: 120 } }
 const asrText = { id: 'asr-text', source: 'asr-1', source_port: 'transcript' as const, target: 'text-1', target_port: 'transcript' as const }
@@ -104,15 +106,6 @@ async function settle() { for (let index = 0; index < 30; index++) await Promise
 let app: VueApp | undefined
 let root: HTMLDivElement | undefined
 let fetchMock: ReturnType<typeof vi.fn>
-const modelCatalog = {
-  provider: 'crispasr' as const,
-  executable: { ok: true, version: '0.8.38', message: 'CrispASR 可用' },
-  model_dir: '@root/1/models', restart_required: false,
-  backends: ['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'],
-  truncated: false, warnings: [],
-  items: [{ model: 'granite.gguf', backend: 'granite', size_bytes: 1024, architecture: 'granite', selectable: true, reason: null }],
-}
-
 type FetchOverride = (path: string, init?: RequestInit) => Promise<Response> | undefined
 
 function setup(override?: FetchOverride, pinia = createPinia(), properties: Record<string, unknown> = {}) {
@@ -179,11 +172,12 @@ describe('workflow validation and helpers', () => {
     expect(cyclic.map((issue) => issue.code)).toEqual(expect.arrayContaining(['SELF_LOOP', 'CYCLE']))
   })
 
-  it('keeps unknown configuration visible in dirty signatures even when known defaults are reordered', () => {
-    const omitted = { nodes: [input, { ...preprocess, config: { command: 'ffmpeg -i input output.wav' } as Record<string, unknown> }, output], edges: [preprocessEdge, preprocessToOutput] }
-    const explicit = { nodes: [input, { ...preprocess, config: { channels: 1, preserve_original: true, sample_rate: 16000, provider: 'mock', command: 'ffmpeg -i input output.wav' } }, output], edges: [preprocessEdge, preprocessToOutput] }
-    expect(executionSignature(omitted)).toBe(executionSignature(explicit))
-    expect(executionSignature(omitted)).not.toBe(executionSignature({ ...omitted, nodes: [input, preprocess, output] }))
+  it('keeps unknown configuration visible in dirty signatures even when registry defaults are reordered', () => {
+    const omitted = { nodes: [input, { ...preprocess, config: { provider: 'mock', command: 'unsafe external command' } as Record<string, unknown> }, output], edges: [preprocessEdge, preprocessToOutput] }
+    const explicit = { nodes: [input, { ...preprocess, config: { command: 'unsafe external command', provider: 'mock' } }, output], edges: [preprocessEdge, preprocessToOutput] }
+    expect(executionSignature(omitted, testRegistry)).toBe(executionSignature(explicit, testRegistry))
+    expect(executionSignature(omitted, testRegistry)).not.toBe(executionSignature({ ...omitted, nodes: [input, preprocess, output] }, testRegistry))
+    expect(executionSignature(omitted, testRegistry)).toContain('unsafe external command')
   })
 
   it('includes registry defaults in signatures for a catalog-only node', () => {
@@ -220,7 +214,7 @@ describe('workflow validation and helpers', () => {
   })
 
   it('accepts branches and chained preprocessing while preserving default values in snapshots', () => {
-    const chained = { ...preprocess, id: 'preprocess-2', config: { provider: 'ffmpeg' as const, sample_rate: 22050, channels: 2 as const, preserve_original: false }, position: { x: 440, y: 260 } }
+    const chained = { ...preprocess, id: 'preprocess-2', config: { provider: 'mock' as const }, position: { x: 440, y: 260 } }
     const branch = { ...output, id: 'direct-output', config: { filename_stem: 'direct' }, position: { x: 440, y: 320 } }
     const graph = {
       nodes: [input, preprocess, chained, output, branch],
@@ -231,12 +225,18 @@ describe('workflow validation and helpers', () => {
       .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
   })
 
-  it('rejects invalid preprocessing values, fields, directions, multiple inputs and unreachable nodes', () => {
-    const badConfig = validateDraft({
-      nodes: [input, { ...preprocess, config: { provider: 'custom', sample_rate: 7999, channels: 3, preserve_original: 'yes', command: 'rm -rf /' } }, output],
+  it('rejects legacy preprocess parameters, invalid directions, multiple inputs and unreachable nodes', () => {
+    const legacy = validateDraft({
+      nodes: [input, { ...preprocess, config: { provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true } }, output],
       edges: [preprocessEdge, preprocessToOutput],
-    }, testRegistry).map((issue) => issue.code)
-    expect(badConfig).toEqual(expect.arrayContaining(['INVALID_NODE_CONFIG', 'INVALID_PREPROCESS_PROVIDER', 'INVALID_SAMPLE_RATE', 'INVALID_CHANNELS', 'INVALID_PRESERVE_ORIGINAL']))
+    }, testRegistry)
+    expect(legacy.map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
+    expect(legacy[0].message).toContain('sample_rate')
+    const badProvider = validateDraft({
+      nodes: [input, { ...preprocess, config: { provider: 'custom' } }, output],
+      edges: [preprocessEdge, preprocessToOutput],
+    }, testRegistry)
+    expect(badProvider.map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
     const invalidDirection = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, { ...preprocessToOutput, id: 'reverse', source: 'output', target: 'preprocess-1' }] }, testRegistry)
     expect(invalidDirection.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_DIRECTION', 'NODE_INPUT_COUNT']))
     const multipleInputs = validateDraft({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput, { ...preprocessEdge, id: 'input-again', source: 'input' }] }, testRegistry)
@@ -270,7 +270,7 @@ describe('workflow validation and helpers', () => {
 
   it('accepts a text-only graph and multiple independent ASR branches with strict typed ports', () => {
     expect(validateDraft({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }, testRegistry)).toEqual([])
-    const secondAsr = { ...asr, id: 'asr-2', config: { ...asr.config, language: 'en' }, position: { x: 486, y: 240 } }
+    const secondAsr = { ...asr, id: 'asr-2', config: { provider: 'mock' as const, language: 'en' }, position: { x: 486, y: 240 } }
     const secondText = { ...textOutput, id: 'text-2', config: { filename_stem: 'subtitles', format: 'srt' as const }, position: { x: 700, y: 240 } }
     const graph = {
       nodes: [input, asr, textOutput, secondAsr, secondText, output],
@@ -282,8 +282,8 @@ describe('workflow validation and helpers', () => {
       ],
     }
     expect(validateDraft(graph, testRegistry)).toEqual([])
-    expect(executionSignature({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }))
-      .not.toBe(executionSignature({ nodes: [input, secondAsr, secondText], edges: [inputAsr, asrText] }))
+    expect(executionSignature({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }, testRegistry))
+      .not.toBe(executionSignature({ nodes: [input, secondAsr, secondText], edges: [inputAsr, asrText] }, testRegistry))
     const wrongPorts = validateDraft({
       nodes: [input, asr, textOutput],
       edges: [inputAsr, { ...asrText, source_port: 'audio', target_port: 'audio' } as unknown as typeof asrText],
@@ -293,34 +293,20 @@ describe('workflow validation and helpers', () => {
       .toEqual(expect.arrayContaining(['INVALID_PORT']))
   })
 
-  it('defaults only omitted ASR and text output fields and rejects explicit null, arrays and coercible-looking values', () => {
-    expect(readAsrConfig({})).toEqual({ provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null })
-    expect(readAsrConfig({ provider: null as unknown as string }).provider).toBeNull()
-    expect(readAsrConfig({ provider_profile_id: 'profile-1' as unknown as null }).provider_profile_id).toBe('profile-1')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { provider: null, backend: 'qwen3-1.7b', model: 'mock', language: null, vad_enabled: null, chunk_seconds: null, provider_profile_id: 'profile-1' } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
-      .toEqual(expect.arrayContaining(['INVALID_ASR_PROVIDER', 'INVALID_ASR_LANGUAGE', 'INVALID_ASR_VAD', 'INVALID_ASR_CHUNK', 'INVALID_ASR_PROFILE']))
+  it('uses catalog defaults only for omitted Mock fields and rejects explicit null and legacy ASR fields', () => {
+    expect(testRegistry.createDefaultConfig('preprocess')).toEqual({ provider: 'mock' })
+    expect(testRegistry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
+    expect(validateDraft({ nodes: [input, { ...asr, config: {} }, textOutput], edges: [inputAsr, asrText] }, testRegistry)).toEqual([])
+    expect(validateDraft({ nodes: [input, { ...asr, config: { provider: null } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { language: null } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
+    const legacy = validateDraft({ nodes: [input, { ...asr, config: { provider: 'mock', language: 'ja', backend: 'qwen3', model: 'mock', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null } }, textOutput], edges: [inputAsr, asrText] }, testRegistry)
+    expect(legacy.map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
+    expect(legacy[0].message).toContain('backend')
     expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: null, format: null } }], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
       .toEqual(expect.arrayContaining(['INVALID_FILENAME_STEM', 'INVALID_TEXT_FORMAT']))
     expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: 'transcript', format: ['srt'] } }], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code))
       .toContain('INVALID_TEXT_FORMAT')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, model: 'safe.' } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_MODEL')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'ja' + String.fromCharCode(1) } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
-    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'x'.repeat(33) } }, textOutput], edges: [inputAsr, asrText] }, testRegistry).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
-    expect(testRegistry.capabilities.asr.backends).toEqual(['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'])
-  })
-
-  it('keeps invalid explicit preprocessing null values visible while omitted fields use defaults', () => {
-    expect(readPreprocessConfig({})).toEqual({ provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true })
-    expect(readPreprocessConfig({ provider: null as unknown as 'mock' }).provider).toBeNull()
-    const invalid = validateDraft({
-      nodes: [input, { ...preprocess, config: { provider: null, sample_rate: null, channels: null, preserve_original: null } }, output],
-      edges: [preprocessEdge, preprocessToOutput],
-    }, testRegistry).map((issue) => issue.code)
-    expect(invalid).toEqual(expect.arrayContaining(['INVALID_PREPROCESS_PROVIDER', 'INVALID_SAMPLE_RATE', 'INVALID_CHANNELS', 'INVALID_PRESERVE_ORIGINAL']))
-    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
-      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
-    expect(executionSignature({ nodes: [input, { ...preprocess, config: { provider: null } }, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
-      .not.toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }, testRegistry))
+    expect(testRegistry.capabilities.asr.providers.map((provider) => provider.value)).toEqual(['mock'])
   })
 
   it('fails a new connection at the 64-edge limit without removing the existing target edge', async () => {
@@ -411,8 +397,8 @@ describe('capability catalog and node registry', () => {
     const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
     store.selectNode(pre.id); await settle()
     button('编辑节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(root!.querySelectorAll('.workflow-settings-modal .config-field').length).toBe(3)
-    expect(root!.textContent).not.toContain('字段由服务端能力目录定义')
+    expect(root!.querySelectorAll('.workflow-settings-modal .config-field').length).toBe(1)
+    expect(root!.textContent).toContain('字段由服务端能力目录定义')
   })
 
   it('renders and resaves a legacy graph through the live capability registry', async () => {
@@ -448,7 +434,7 @@ describe('capability catalog and node registry', () => {
     expect(registry.createDefaultConfig('audio_output')).toEqual({ filename_stem: 'audio-copy' })
   })
 
-  it('reads the live capabilities API response including providers and export options', () => {
+  it('reads live capability nodes, Mock ASR providers, and export options', () => {
     const live = {
       schema_version: '1.0',
       workflow: {
@@ -459,21 +445,17 @@ describe('capability catalog and node registry', () => {
           { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
         ],
       },
-      asr: {
-        providers: [{ id: 'mock', label: 'Mock' }, { id: 'crispasr', label: 'CrispASR' }],
-        backends: ['qwen3'], status: 'unavailable', message: '当前无法读取本地 ASR 能力；Mock 节点仍可用', truncated: false, warnings: [],
-      },
+      asr: { providers: [{ id: 'mock', label: 'Mock' }] },
       export: {
-        formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }],
-        naming_modes: [{ id: 'language', label: '按语言命名' }, { id: 'original', label: 'original' }],
+        formats: [{ id: 'txt', label: 'TXT' }, { id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }],
+        naming_modes: [],
       },
     }
     const parsed = readCapabilities(live)
     expect(parsed.nodeTypes).toEqual(['audio_input', 'audio_output'])
-    expect(parsed.asr.status).toBe('unavailable')
-    expect(parsed.asr.providers.map((item) => item.value)).toEqual(['mock', 'crispasr'])
-    expect(parsed.export.formats.map((item) => item.value)).toEqual(['srt', 'vtt', 'lrc'])
-    expect(parsed.export.namingModes.map((item) => item.value)).toEqual(['language', 'original'])
+    expect(parsed.asr.providers.map((item) => item.value)).toEqual(['mock'])
+    expect(parsed.export.formats.map((item) => item.value)).toEqual(['txt', 'srt', 'vtt', 'lrc'])
+    expect(parsed.export.namingModes).toEqual([])
   })
 
   it('rejects a non-current capabilities schema version', () => {
@@ -540,7 +522,7 @@ describe('workflow editor interactions', () => {
     expect(putCalls()).toHaveLength(0)
   })
 
-  it('adds a preprocess node with defaults, edits settings and saves the complete four-field config without reconnecting outputs', async () => {
+  it('adds a preprocess node from catalog defaults and renders only its Mock provider field', async () => {
     setup()
     await settle()
     const store = useWorkflowStore()
@@ -548,21 +530,15 @@ describe('workflow editor interactions', () => {
     button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(store.draft.nodes.filter((item) => item.type === 'preprocess')).toHaveLength(1)
     expect(store.draft.edges).toEqual(beforeEdges)
-    expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true })
-    expect(node('preprocess')!.textContent).toContain('Mock · 原字节直通')
-    expect(node('preprocess')!.textContent).not.toContain('kHz')
+    expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock' })
+    expect(node('preprocess')!.textContent).toContain('原字节直通')
     node('preprocess')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    expect(root!.textContent).toContain('Mock 只验证链路')
-    const provider = root!.querySelector<HTMLSelectElement>('#workflow-preprocess-provider')!
-    provider.value = 'ffmpeg'; provider.dispatchEvent(new Event('change', { bubbles: true }))
-    const rate = root!.querySelector<HTMLInputElement>('#workflow-sample-rate')!
-    rate.value = '22050'; rate.dispatchEvent(new Event('input', { bubbles: true }))
-    const channels = root!.querySelector<HTMLSelectElement>('#workflow-channels')!
-    channels.value = '2'; channels.dispatchEvent(new Event('change', { bubbles: true }))
-    const preserve = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="checkbox"]')!
-    preserve.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(root!.textContent).toContain('Mock 是固定示例')
+    expect(root!.querySelector('#workflow-sample-rate')).toBeNull()
+    expect(root!.querySelector('#workflow-channels')).toBeNull()
+    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(1)
     button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'ffmpeg', sample_rate: 22050, channels: 2, preserve_original: false })
+    expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock' })
     expect(store.draft.edges).toEqual(beforeEdges)
   })
 
@@ -750,30 +726,24 @@ describe('workflow editor interactions', () => {
     expect(anchor.href).toContain('/workflow-runs/run-1/outputs/preprocess-1/download')
   })
 
-  it('adds and edits an ASR node with model discovery, independent language and a text output format', async () => {
-    setup((path) => path.endsWith('/settings/local-asr/models') ? Promise.resolve(response(modelCatalog)) : undefined)
+  it('adds and edits a Mock ASR node from its catalog fields and a text output format', async () => {
+    setup()
     await settle()
     button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const store = useWorkflowStore()
     const asrNode = store.draft.nodes.find((item) => item.type === 'asr')!
-    expect(asrNode.config).toEqual({ provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null })
+    expect(asrNode.config).toEqual({ provider: 'mock', language: 'ja' })
     expect(store.draft.edges.some((item) => item.source === 'input' && item.target === asrNode.id)).toBe(false)
     node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
     expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('语音识别设置')
-    const provider = root!.querySelectorAll<HTMLSelectElement>('.workflow-asr-settings select')[0]
-    provider.value = 'crispasr'; provider.dispatchEvent(new Event('change', { bubbles: true })); await settle()
-    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/settings/local-asr/models'))).toBe(true)
-    expect(root!.textContent).toContain('CrispASR 可用')
-    const backend = root!.querySelectorAll<HTMLSelectElement>('.workflow-asr-settings select')[1]
-    expect(Array.from(backend.options).map((option) => option.value)).toEqual(expect.arrayContaining(['voxtral4b', 'granite']))
-    const modelPicker = root!.querySelector<HTMLSelectElement>('#asr-discovered-model')!
-    modelPicker.value = 'granite.gguf'; modelPicker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
-    const textInputs = root!.querySelectorAll<HTMLInputElement>('.workflow-asr-settings input:not([type])')
-    textInputs[1].value = 'en'; textInputs[1].dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Mock 固定示例')
+    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(2)
+    expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/settings/local-asr'))).toBe(false)
+    const language = root!.querySelectorAll<HTMLInputElement>('.workflow-settings-modal input[type="text"]')[0]
+    language.value = 'en'; language.dispatchEvent(new Event('input', { bubbles: true })); await settle()
     button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const applied = store.draft.nodes.find((item) => item.id === asrNode.id)!
-    expect(applied.config).toMatchObject({ provider: 'crispasr', backend: 'granite', model: 'granite.gguf', language: 'en', provider_profile_id: null })
-    expect(store.draft.edges.some((item) => item.source === 'input' && item.target === asrNode.id)).toBe(false)
+    expect(applied.config).toEqual({ provider: 'mock', language: 'en' })
     button('＋ 文本输出')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const textNode = store.draft.nodes.find((item) => item.type === 'text_output')!
     node('text_output')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
@@ -784,26 +754,20 @@ describe('workflow editor interactions', () => {
     expect(root!.textContent).toContain('后端按 SRT 格式补扩展名')
     button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(store.draft.nodes.find((item) => item.id === textNode.id)?.config).toEqual({ filename_stem: 'subtitles', format: 'srt' })
-    expect(store.draft.edges.some((item) => item.source === asrNode.id && item.target === textNode.id)).toBe(false)
   })
 
-  it('rejects ASR settings using the same strict validator as draft validation', async () => {
+  it('rejects a non-catalog ASR provider locally and preserves the original config', async () => {
     setup()
     await settle()
     button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const store = useWorkflowStore()
     const asrId = store.draft.nodes.find((item) => item.type === 'asr')!.id
+    store.updateNode(asrId, { config: { provider: 'custom', language: 'ja' } })
+    const issues = validateDraft(store.draft, testRegistry)
+    expect(issues.map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
     node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    const inputs = root!.querySelectorAll<HTMLInputElement>('.workflow-asr-settings input:not([type])')
-    inputs[0].value = 'safe.'; inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(root!.querySelector('.settings-error')?.textContent).toContain('受限文件名')
-    expect(store.draft.nodes.find((item) => item.id === asrId)?.config.model).toBe('mock')
-    inputs[0].value = 'safe.gguf'; inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
-    inputs[1].value = 'ja' + String.fromCharCode(1); inputs[1].dispatchEvent(new Event('input', { bubbles: true })); await settle()
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(root!.querySelector('.settings-error')?.textContent).toContain('ASR 语言')
-    expect(store.draft.nodes.find((item) => item.id === asrId)?.config.model).toBe('mock')
+    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(2)
+    expect(root!.querySelector('.workflow-settings-modal select')).toBeTruthy()
   })
 
   it('displays and downloads transcript and text artifacts with distinct ports', async () => {
@@ -851,7 +815,7 @@ describe('workflow editor interactions', () => {
       workflow: { nodes: structuredClone([input, preprocess, output]), edges: [structuredClone(preprocessEdge), structuredClone(preprocessToOutput)] },
       nodes: [
         { node_id: 'input', node_type: 'audio_input', config: {}, status: 'completed', started_at: null, finished_at: null, artifact: null, error: null },
-        { node_id: 'preprocess-1', node_type: 'preprocess', config: structuredClone(preprocess.config), status: 'failed', started_at: null, finished_at: null, artifact: null, error: { type: 'PREPROCESS_FAILED', message: 'FFmpeg 不可用' } },
+        { node_id: 'preprocess-1', node_type: 'preprocess', config: structuredClone(preprocess.config), status: 'failed', started_at: null, finished_at: null, artifact: null, error: { type: 'PREPROCESS_FAILED', message: '预处理节点失败' } },
         { node_id: 'output', node_type: 'audio_output', config: { filename_stem: 'audio-copy' }, status: 'blocked', started_at: null, finished_at: null, artifact: null, error: null },
       ],
     })
@@ -867,7 +831,7 @@ describe('workflow editor interactions', () => {
     const store = useWorkflowStore(pinia)
     expect(store.activeRun).toBeTruthy()
     expect(root!.querySelectorAll('.workflow-node.is-preprocess')).toHaveLength(1)
-    expect(root!.textContent).toContain('FFmpeg 不可用')
+    expect(root!.textContent).toContain('预处理节点失败')
     expect(root!.textContent).toContain('被阻塞')
     const edgeCount = store.draft.edges.length
     const nodeCount = store.draft.nodes.length
@@ -959,14 +923,14 @@ describe('workflow editor interactions', () => {
     button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await nextTick()
     const store = useWorkflowStore()
-    store.updateNode('preprocess-1', { config: { provider: 'ffmpeg', sample_rate: 22050, channels: 2, preserve_original: true } })
+    store.addNode('preprocess')
     pendingValidation.resolve(response({ valid: true, errors: [] })); await settle()
     expect(putCalls()).toHaveLength(0)
-    expect(store.draft.nodes.find((item) => item.id === 'preprocess-1')?.config.provider).toBe('ffmpeg')
+    expect(store.draft.nodes.filter((item) => item.type === 'preprocess')).toHaveLength(2)
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(validationRequests).toBe(2)
     expect(putCalls()).toHaveLength(1)
-    expect(JSON.parse(String((putCalls()[0][1] as RequestInit).body)).nodes.find((item: WorkflowNode) => item.id === 'preprocess-1').config.provider).toBe('ffmpeg')
+    expect(JSON.parse(String((putCalls()[0][1] as RequestInit).body)).nodes.filter((item: WorkflowNode) => item.type === 'preprocess')).toHaveLength(2)
   })
 
   it('keeps the latest draft and returns a readable error when a save conflicts', async () => {

@@ -5,12 +5,10 @@ import pytest
 from app.domain import (
     Job,
     JobStatus,
-    PipelineConfig,
-    PipelineStageName,
+    LegacyPipelineConfig,
     Project,
     ProviderProfile,
     SourceAsset,
-    StageStatus,
     default_stages,
     default_workflow,
     workflow_snapshot,
@@ -40,7 +38,7 @@ def make_store(tmp_path: Path) -> tuple[FileSystemProjectStore, str]:
     return store, project.id
 
 
-def make_job(project_id: str, config: PipelineConfig | None = None) -> Job:
+def make_job(project_id: str, config: LegacyPipelineConfig | None = None) -> Job:
     return Job(
         id="job_test",
         project_id=project_id,
@@ -58,7 +56,7 @@ def remove_nested_version(path: Path, key: str) -> bytes:
 
 def test_job_rejects_missing_nested_config_version_and_preserves_bytes(tmp_path):
     store, project_id = make_store(tmp_path)
-    job = make_job(project_id, PipelineConfig())
+    job = make_job(project_id, LegacyPipelineConfig())
     store.save_job(job)
     path = tmp_path / "projects" / project_id / "job.json"
     before = remove_nested_version(path, "config_snapshot")
@@ -70,7 +68,7 @@ def test_job_rejects_missing_nested_config_version_and_preserves_bytes(tmp_path)
 
 def test_job_rejects_missing_provider_profile_version(tmp_path):
     store, project_id = make_store(tmp_path)
-    job = make_job(project_id, PipelineConfig())
+    job = make_job(project_id, LegacyPipelineConfig())
     job.provider_profiles_snapshot = {
         "profile": ProviderProfile(id="profile", provider_type="openai", display_name="Profile")
     }
@@ -88,7 +86,7 @@ def test_job_rejects_missing_provider_profile_version(tmp_path):
 
 def test_mark_interrupted_does_not_rewrite_invalid_nested_version(tmp_path):
     store, project_id = make_store(tmp_path)
-    job = make_job(project_id, PipelineConfig())
+    job = make_job(project_id, LegacyPipelineConfig())
     job.status = JobStatus.RUNNING
     store.save_job(job)
     path = tmp_path / "projects" / project_id / "job.json"
@@ -203,7 +201,7 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
     project_id = await create_api_project(app)
     project_dir = tmp_path / "projects" / project_id
     if document == "job":
-        app.state.store.save_job(make_job(project_id, PipelineConfig()))
+        app.state.store.save_job(make_job(project_id, LegacyPipelineConfig()))
         path = project_dir / "job.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["config_snapshot"]["schema_version"] = "2.0"
@@ -211,7 +209,7 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
         route = f"/api/v1/projects/{project_id}/job"
     elif document == "config":
         path = project_dir / "config.json"
-        payload = PipelineConfig().model_dump(mode="json")
+        payload = LegacyPipelineConfig().model_dump(mode="json")
         payload["schema_version"] = "2.0"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/config"
@@ -245,9 +243,9 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
 
 
 @pytest.mark.asyncio
-async def test_api_maps_profile_and_output_manifest_schema_errors(tmp_path):
+async def test_api_maps_profile_schema_errors(tmp_path):
     app = create_app(tmp_path)
-    project_id = await create_api_project(app)
+    await create_api_project(app)
     profiles_path = tmp_path / "provider_profiles.json"
     profiles = ProviderProfilesDocument(
         profiles=[ProviderProfile(id="profile", provider_type="openai", display_name="Profile")]
@@ -256,45 +254,15 @@ async def test_api_maps_profile_and_output_manifest_schema_errors(tmp_path):
     profiles_path.write_text(json.dumps(profiles), encoding="utf-8")
     profiles_before = profiles_path.read_bytes()
 
-    job = app.state.store.load_job(project_id)
-    job.stages[PipelineStageName.EXPORT].status = StageStatus.COMPLETED
-    app.state.store.save_job(job)
-    project_dir = tmp_path / "projects" / project_id
-    (project_dir / "output" / "zh.srt").write_text("text", encoding="utf-8")
-    manifest_path = project_dir / "output" / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "2.0",
-                "items": [
-                    {
-                        "name": "zh.srt",
-                        "format": "srt",
-                        "kind": "translated",
-                        "language": "zh-CN",
-                        "bilingual": False,
-                        "size_bytes": 4,
-                        "sha256": "0" * 64,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    manifest_before = manifest_path.read_bytes()
-
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         for route in (
             "/api/v1/provider-profiles",
             "/api/v1/provider-profiles/profile",
-            f"/api/v1/projects/{project_id}/outputs",
-            f"/api/v1/projects/{project_id}/outputs/zh.srt",
         ):
             response = await client.get(route)
             assert_schema_rejection(response, tmp_path)
 
     assert profiles_path.read_bytes() == profiles_before
-    assert manifest_path.read_bytes() == manifest_before
 
 
 @pytest.mark.asyncio
@@ -325,9 +293,12 @@ async def test_explicit_request_schema_versions_are_clearly_rejected(tmp_path):
                     "display_name": "Profile",
                 },
             ),
-            await client.put(
-                f"/api/v1/projects/{project_id}/config",
-                json={**PipelineConfig().model_dump(mode="json"), "schema_version": "2.0"},
-            ),
         ):
             assert_schema_rejection(response, tmp_path)
+
+        retired = await client.put(
+            f"/api/v1/projects/{project_id}/config",
+            json={**LegacyPipelineConfig().model_dump(mode="json"), "schema_version": "2.0"},
+        )
+        assert retired.status_code == 409
+        assert retired.json()["error"]["code"] == "LEGACY_CONFIG_READ_ONLY"

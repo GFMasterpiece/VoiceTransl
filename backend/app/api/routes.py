@@ -1,10 +1,8 @@
 import asyncio
-import json
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import (
@@ -20,27 +18,17 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-from ..config import load_preset
 from ..domain import (
-    ASRConfig,
     Job,
-    JobStatus,
-    PipelineConfig,
-    PipelineStageName,
     Project,
     ProviderProfile,
     SourceAsset,
-    StageState,
-    StageStatus,
-    Transcript,
-    TranslationConfig,
-    default_stages,
 )
+from ..domain.legacy_config import LegacyPipelineConfig, default_legacy_pipeline_config
 from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
-from ..domain.schema import SchemaVersionError, require_schema_version
+from ..domain.schema import SchemaVersionError
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
 router = APIRouter(prefix="/api/v1")
@@ -102,21 +90,6 @@ def get_job(state, pid):
         )
 
 
-class RunRequest(BaseModel):
-    resume: bool = True
-
-
-class AudioRunRequest(RunRequest):
-    audio_ids: list[str] = Field(min_length=1)
-
-    @field_validator("audio_ids")
-    @classmethod
-    def unique_ids(cls, value):
-        if len(set(value)) != len(value):
-            raise ValueError("audio_ids must be unique")
-        return value
-
-
 def audio_request(request, pid, aid):
     state = deps(request)
     get_project(state, pid)
@@ -131,8 +104,6 @@ def audio_request(request, pid, aid):
     jobs = SimpleNamespace(
         running=partial(state.jobs.running, audio_id=aid),
         running_workflow=partial(state.jobs.running_workflow, audio_id=aid),
-        start=partial(state.jobs.start, audio_id=aid),
-        cancel=partial(state.jobs.cancel, audio_id=aid),
         _lock=partial(state.jobs._lock, audio_id=aid),
     )
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(store=store, jobs=jobs)))
@@ -158,77 +129,15 @@ class ProviderProfileListResponse(BaseModel):
     items: list[ProviderProfile]
 
 
+def config_editable(state, project_id: str, job: Job) -> bool:
+    if job.status in {"running", "cancelling"}:
+        return False
+    return not state.jobs.running(project_id)
+
+
 class CreateProjectResponse(BaseModel):
     project: Project
     job: Job
-
-
-class RunResponse(BaseModel):
-    job_id: str
-    status: str
-
-
-def config_editable(state, project_id: str, job: Job) -> bool:
-    if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING}:
-        return False
-    # A queued task is persisted as pending until it acquires the semaphore.
-    # Its snapshot is already fixed, so it must be treated as read-only too.
-    if state.jobs.running(project_id):
-        return False
-    return not (job.status == JobStatus.PENDING and job.config_snapshot is not None)
-
-
-class TranscriptResponse(BaseModel):
-    stage: str
-    transcript: object
-
-
-class OutputItem(BaseModel):
-    name: str
-    size_bytes: int
-    download_url: str
-    format: str | None = None
-    kind: str | None = None
-    source_language: str | None = None
-    target_language: str | None = None
-    bilingual: bool | None = None
-    sha256: str | None = None
-
-
-class OutputsResponse(BaseModel):
-    items: list[OutputItem]
-
-
-class PreprocessResult(BaseModel):
-    kind: Literal["preprocess"] = "preprocess"
-    data: dict[str, object]
-
-
-class TranscriptResult(BaseModel):
-    kind: Literal["transcript"] = "transcript"
-    transcript: Transcript
-
-
-class OutputsResult(OutputsResponse):
-    kind: Literal["outputs"] = "outputs"
-
-
-class StageResultError(BaseModel):
-    code: Literal["STAGE_RESULT_NOT_FOUND"] = "STAGE_RESULT_NOT_FOUND"
-    message: str = "阶段结果缺失或无法读取，请重新处理该音频"
-
-
-class StageDetailResponse(BaseModel):
-    stage: PipelineStageName
-    job_id: str
-    audio_id: str
-    state: StageState
-    config: dict[str, object] | None
-    result: (
-        Annotated[PreprocessResult | TranscriptResult | OutputsResult, Field(discriminator="kind")]
-        | None
-    ) = None
-    result_error: StageResultError | None = None
 
 
 def get_provider_profile(state, profile_id: str) -> ProviderProfile:
@@ -369,7 +278,6 @@ async def create_project(
     file: UploadFile = File(...),
     name: str | None = Form(None),
     languages: tuple[str, str] = Depends(project_languages_form),
-    preset: str = Form("mock"),
 ):
     source_language, target_language = languages
     state = deps(request)
@@ -377,12 +285,6 @@ async def create_project(
     if suffix not in state.settings.allowed_extensions:
         raise HTTPException(
             415, detail={"error": {"code": "UNSUPPORTED_MEDIA_TYPE", "message": "不支持的音频格式"}}
-        )
-    try:
-        load_preset(state.settings.preset_dir, preset)
-    except (FileNotFoundError, ValueError):
-        raise HTTPException(
-            422, detail={"error": {"code": "INVALID_PRESET", "message": "预设不存在或配置无效"}}
         )
     pid = "prj_" + uuid4().hex
     jid = "job_" + uuid4().hex
@@ -396,21 +298,15 @@ async def create_project(
             size_bytes=0,
             language=source_language,
         ),
-        preset=preset,
     )
     try:
-        job = Job(id=jid, project_id=pid, stages=default_stages())
+        job = Job(id=jid, project_id=pid)
         project, job = await state.store.create_project_from_upload(
             project,
             job,
             file,
             state.settings.max_upload_mb * 1024 * 1024,
-            config=PipelineConfig(
-                source_language=source_language,
-                target_language=target_language,
-                asr=ASRConfig(language=source_language),
-                translation=TranslationConfig(target_language=target_language),
-            ),
+            config=default_legacy_pipeline_config(source_language, target_language=target_language),
         )
         return {"project": project, "job": job}
     except SourceUploadTooLarge:
@@ -463,7 +359,7 @@ async def delete_project(pid: str, request: Request):
         )
 
 
-@router.get("/projects/{pid}/config", response_model=PipelineConfig)
+@router.get("/projects/{pid}/config", response_model=LegacyPipelineConfig)
 async def pipeline_config(pid: str, request: Request):
     state = deps(request)
     get_project(state, pid)
@@ -483,129 +379,22 @@ async def pipeline_config(pid: str, request: Request):
         )
 
 
-@router.put("/projects/{pid}/config", response_model=PipelineConfig)
-async def update_pipeline_config(pid: str, value: PipelineConfig, request: Request):
-    async with deps(request).jobs._lock(pid):
-        return _update_pipeline_config(pid, value, request)
+def _legacy_config_read_only() -> HTTPException:
+    return HTTPException(
+        409,
+        detail={
+            "error": {
+                "code": "LEGACY_CONFIG_READ_ONLY",
+                "message": "旧 Pipeline 配置已退役，仅支持读取；请使用工作流配置",
+            }
+        },
+    )
 
 
-def _update_pipeline_config(pid, value, request):
-    state = deps(request)
-    get_project(state, pid)
-    current = get_job(state, pid)
-    if not config_editable(state, pid, current):
-        raise HTTPException(
-            409,
-            detail={
-                "error": {
-                    "code": "CONFIG_READ_ONLY",
-                    "message": "任务运行中或排队中，配置不可修改",
-                }
-            },
-        )
-    project = get_project(state, pid)
-    if value.source_language != project.source.language:
-        raise HTTPException(
-            422,
-            detail={
-                "error": {
-                    "code": "SOURCE_LANGUAGE_MISMATCH",
-                    "message": "配置源语言必须与项目源语言一致",
-                }
-            },
-        )
-    profile_id = value.asr.provider_profile_id
-    if profile_id:
-        profile = state.store.provider_profile(profile_id)
-        if profile is None:
-            raise HTTPException(
-                422,
-                detail={
-                    "error": {
-                        "code": "PROVIDER_PROFILE_NOT_FOUND",
-                        "message": "所选提供商配置不存在",
-                    }
-                },
-            )
-        if not profile.enabled:
-            raise HTTPException(
-                422,
-                detail={
-                    "error": {
-                        "code": "PROVIDER_PROFILE_DISABLED",
-                        "message": "所选提供商配置已停用",
-                    }
-                },
-            )
-    state.store.save_pipeline_config(pid, value)
-    return value
-
-
-@router.post("/projects/{pid}/run", status_code=202, response_model=RunResponse)
-async def run(pid: str, body: RunRequest, request: Request):
-    state = deps(request)
-    get_project(state, pid)
-    try:
-        job = await state.jobs.start(pid, body.resume)
-    except RuntimeError as error:
-        if str(error) == "JOB_ALREADY_RUNNING":
-            raise HTTPException(
-                409,
-                detail={
-                    "error": {"code": "JOB_ALREADY_RUNNING", "message": "任务正在运行或排队中"}
-                },
-            )
-        if str(error) == "AUDIO_BUSY":
-            raise HTTPException(
-                409,
-                detail={
-                    "error": {
-                        "code": "AUDIO_BUSY",
-                        "message": "该音频已有节点工作流正在运行或排队",
-                    }
-                },
-            )
-        raise HTTPException(
-            500,
-            detail={
-                "error": {"code": "INTERNAL_ERROR", "message": "任务启动失败", "details": None}
-            },
-        ) from error
-    except SchemaVersionError:
-        raise
-    except ValueError as error:
-        raise HTTPException(
-            422,
-            detail={
-                "error": {
-                    "code": "INVALID_PIPELINE_CONFIG",
-                    "message": "项目配置无效，无法开始处理",
-                    "details": str(error),
-                }
-            },
-        ) from error
-    return {"job_id": job.id, "status": job.status}
-
-
-@router.post("/projects/{pid}/cancel")
-async def cancel(pid: str, request: Request):
-    state = deps(request)
-    get_project(state, pid)
-    if state.jobs.running_workflow(pid):
-        raise HTTPException(
-            409,
-            detail={
-                "error": {
-                    "code": "AUDIO_BUSY_WORKFLOW",
-                    "message": "节点工作流正在使用该音频，请从工作流运行中取消",
-                }
-            },
-        )
-    if not state.jobs.cancel(pid):
-        raise HTTPException(
-            409, detail={"error": {"code": "JOB_NOT_RUNNING", "message": "任务未运行"}}
-        )
-    return {"status": "cancelling"}
+@router.put("/projects/{pid}/config", response_model=LegacyPipelineConfig)
+async def update_pipeline_config(pid: str, request: Request):
+    get_project(deps(request), pid)
+    raise _legacy_config_read_only()
 
 
 @router.get("/projects/{pid}/job", response_model=Job)
@@ -613,104 +402,6 @@ async def job(pid: str, request: Request):
     state = deps(request)
     get_project(state, pid)
     return get_job(state, pid)
-
-
-@router.get("/projects/{pid}/transcript", response_model=TranscriptResponse)
-async def transcript(pid: str, request: Request):
-    state = deps(request)
-    get_project(state, pid)
-    current = get_job(state, pid)
-    stage_status = current.stages
-    for stage in ("translated", "aligned", "raw"):
-        stage_name = {"translated": "translation", "aligned": "alignment", "raw": "asr"}[stage]
-        if (
-            stage_status.get(stage_name) is None
-            or stage_status[stage_name].status.value != "completed"
-        ):
-            continue
-        try:
-            return {"stage": stage, "transcript": state.store.load_transcript(pid, stage)}
-        except SchemaVersionError:
-            raise
-        except (FileNotFoundError, ValueError):
-            pass
-    raise HTTPException(
-        404, detail={"error": {"code": "TRANSCRIPT_NOT_FOUND", "message": "字幕不存在"}}
-    )
-
-
-@router.get("/projects/{pid}/outputs", response_model=OutputsResponse)
-async def outputs(pid: str, request: Request):
-    state = deps(request)
-    get_project(state, pid)
-    current = get_job(state, pid)
-    export = current.stages.get("export")
-    if export is None or export.status.value != "completed":
-        return {"items": []}
-    manifest_entries = (
-        state.store.load_export_manifest(pid) if state.store.has_export_manifest(pid) else []
-    )
-    manifest = {str(item["name"]): item for item in manifest_entries}
-    items = []
-    for path in state.store.list_outputs(pid):
-        if path.name == "manifest.json":
-            continue
-        metadata = manifest.get(path.name, {})
-        language = metadata.get("language")
-        items.append(
-            {
-                "name": path.name,
-                "size_bytes": path.stat().st_size,
-                "download_url": f"/api/v1/projects/{pid}/outputs/{path.name}",
-                "format": metadata.get("format", path.suffix.lstrip(".")),
-                "kind": metadata.get("kind"),
-                "source_language": (
-                    current.config_snapshot.source_language
-                    if current.config_snapshot is not None
-                    else None
-                ),
-                "target_language": (
-                    current.config_snapshot.target_language
-                    if current.config_snapshot is not None
-                    else language
-                ),
-                "bilingual": metadata.get("bilingual"),
-                "sha256": metadata.get("sha256"),
-            }
-        )
-    return {"items": items}
-
-
-@router.get("/projects/{pid}/outputs/{filename}")
-async def output(pid: str, filename: str, request: Request):
-    state = deps(request)
-    get_project(state, pid)
-    current = get_job(state, pid)
-    export = current.stages.get("export")
-    if export is None or export.status.value != "completed":
-        raise HTTPException(
-            404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
-        )
-    try:
-        manifest_entries = (
-            state.store.load_export_manifest(pid) if state.store.has_export_manifest(pid) else None
-        )
-        if manifest_entries is not None and filename not in {
-            str(item["name"]) for item in manifest_entries
-        }:
-            raise ValueError("output is not managed by the current manifest")
-        path = state.store._direct_output_path(pid, filename)
-    except SchemaVersionError:
-        raise
-    except (ValueError, OSError):
-        raise HTTPException(
-            404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
-        )
-    if not path.is_file() or path.is_symlink():
-        raise HTTPException(
-            404, detail={"error": {"code": "OUTPUT_NOT_FOUND", "message": "输出不存在"}}
-        )
-    return FileResponse(path, filename=path.name)
 
 
 @router.websocket("/projects/{pid}/events")
@@ -842,131 +533,20 @@ async def append_audio(
     return {"audio": audio, "job": job}
 
 
-@router.post("/projects/{pid}/audios/run", status_code=202)
-async def run_audios(pid: str, body: AudioRunRequest, request: Request):
-    state = deps(request)
-    project = get_project(state, pid)
-    if not set(body.audio_ids).issubset({audio.id for audio in project.audios}):
-        raise HTTPException(
-            404, detail={"error": {"code": "AUDIO_NOT_FOUND", "message": "选择的音频不存在"}}
-        )
-    items = []
-    for aid in body.audio_ids:
-        try:
-            result = await run_audio(pid, aid, RunRequest(resume=body.resume), request)
-            items.append({"audio_id": aid, **result})
-        except HTTPException as error:
-            items.append({"audio_id": aid, "error": error.detail["error"]})
-    return {"items": items}
-
-
-@router.get("/projects/{pid}/audios/{aid}/config", response_model=PipelineConfig)
+@router.get("/projects/{pid}/audios/{aid}/config", response_model=LegacyPipelineConfig)
 async def audio_config(pid: str, aid: str, request: Request):
     return await pipeline_config(pid, audio_request(request, pid, aid))
 
 
-@router.put("/projects/{pid}/audios/{aid}/config", response_model=PipelineConfig)
-async def update_audio_config(pid: str, aid: str, value: PipelineConfig, request: Request):
-    return await update_pipeline_config(pid, value, audio_request(request, pid, aid))
-
-
-@router.post("/projects/{pid}/audios/{aid}/run", status_code=202, response_model=RunResponse)
-async def run_audio(pid: str, aid: str, body: RunRequest, request: Request):
-    return await run(pid, body, audio_request(request, pid, aid))
-
-
-@router.post("/projects/{pid}/audios/{aid}/cancel")
-async def cancel_audio(pid: str, aid: str, request: Request):
-    return await cancel(pid, audio_request(request, pid, aid))
+@router.put("/projects/{pid}/audios/{aid}/config", response_model=LegacyPipelineConfig)
+async def update_audio_config(pid: str, aid: str, request: Request):
+    audio_request(request, pid, aid)
+    raise _legacy_config_read_only()
 
 
 @router.get("/projects/{pid}/audios/{aid}/job", response_model=Job)
 async def audio_job(pid: str, aid: str, request: Request):
     return await job(pid, audio_request(request, pid, aid))
-
-
-@router.get("/projects/{pid}/audios/{aid}/transcript", response_model=TranscriptResponse)
-async def audio_transcript(pid: str, aid: str, request: Request):
-    return await transcript(pid, audio_request(request, pid, aid))
-
-
-@router.get("/projects/{pid}/audios/{aid}/stages/{stage}", response_model=StageDetailResponse)
-async def audio_stage_detail(pid: str, aid: str, stage: PipelineStageName, request: Request):
-    scoped_request = audio_request(request, pid, aid)
-    store = deps(scoped_request).store
-    current = get_job(deps(scoped_request), pid)
-    state = current.stages.get(stage, StageState())
-    detail = StageDetailResponse(
-        stage=stage,
-        job_id=current.id,
-        audio_id=current.audio_id,
-        state=state,
-        config=(
-            getattr(current.config_snapshot, stage.value).model_dump(mode="json")
-            if current.config_snapshot is not None
-            else None
-        ),
-    )
-    # A fresh run keeps old files until each stage replaces them. Only its
-    # completed stages may expose results, including when later stages fail.
-    if state.status != StageStatus.COMPLETED:
-        return detail
-    try:
-        if not state.artifact:
-            raise ValueError("missing stage artifact")
-        artifact = store.resolve_artifact_path(pid, state.artifact)
-        transcript_name = {
-            PipelineStageName.ASR: "raw",
-            PipelineStageName.ALIGNMENT: "aligned",
-            PipelineStageName.TRANSLATION: "translated",
-        }.get(stage)
-        if transcript_name:
-            expected = store.resolve_project_path(pid, f"transcript/{transcript_name}.json")
-            if artifact != expected:
-                raise ValueError("wrong transcript artifact")
-            payload = json.loads(artifact.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("invalid transcript")
-            # A malformed artifact is reported through result_error. Only an
-            # explicit, present version mismatch is an API schema rejection.
-            if "schema_version" in payload:
-                require_schema_version(payload["schema_version"], "transcript")
-            value = Transcript.model_validate_json(artifact.read_text(encoding="utf-8"))
-            if value.project_id != pid or value.stage != transcript_name:
-                raise ValueError("wrong transcript identity")
-            detail.result = TranscriptResult(transcript=value)
-        elif stage == PipelineStageName.PREPROCESS:
-            if artifact != store.resolve_project_path(pid, "cache/preprocess.json"):
-                raise ValueError("wrong preprocessing artifact")
-            metadata = json.loads(artifact.read_text(encoding="utf-8"))
-            if not isinstance(metadata, dict):
-                raise ValueError("invalid preprocessing metadata")
-            detail.result = PreprocessResult(data=metadata)
-        else:
-            if artifact != store.resolve_project_path(pid, "output") or not artifact.is_dir():
-                raise ValueError("missing output directory")
-            result = await audio_outputs(pid, aid, request)
-            if not result["items"]:
-                raise ValueError("missing outputs")
-            detail.result = OutputsResult(items=result["items"])
-    except SchemaVersionError:
-        raise
-    except (OSError, ValueError):
-        detail.result_error = StageResultError()
-    return detail
-
-
-@router.get("/projects/{pid}/audios/{aid}/outputs", response_model=OutputsResponse)
-async def audio_outputs(pid: str, aid: str, request: Request):
-    result = await outputs(pid, audio_request(request, pid, aid))
-    for item in result["items"]:
-        item["download_url"] = f"/api/v1/projects/{pid}/audios/{aid}/outputs/{item['name']}"
-    return result
-
-
-@router.get("/projects/{pid}/audios/{aid}/outputs/{filename}")
-async def audio_output(pid: str, aid: str, filename: str, request: Request):
-    return await output(pid, filename, audio_request(request, pid, aid))
 
 
 @router.websocket("/projects/{pid}/audios/{aid}/events")

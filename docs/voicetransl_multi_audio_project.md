@@ -1,103 +1,76 @@
 # VoiceTransl 多音频项目契约
 
-本文是当前项目/音频资源、目录与 API 的契约，不采用“一个项目一个任务”或“每个上传文件创建独立项目”的旧假设。五阶段 Pipeline、Provider 职责、原子写入与恢复规则见[架构约定](architecture.md)，交互见[前端工作流](frontend_workflow.md)。
+本文维护当前项目、音频和 API 边界。工作流执行见[架构约定](architecture.md)，交互见[前端工作流](frontend_workflow.md)。旧固定阶段流程已退役，不再作为当前接口契约。
 
-## 1. 资源与作用范围
+## 资源与目录
 
-一个项目包含一个或多个音频。用户上传一组音频到同一项目，在项目中选择一个、多个或全部音频，配置流程后开始处理。项目组织资源并提供公共默认配置；每个音频拥有独立任务、进度、字幕、时间轴和输出。新建项目必须由用户明确提供源语言和目标语言，不猜测目标；初始公共配置与项目/任务在同一临时目录完整写入后发布。
-
-“共同处理”指向选中的音频应用同一套配置，再启动各自任务。不拼接源文件、不合并时间轴或输出；跨音频联合翻译上下文需后续单独设计。
-
-- `Project.source` 保留为主音频兼容字段；`Project.audios` 包含 `{id, source, name}`，`name` 可为空。
-- 主音频固定为 `aud_primary`，使用原项目根目录的资源。加载缺少 `audios` 的旧项目时构造虚拟主音频，不迁移文件。
-- 新增音频 ID 由后端生成，不能使用文件名作路径。不同同名文件可以作为不同资源保存。
-- `Job.project_id` 始终为父项目 ID，`Job.audio_id` 标识所属音频；旧 Job 缺少该字段时默认为 `aud_primary`。
-- 每个音频只保存一个当前 Job；重新处理产生新 Job ID，不意味着保存历史任务/结果档案。
-- 源文件及人工字幕不被静默覆盖，重跑仅按既有规则重建当前音频产物。
-
-## 2. 磁盘布局与配置
+- 一个项目包含一个或多个音频；每个音频有独立输入、工作流运行及产物，不共享时间轴。
+- `Project.source` 是主音频兼容字段，`Project.audios` 包含 `{id, source, name}`。主音频 ID 为 `aud_primary`；旧项目缺少成员列表时构造虚拟主音频，不搬迁文件。
+- 新增音频 ID 由服务端生成，不用用户文件名作路径。不同同名文件可以独立保存。
+- 项目级 `workflow.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
 
 ```text
 data/projects/<project-id>/
-├── project.json                  # 父项目元数据与音频成员
-├── config.json                   # 公共默认配置 / 旧主音频配置回退
-├── primary-config.json           # aud_primary 显式覆盖（保存后存在）
-├── job.json                      # aud_primary 当前任务
-├── source/ cache/ transcript/ output/ logs/  # 主音频原路径
-└── audios/<audio-id>/
-    ├── config.json               # 该音频显式覆盖（保存后存在）
-    ├── job.json
-    └── source/ cache/ transcript/ output/ logs/
+  project.json
+  source/original.<ext>                    # 主音频
+  workflow.json                           # 首次保存后存在
+  workflow-revisions/<revision>.json
+  workflow-runs/<run-id>/                  # 主音频运行
+    run.json
+    nodes/<node-id>/<filename>
+  audios/<audio-id>/
+    source/original.<ext>
+    workflow-runs/<run-id>/
+      run.json
+      nodes/<node-id>/<filename>
+  job.json / config.json / primary-config.json
+  audios/<audio-id>/job.json / config.json  # 兼容记录，不是图运行配置
 ```
 
-新增音频源路径保存为父项目相对 POSIX 路径，例如 `audios/aud_.../source/original.wav`。任务 artifact 同样相对父项目，不能将不同音频的同名 `zh.srt` 写到同一路径。
+源路径保存为父项目相对 POSIX 路径。主音频使用原项目根目录，新增音频放在 `audios/{aid}/` 下；旧 cache/transcript/output 文件保留原位置，不自动删除、迁移或作为新节点结果使用。
 
-音频没有独立覆盖时读取父项目公共默认配置；新增音频将 `source_language`、`asr.language` 适配为该音频语言。适配后若源语言等于目标语言，配置无效，需显式保存该音频覆盖，不能静默改目标语言。逐音频保存配置只产生该音频覆盖，此后修改公共默认配置不会覆盖该文件。
+## 当前 REST API
 
-主音频的有效配置优先级为根 `primary-config.json` → 根 `config.json` → Mock 默认；新增音频为 `audios/{aid}/config.json` → 适配语言的公共默认。`PUT /projects/{pid}/audios/aud_primary/config` 保存 `primary-config.json`，不修改公共默认或其他音频。旧 `GET/PUT /projects/{pid}/config` 继续读取/保存根公共 `config.json`，也是没有覆盖时的兼容回退；已有主音频覆盖后，修改该旧配置路径不覆盖主音频有效配置。启动主音频始终读取其有效覆盖优先级。旧文件保持原位置，不迁移已有配置。
+所有路径以 `/api/v1` 为前缀：
 
-新任务启动时使用最终有效配置生成不可变 `job.config_snapshot`。失败、取消或中断任务以 `resume=true` 继续时使用旧快照；`resume=false` 重新处理创建新 Job ID 与快照。运行、取消中或排队音频配置不可修改。
-
-## 3. REST 与事件
-
-全部路径以 `/api/v1` 为前缀。
-
-| 方法与路径 | 语义 |
+| 方法与路径 | 行为 |
 | --- | --- |
-| `GET /projects` | `limit` 默认20、最大100，`offset` 默认0；按更新时间和ID倒序稳定分页，返回 `{items,total,limit,offset}`，无200项访问上限 |
-| `POST /projects` | multipart：必填 `file`、`source_language`、`target_language`，可选 `name`、`preset`；语言须非空、无首尾空白/控制字符、<=32，大小写不敏感不能相同；创建父项目及首个音频与有效初始公共配置，201 返回 `{project, job}`，不启动 |
-| `POST /projects/{pid}/audios` | multipart：必填 `file`、`source_language`，可选 `name`；语言遵守创建校验，不猜默认；添加音频，201 返回 `{audio, job}`，不启动 |
-| `GET /projects/{pid}/audios` | 返回 `{items: [{id, source, name, job}]}`，包含主音频和所有新增音频 |
-| `GET/PUT /projects/{pid}/audios/{aid}/config` | 读取有效配置 / 保存该音频配置，规则与旧配置接口一致 |
-| `GET /projects/{pid}/audios/{aid}/job` | 该音频当前 Job |
-| `GET /projects/{pid}/audios/{aid}/stages/{stage}` | 当前任务的单阶段状态、任务配置快照和对应真实产物 |
-| `POST /projects/{pid}/audios/{aid}/run` | `{resume: true/false}`，202 返回 `{job_id, status}` |
-| `POST /projects/{pid}/audios/{aid}/cancel` | 只取消该音频 |
-| `GET /projects/{pid}/audios/{aid}/transcript` | 该音频最完整的已完成字幕阶段 |
-| `GET /projects/{pid}/audios/{aid}/outputs` | 该音频输出列表，下载 URL 指向该音频 |
-| `GET /projects/{pid}/audios/{aid}/outputs/{filename}` | 该音频输出下载，严格校验路径 |
-| `POST /projects/{pid}/audios/run` | 批量启动选中的音频，见下文 |
-| `DELETE /projects/{pid}` | 删除整个父项目及所有音频；任一音频忙碌返回 409 `PROJECT_BUSY` |
+| `GET /projects` | `limit` 默认 20、最大 100，`offset` 默认 0；按更新时间/ID 倒序稳定分页，返回 `{items,total,limit,offset}` |
+| `POST /projects` | multipart 必填 `file/source_language/target_language`，可选 `name`；201 返回 `{project,job}`，只上传不运行 |
+| `GET /projects/{pid}` | 项目与音频成员元数据 |
+| `POST /projects/{pid}/audios` | multipart 必填 `file/source_language`，可选 `name`；201 返回 `{audio,job}`，只追加不运行 |
+| `GET /projects/{pid}/audios` | `{items:[{id,source,name,job}]}`，Job 是旧格式只读摘要，不是当前节点运行状态 |
+| `DELETE /projects/{pid}` | 删除整个项目，任一音频运行/排队时返回 `409 PROJECT_BUSY` |
+| `GET /projects/{pid}/workflow` | 项目工作流，无已保存图时返回默认音频直通图 |
+| `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges}`，保存有效图并返回新修订 |
+| `POST /projects/{pid}/workflow/validate` | `{nodes,edges}`，返回 `{valid,errors}`，错误关联节点/边 |
+| `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision}`，202 返回绑定该音频的新运行 |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs` | 分页历史摘要 `{items,total,limit,offset}`，默认 20、最大 100 |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}` | 不可变图快照、节点状态及 artifact |
+| `POST /projects/{pid}/audios/{aid}/workflow-runs/{rid}/cancel` | 提交活动运行取消；终态幂等返回已有记录 |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}` | 校验文件存在后返回结构化 artifact |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/download` | 下载该节点的独立文件 |
 
-阶段详情响应为 `{stage, job_id, audio_id, state, config, result, result_error}`。`config` 是当前任务该阶段的不可变快照，无快照时为 `null`，与可编辑的下次处理配置分开。仅当前任务该阶段 `completed` 时读取对应产物：预处理为 `{kind: "preprocess", data: metadata}`，识别/对齐/翻译为 `{kind: "transcript", transcript}`（分别是 raw/aligned/translated），导出为 `{kind: "outputs", items}`。未完成、失败或跳过时 `result` 为 `null`；产物缺失或不可读时通过 `result_error: {code, message}` 提示，不回退到别的阶段或旧任务结果。
+创建时语言不能为空、有首尾空白或控制字符，长度最多 32；源/目标大小写不敏感不能相同。区域语言代码可用，不猜测默认语言。`preset` 不再是创建参数或执行选择。
 
-批量启动请求示例：
+上传规则来自 `GET /upload-policy`。文件先进入临时目录，文件与元数据完整后发布；追加失败不删除成功音频或父项目。追加和删除在项目锁下串行化。
 
-```json
-{"audio_ids": ["aud_primary", "aud_..."], "resume": false}
-```
+图校验业务错误由 validate 返回 200/`valid=false`；无效请求或保存图返回 422，版本冲突返回 `409 WORKFLOW_REVISION_CONFLICT`，音频重复运行返回 `409 AUDIO_BUSY`。统一错误结构为 `{error:{code,message,details?}}`。
 
-`audio_ids` 非空且不能重复；开始任何任务前先校验所有 ID 属于该项目。无效集合整体拒绝，未知音频返回 404 `AUDIO_NOT_FOUND`，空/重复列表返回 422。有效集合依次提交独立任务，202 返回逐项结果，不保证全部成功或事务回滚：
+产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，即使同名也不覆盖历史或源文件。
 
-```json
-{"items": [
-  {"audio_id": "aud_primary", "job_id": "job_...", "status": "pending"},
-  {"audio_id": "aud_...", "error": {"code": "JOB_ALREADY_RUNNING", "message": "任务正在运行或排队中"}}
-]}
-```
+## 旧数据兼容边界
 
-该启动 API 不隐式保存配置。前端检查配置并通过各音频 `PUT .../config` 应用到选择范围，只有保存成功的音频才按新配置启动；未选音频不被修改。继续旧任务使用旧快照，需明确与“按新配置重新处理”区分。
+- `GET /projects/{pid}/config` 读取旧公共配置；逐音频 `/config` 读取对应旧覆盖。主音频优先 `primary-config.json`，再根 `config.json`，缺失时使用兼容默认值；其他音频优先自身配置，再适配语言的公共默认。
+- 旧 `/config` 的 PUT 已退役，只返回 `LEGACY_CONFIG_READ_ONLY`，不保存请求内容。节点图不读取这些配置。
+- `GET /projects/{pid}/job` 及逐音频 `/job` 保留旧 Job 摘要读取。创建仍保存初始兼容 Job/语言配置，但不再通过固定阶段执行，也不将旧 Job 当作节点运行。
+- 旧 `run/cancel/stages/transcript/outputs` 和 `audios/run` 入口已删除。旧 WebSocket 保留 Job snapshot 兼容协议，不发送节点运行进度；新前端使用 REST。
+- 旧配置、Job 和图运行快照不批量改写；旧非 Mock Provider/参数不再可执行，用户需显式编辑当前图后重新运行，不自动转成 Mock。
+- 所有持久文档显式要求当前 `schema_version=1.0`，含嵌套快照；缺失或不同版本拒绝读取且不改写原文件。不实现跨版本迁移。
+- 服务启动会按既有恢复规则将未结束记录标记为 `interrupted`，不自动执行；节点运行不能继续旧快照，只能创建新运行。
 
-WebSocket `/projects/{pid}/audios/{aid}/events` 先发送该音频 `job.snapshot`，后续仅通知该音频事件。事件同时包含父 `project_id`、`audio_id` 与 `job_id`。`/projects/{pid}/events` 默认首先发送主音频快照，后续可收到全项目事件；也可用 `?audio_id=...` 筛选。重连后通过 REST 恢复对应音频状态，事件不是持久状态或历史重放。
+## 不变量与限制
 
-## 4. 导出命名与结构化结果
+同一音频最多一个运行/排队任务，其他音频独立排队并共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等执行资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
 
-- `export.naming` 支持 `language`（默认）和 `original`（源文件名主体），后者可用 `filename_stem` 显式设置主体；`filename_template` 可覆盖命名规则，支持 `{source_language}`、`{target_language}`、`{kind}`、`{format}`，当前模板须包含语言变量及 `{kind}` 以区分译文/双语输出，扩展名由格式补齐。
-- 默认日语到中文的历史文件名保持 `zh.srt`、`ja-zh.srt`、`zh.vtt`、`ja-zh.vtt`、`zh.lrc`。译文文件与双语字幕分别生成，不能因支持模板而把两者合成同一个文件。
-- 新输出在当前音频 `output/manifest.json` 记录文件、格式、业务种类、语言、双语标志、大小和 SHA256；API 在此基础上提供下载地址及源/目标语言，不再从自定义文件名推断语义。没有 manifest 的旧输出使用独立兼容读取路径，不迁移历史文件。显式空清单表示没有受管结果，不重新扫描旧文件；人工附加文件不自动作为生成结果暴露。受管文件若与原清单摘要不一致，拒绝覆盖或清理，避免删除人工修改。
-- 模板与最终文件名都需安全校验：拒绝路径分隔符、控制字符、Windows 设备保留名称、危险字符、尾点/空格、过长名称、大小写不敏感冲突及内部 manifest 名称；不能覆盖源文件或无关用户文件。
-- 新文件先暂存，逐文件发布后发布 manifest，再清理旧受管文件；单个文件原子发布不等同于整个文件集合具有事务性。旧 Pipeline 仍只维护当前结果，并非图工作流的不可变运行历史。
-
-## 5. 兼容与不变量
-
-- 旧 `/projects/{pid}/job|run|cancel|transcript|outputs` 路径保留，操作主音频，不暗中操作全部音频。旧 `/projects/{pid}/config` 保留为公共默认与主音频配置回退；逐音频配置路径操作独立覆盖，包含主音频。
-- 当前 `schema_version` 为 `1.0`，仅接受相同版本，不做跨版本迁移或静默降级；错误版本文件保持原样。既有同版本字段兼容按各专题规则执行。项目仍是可独立复制的完整目录。
-- 创建项目语言必填与列表分页属于本轮用户确认的 API 调整；旧客户端缺少语言字段返回422，不能依赖过去的日语/中文默认值。
-- 上传每项遵守同一 `upload-policy`，先写临时资源，完整后发布成员；失败不删除已有项目或成功音频。并发添加与删除须串行化成员变更。
-- 同一音频最多一个运行/排队任务；不同音频可独立排队并遵守全局并发限制。
-- 项目删除检查所有成员，任一运行、取消中或已提交排队的任务都使父项目忙碌。
-- 重启扫描所有音频，将运行、取消中和已提交排队任务标记为 `interrupted`，不自动启动。
-- Providers 不直接写状态；字幕 ID、源文和时间轴不能由 Translator 改动。单项失败不取消其他音频。
-- 不修改既有运行数据，不自动合并历史上已创建的独立项目。音频删除、重排、跨音频上下文与统一时间轴不属于本次最小功能。
-
-验证须覆盖旧项目打开与旧接口、同项目添加多个音频、选中范围配置/启动、逐项失败与独立输出、快照继续/重跑、忙碌删除与重启恢复。
+当前没有批量图运行 API、音频删除/重排、跨音频上下文、合并时间轴、指定节点重跑或历史清理。验证需覆盖多音频上传与重试、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录只读且不迁移。

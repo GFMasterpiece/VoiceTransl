@@ -28,7 +28,8 @@ function cloneDefault(value: unknown): unknown {
 }
 
 function valueMatchesType(item: CapabilityNode['fields'][number], value: unknown): boolean {
-  if (value === null || value === undefined) return !item.required
+  if (value === null) return false
+  if (value === undefined) return !item.required
   if (item.type === 'boolean') return typeof value === 'boolean'
   if (item.type === 'integer') return typeof value === 'number' && Number.isInteger(value)
   if (item.type === 'number') return typeof value === 'number' && Number.isFinite(value)
