@@ -4,6 +4,11 @@ VoiceTransl keeps `mock` ASR as the default. To enable local CrispASR, install a
 tested CrispASR CLI and place the GGUF model in a server owned directory. No
 model is downloaded by VoiceTransl.
 
+As of 2026-10-29, further local-ASR development is on hold while cloud ASR takes
+priority. Existing local features remain available. The duplicated static backend
+allowlists and filtering of CLI-discovered capabilities are a known deferred
+limitation; see [local ASR capability discovery](../spec/local-asr-capabilities.md).
+
 Version support is capability based rather than pinned to a bundled release:
 use a CrispASR release whose CLI exposes the flags listed below. The local
 runtime package is kept outside Git; the command shape follows
