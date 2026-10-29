@@ -3,10 +3,10 @@ import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
-  WORKFLOW_NODE_HEIGHT,
-  WORKFLOW_NODE_WIDTH,
-  cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition, resolveArtifactUrl, useWorkflowStore,
-  validateDraft, type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
+  ASR_BACKENDS, MAX_WORKFLOW_EDGES, WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH,
+  cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition, readAsrConfig, readPreprocessConfig,
+  resolveArtifactUrl, useWorkflowStore, validateDraft,
+  type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
 } from './stores/workflow'
 
 const input = { id: 'input', type: 'audio_input' as const, config: {}, position: { x: 80, y: 120 } }
@@ -15,6 +15,10 @@ const edge = { id: 'input-output', source: 'input', source_port: 'audio' as cons
 const preprocess = { id: 'preprocess-1', type: 'preprocess' as const, config: { provider: 'mock' as const, sample_rate: 16000, channels: 1 as const, preserve_original: true }, position: { x: 260, y: 120 } }
 const preprocessEdge = { id: 'input-preprocess', source: 'input', source_port: 'audio' as const, target: 'preprocess-1', target_port: 'audio' as const }
 const preprocessToOutput = { id: 'preprocess-output', source: 'preprocess-1', source_port: 'audio' as const, target: 'output', target_port: 'audio' as const }
+const asr = { id: 'asr-1', type: 'asr' as const, config: { provider: 'mock' as const, backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null }, position: { x: 486, y: 120 } }
+const inputAsr = { id: 'input-asr', source: 'input', source_port: 'audio' as const, target: 'asr-1', target_port: 'audio' as const }
+const textOutput = { id: 'text-1', type: 'text_output' as const, config: { filename_stem: 'transcript', format: 'txt' as const }, position: { x: 700, y: 120 } }
+const asrText = { id: 'asr-text', source: 'asr-1', source_port: 'transcript' as const, target: 'text-1', target_port: 'transcript' as const }
 const outputArtifact = {
   artifact_id: 'art-out', port: 'audio' as const, filename: 'audio-copy.wav',
   media_type: 'audio/wav', size_bytes: 12, sha256: 'a',
@@ -23,6 +27,14 @@ const outputArtifact = {
 const preprocessArtifact = {
   ...outputArtifact, artifact_id: 'art-pre', filename: 'audio-pre.wav',
   download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/preprocess-1/download',
+}
+const transcriptArtifact = {
+  ...outputArtifact, artifact_id: 'art-asr', port: 'transcript' as const, filename: 'transcript.json',
+  media_type: 'application/json', download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/asr-1/download',
+}
+const textArtifact = {
+  ...outputArtifact, artifact_id: 'art-text', port: 'text' as const, filename: 'transcript.srt',
+  media_type: 'application/x-subrip', download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/text-1/download',
 }
 const documentBody = (revision = 1, workflowRevision = 1): WorkflowDocument => ({
   schema_version: '1.0', project_id: 'p1', revision, workflow_revision: workflowRevision,
@@ -66,6 +78,14 @@ async function settle() { for (let index = 0; index < 30; index++) await Promise
 let app: VueApp | undefined
 let root: HTMLDivElement | undefined
 let fetchMock: ReturnType<typeof vi.fn>
+const modelCatalog = {
+  provider: 'crispasr' as const,
+  executable: { ok: true, version: '0.8.38', message: 'CrispASR 可用' },
+  model_dir: '@root/1/models', restart_required: false,
+  backends: ['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'],
+  truncated: false, warnings: [],
+  items: [{ model: 'granite.gguf', backend: 'granite', size_bytes: 1024, architecture: 'granite', selectable: true, reason: null }],
+}
 
 type FetchOverride = (path: string, init?: RequestInit) => Promise<Response> | undefined
 
@@ -95,7 +115,7 @@ function button(text: string) {
   return Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim() === text)
 }
 
-function node(type: 'audio_input' | 'preprocess' | 'audio_output', index = 0) {
+function node(type: 'audio_input' | 'preprocess' | 'asr' | 'audio_output' | 'text_output', index = 0) {
   return root!.querySelectorAll<SVGGElement>(`.workflow-node.is-${type}`)[index]
 }
 
@@ -188,6 +208,84 @@ describe('workflow validation and helpers', () => {
     expect(copy.nodes[0]).not.toBe(draft.nodes[0])
   })
 
+  it('accepts a text-only graph and multiple independent ASR branches with strict typed ports', () => {
+    expect(validateDraft({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] })).toEqual([])
+    const secondAsr = { ...asr, id: 'asr-2', config: { ...asr.config, language: 'en' }, position: { x: 486, y: 240 } }
+    const secondText = { ...textOutput, id: 'text-2', config: { filename_stem: 'subtitles', format: 'srt' as const }, position: { x: 700, y: 240 } }
+    const graph = {
+      nodes: [input, asr, textOutput, secondAsr, secondText, output],
+      edges: [
+        inputAsr, asrText,
+        { id: 'input-asr-2', source: 'input', source_port: 'audio' as const, target: 'asr-2', target_port: 'audio' as const },
+        { id: 'asr-2-text', source: 'asr-2', source_port: 'transcript' as const, target: 'text-2', target_port: 'transcript' as const },
+        edge,
+      ],
+    }
+    expect(validateDraft(graph)).toEqual([])
+    expect(executionSignature({ nodes: [input, asr, textOutput], edges: [inputAsr, asrText] }))
+      .not.toBe(executionSignature({ nodes: [input, secondAsr, secondText], edges: [inputAsr, asrText] }))
+    const wrongPorts = validateDraft({
+      nodes: [input, asr, textOutput],
+      edges: [inputAsr, { ...asrText, source_port: 'audio', target_port: 'audio' } as unknown as typeof asrText],
+    }).map((issue) => issue.code)
+    expect(wrongPorts).toContain('INVALID_PORT')
+    expect(validateDraft({ nodes: [input, asr, textOutput, output], edges: [inputAsr, { id: 'bad', source: 'asr-1', source_port: 'transcript', target: 'output', target_port: 'audio' }, edge] }).map((issue) => issue.code))
+      .toEqual(expect.arrayContaining(['INVALID_PORT']))
+  })
+
+  it('defaults only omitted ASR and text output fields and rejects explicit null, arrays and coercible-looking values', () => {
+    expect(readAsrConfig({})).toEqual({ provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null })
+    expect(readAsrConfig({ provider: null as unknown as string }).provider).toBeNull()
+    expect(readAsrConfig({ provider_profile_id: 'profile-1' as unknown as null }).provider_profile_id).toBe('profile-1')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { provider: null, backend: 'qwen3-1.7b', model: 'mock', language: null, vad_enabled: null, chunk_seconds: null, provider_profile_id: 'profile-1' } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+      .toEqual(expect.arrayContaining(['INVALID_ASR_PROVIDER', 'INVALID_ASR_LANGUAGE', 'INVALID_ASR_VAD', 'INVALID_ASR_CHUNK', 'INVALID_ASR_PROFILE']))
+    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: null, format: null } }], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+      .toEqual(expect.arrayContaining(['INVALID_FILENAME_STEM', 'INVALID_TEXT_FORMAT']))
+    expect(validateDraft({ nodes: [input, asr, { ...textOutput, config: { filename_stem: 'transcript', format: ['srt'] } }], edges: [inputAsr, asrText] }).map((issue) => issue.code))
+      .toContain('INVALID_TEXT_FORMAT')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, model: 'safe.' } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_MODEL')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'ja' + String.fromCharCode(1) } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
+    expect(validateDraft({ nodes: [input, { ...asr, config: { ...asr.config, language: 'x'.repeat(33) } }, textOutput], edges: [inputAsr, asrText] }).map((issue) => issue.code)).toContain('INVALID_ASR_LANGUAGE')
+    expect(ASR_BACKENDS).toEqual(['qwen3', 'qwen3-1.7b', 'whisper', 'mega-asr', 'voxtral', 'voxtral4b', 'granite'])
+  })
+
+  it('keeps invalid explicit preprocessing null values visible while omitted fields use defaults', () => {
+    expect(readPreprocessConfig({})).toEqual({ provider: 'mock', sample_rate: 16000, channels: 1, preserve_original: true })
+    expect(readPreprocessConfig({ provider: null as unknown as 'mock' }).provider).toBeNull()
+    const invalid = validateDraft({
+      nodes: [input, { ...preprocess, config: { provider: null, sample_rate: null, channels: null, preserve_original: null } }, output],
+      edges: [preprocessEdge, preprocessToOutput],
+    }).map((issue) => issue.code)
+    expect(invalid).toEqual(expect.arrayContaining(['INVALID_PREPROCESS_PROVIDER', 'INVALID_SAMPLE_RATE', 'INVALID_CHANNELS', 'INVALID_PRESERVE_ORIGINAL']))
+    expect(executionSignature({ nodes: [input, { ...preprocess, config: {} }, output], edges: [preprocessEdge, preprocessToOutput] }))
+      .toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }))
+    expect(executionSignature({ nodes: [input, { ...preprocess, config: { provider: null } }, output], edges: [preprocessEdge, preprocessToOutput] }))
+      .not.toBe(executionSignature({ nodes: [input, preprocess, output], edges: [preprocessEdge, preprocessToOutput] }))
+  })
+
+  it('fails a new connection at the 64-edge limit without removing the existing target edge', async () => {
+    setActivePinia(createPinia())
+    const store = useWorkflowStore()
+    store.beginDraftEditing()
+    store.setDraft({
+      nodes: [
+        input,
+        ...Array.from({ length: MAX_WORKFLOW_EDGES + 2 }, (_, index) => ({ ...output, id: `output-${index}`, position: { x: 420, y: 120 + index } })),
+      ],
+      edges: [
+        ...Array.from({ length: MAX_WORKFLOW_EDGES - 1 }, (_, index) => ({
+          id: `edge-${index}`, source: 'input', source_port: 'audio' as const, target: `output-${index}`, target_port: 'audio' as const,
+        })),
+        { id: 'replace-target', source: 'input', source_port: 'audio' as const, target: 'output-63', target_port: 'audio' as const },
+      ],
+    })
+    const existing = JSON.parse(JSON.stringify(store.draft.edges.find((item) => item.id === 'replace-target')))
+    expect(store.connect('input', 'output-64')).toBe(false)
+    expect(store.draft.edges).toHaveLength(MAX_WORKFLOW_EDGES)
+    expect(store.draft.edges).toEqual(expect.arrayContaining([existing]))
+    expect(store.draft.edges.length).toBeLessThanOrEqual(MAX_WORKFLOW_EDGES)
+    expect(store.error).toContain(String(MAX_WORKFLOW_EDGES))
+  })
   it('resolves relative artifact URLs against the API origin and rejects unsupported schemes', () => {
     expect(resolveArtifactUrl('/api/v1/outputs/output/download', '/api/v1', 'https://ui.example'))
       .toBe('https://ui.example/api/v1/outputs/output/download')
@@ -447,6 +545,101 @@ describe('workflow editor interactions', () => {
     expect(anchor.href).toContain('/workflow-runs/run-1/outputs/preprocess-1/download')
   })
 
+  it('adds and edits an ASR node with model discovery, independent language and a text output format', async () => {
+    setup((path) => path.endsWith('/settings/local-asr/models') ? Promise.resolve(response(modelCatalog)) : undefined)
+    await settle()
+    button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const store = useWorkflowStore()
+    const asrNode = store.draft.nodes.find((item) => item.type === 'asr')!
+    expect(asrNode.config).toEqual({ provider: 'mock', backend: 'qwen3-1.7b', model: 'mock', language: 'ja', vad_enabled: true, chunk_seconds: 30, provider_profile_id: null })
+    expect(store.draft.edges.some((item) => item.source === 'input' && item.target === asrNode.id)).toBe(false)
+    node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
+    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('语音识别设置')
+    const provider = root!.querySelectorAll<HTMLSelectElement>('.workflow-asr-settings select')[0]
+    provider.value = 'crispasr'; provider.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/settings/local-asr/models'))).toBe(true)
+    expect(root!.textContent).toContain('CrispASR 可用')
+    const backend = root!.querySelectorAll<HTMLSelectElement>('.workflow-asr-settings select')[1]
+    expect(Array.from(backend.options).map((option) => option.value)).toEqual(expect.arrayContaining(['voxtral4b', 'granite']))
+    const modelPicker = root!.querySelector<HTMLSelectElement>('#asr-discovered-model')!
+    modelPicker.value = 'granite.gguf'; modelPicker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    const textInputs = root!.querySelectorAll<HTMLInputElement>('.workflow-asr-settings input:not([type])')
+    textInputs[1].value = 'en'; textInputs[1].dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const applied = store.draft.nodes.find((item) => item.id === asrNode.id)!
+    expect(applied.config).toMatchObject({ provider: 'crispasr', backend: 'granite', model: 'granite.gguf', language: 'en', provider_profile_id: null })
+    expect(store.draft.edges.some((item) => item.source === 'input' && item.target === asrNode.id)).toBe(false)
+    button('＋ 文本输出')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const textNode = store.draft.nodes.find((item) => item.type === 'text_output')!
+    node('text_output')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
+    const format = root!.querySelector<HTMLSelectElement>('#workflow-text-format')!
+    format.value = 'srt'; format.dispatchEvent(new Event('change', { bubbles: true }))
+    const stem = root!.querySelector<HTMLInputElement>('#workflow-filename-stem')!
+    stem.value = 'subtitles'; stem.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.textContent).toContain('后端按 SRT 格式补扩展名')
+    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(store.draft.nodes.find((item) => item.id === textNode.id)?.config).toEqual({ filename_stem: 'subtitles', format: 'srt' })
+    expect(store.draft.edges.some((item) => item.source === asrNode.id && item.target === textNode.id)).toBe(false)
+  })
+
+  it('rejects ASR settings using the same strict validator as draft validation', async () => {
+    setup()
+    await settle()
+    button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const store = useWorkflowStore()
+    const asrId = store.draft.nodes.find((item) => item.type === 'asr')!.id
+    node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
+    const inputs = root!.querySelectorAll<HTMLInputElement>('.workflow-asr-settings input:not([type])')
+    inputs[0].value = 'safe.'; inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(root!.querySelector('.settings-error')?.textContent).toContain('受限文件名')
+    expect(store.draft.nodes.find((item) => item.id === asrId)?.config.model).toBe('mock')
+    inputs[0].value = 'safe.gguf'; inputs[0].dispatchEvent(new Event('input', { bubbles: true }))
+    inputs[1].value = 'ja' + String.fromCharCode(1); inputs[1].dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(root!.querySelector('.settings-error')?.textContent).toContain('ASR 语言')
+    expect(store.draft.nodes.find((item) => item.id === asrId)?.config.model).toBe('mock')
+  })
+
+  it('displays and downloads transcript and text artifacts with distinct ports', async () => {
+    const completed = {
+      id: 'run-1', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed' as const,
+      created_at: '2026-10-28T00:00:00Z', started_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:01Z', cancel_requested: false,
+      error: null,
+      workflow: { nodes: [input, asr, textOutput, output], edges: [inputAsr, asrText, edge] },
+      nodes: [
+        { node_id: 'input', node_type: 'audio_input' as const, config: {}, status: 'completed' as const, started_at: null, finished_at: null, artifact: null, error: null },
+        { node_id: 'asr-1', node_type: 'asr' as const, config: structuredClone(asr.config), status: 'completed' as const, started_at: null, finished_at: null, artifact: transcriptArtifact, error: null },
+        { node_id: 'text-1', node_type: 'text_output' as const, config: structuredClone(textOutput.config), status: 'completed' as const, started_at: null, finished_at: null, artifact: textArtifact, error: null },
+        { node_id: 'output', node_type: 'audio_output' as const, config: { filename_stem: 'audio-copy' }, status: 'completed' as const, started_at: null, finished_at: null, artifact: outputArtifact, error: null },
+      ],
+    }
+    setup((path, init) => {
+      if (path.endsWith('/workflow')) return Promise.resolve(response({ ...documentBody(), nodes: structuredClone([input, asr, textOutput, output]), edges: structuredClone([inputAsr, asrText, edge]) }))
+      if (path.endsWith('/workflow-runs') && (init as RequestInit)?.method === 'POST') return Promise.resolve(response(completed, 202))
+      if (path.endsWith('/outputs/asr-1')) return Promise.resolve(response(transcriptArtifact))
+      if (path.endsWith('/outputs/text-1')) return Promise.resolve(response(textArtifact))
+      if (path.endsWith('/outputs/output')) return Promise.resolve(response(outputArtifact))
+      return undefined
+    })
+    await settle()
+    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(root!.textContent).toContain('TRANSCRIPT')
+    expect(root!.textContent).toContain('application/json')
+    expect(root!.textContent).toContain('TEXT')
+    expect(root!.textContent).toContain('application/x-subrip')
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const transcriptDownload = Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.includes('transcript.json'))
+    const textDownload = Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.includes('transcript.srt'))
+    expect(transcriptDownload).toBeTruthy()
+    expect(textDownload).toBeTruthy()
+    transcriptDownload!.click(); await settle()
+    textDownload!.click(); await settle()
+    const hrefs = click.mock.instances.map((item) => (item as unknown as HTMLAnchorElement).href)
+    expect(hrefs.some((href) => href.includes('/outputs/asr-1/download'))).toBe(true)
+    expect(hrefs.some((href) => href.includes('/outputs/text-1/download'))).toBe(true)
+  })
+
   it('keeps a processed run read-only and exposes partial and blocked preprocessing states', async () => {
     const partial = runBody({
       status: 'running',
@@ -699,6 +892,46 @@ describe('workflow request isolation and polling', () => {
     await settle()
     expect(store.run?.id).toBe('run-1')
     expect(store.activeRun).toBeTruthy()
+  })
+
+  it('keeps expanded history read-only after starting the run', async () => {
+    vi.useFakeTimers()
+    const pinia = createPinia()
+    let pollResponse: ((value: Response) => void) | undefined
+    const activeRun = runBody({ status: 'running' })
+    const historical = runBody({ id: 'run-old', status: 'completed' })
+    setup((path, init) => {
+      if (path.endsWith('/workflow-runs?limit=30&offset=0')) return Promise.resolve(response({ items: [summaryBody({ id: 'run-old', status: 'completed' })], total: 1, limit: 30, offset: 0 }))
+      if (path.endsWith('/workflow-runs') && (init as RequestInit)?.method === 'POST') return Promise.resolve(response(activeRun, 202))
+      if (path.endsWith('/workflow-runs/run-1')) return new Promise((resolve) => { pollResponse = resolve })
+      if (path.endsWith('/workflow-runs/run-old')) return Promise.resolve(response(historical))
+      return undefined
+    }, pinia)
+    await settle()
+    const store = useWorkflowStore()
+    const toggle = Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim().startsWith('运行历史'))
+    toggle!.click()
+    await settle()
+    const oldRow = Array.from(root!.querySelectorAll<HTMLButtonElement>('.workflow-history-row')).find((item) => item.textContent?.includes('run-old'))
+    expect(oldRow).toBeTruthy()
+    button('运行节点工作流')!.click()
+    await settle()
+    expect(store.activeRun).toBeTruthy()
+    expect(button('取消运行')).toBeTruthy()
+    expect(oldRow!.disabled).toBe(true)
+    await store.loadRun('run-old')
+    expect(store.run?.id).toBe('run-1')
+    expect(store.activeRun).toBeTruthy()
+    expect(store.runError).toContain('活动运行尚未结束')
+    await vi.advanceTimersByTimeAsync(1900)
+    await settle()
+    expect(pollResponse).toBeTruthy()
+    pollResponse!(response(activeRun))
+    await settle()
+    expect(store.run?.id).toBe('run-1')
+    expect(store.activeRun).toBeTruthy()
+    expect(button('取消运行')).toBeTruthy()
+    store.stop()
   })
 
   it('does not apply node statuses when a selected history snapshot differs from the current draft', async () => {

@@ -1,12 +1,12 @@
 # 可视化节点工作流编辑器
 
-> 状态：Draft（已确认方向见下文；完整编辑器的节点、调度和重跑等契约仍需细化）。音频直通与预处理子集已单独实施，见 [workflow-audio-mvp.md](workflow-audio-mvp.md) 和 [workflow-preprocess.md](workflow-preprocess.md)。
+> 状态：Draft（已确认方向见下文；完整编辑器的节点、调度和重跑等契约仍需细化）。子集按独立里程碑实施，见 [workflow-audio-mvp.md](workflow-audio-mvp.md)、[workflow-preprocess.md](workflow-preprocess.md) 和 [workflow-asr.md](workflow-asr.md)。
 
 ## 目标
 
 最终的 VoiceTransl 应提供类似 ComfyUI 的节点图编辑体验：用户能在画布上配置工作流节点及连接，主动设定处理路径，并独立配置各节点。ComfyUI 是交互范例，不是要求复制其全部功能。
 
-当前保留固定五阶段，并有独立的音频输入/预处理/输出图；预处理支持 Mock/FFmpeg，ASR、对齐和翻译节点尚未迁入。当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
+当前保留固定五阶段，并有独立的音频输入/预处理/ASR/输出图；预处理支持 Mock/FFmpeg，ASR 支持 Mock/CrispASR，文本输出支持识别原文及字幕。对齐和翻译节点尚未迁入。当前产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，当前界面行为见 [`../docs/frontend_workflow.md`](../docs/frontend_workflow.md)。
 
 ## 已对齐的方向
 
@@ -27,7 +27,7 @@
 - 直通导出按原字节复制为独立输出文件，不转码；不以源文件引用、硬链接或软链接替代副本。该文件与其他输出产物使用相同的发布、下载、历史记录和清理规则，不为直通建立特殊的源文件下载路径。额外磁盘占用计入产物空间统计。
 - 首版不支持把音频与封面合成为视频；视频输出需有视频输入，并通过类型兼容的直通或处理节点到达。
 - 连线必须满足端口数据类型。能生成文本或视频输出的节点路径，须有相应的输入类型和处理节点提供兼容数据；不能把音频字节未经转换当成文本或视频结果。
-- 当前已实现的应用以音频输入和字幕导出为主，文本/视频输出是节点工作流的目标能力，不代表当前已有视频处理或任意文本导出能力。
+- 当前已实现音频输入、ASR 原文/字幕与音频输出；更通用的文本/视频节点仍为目标能力，不代表当前已有视频处理或任意文本导出能力。
 
 输入媒体类型、文本输出格式、视频容器/字幕合成行为及所需处理节点仍待具体规格确认。
 

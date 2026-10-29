@@ -1,13 +1,14 @@
 import hashlib
 import json
+import math
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .pipeline_config import PreprocessConfig
+from .pipeline_config import SUPPORTED_ASR_BACKENDS, ASRConfig, PreprocessConfig
 
 WORKFLOW_SCHEMA_VERSION = "1.0"
 DEFAULT_FILENAME_STEM = "audio-copy"
@@ -15,8 +16,39 @@ MAX_WORKFLOW_NODES = 64
 MAX_WORKFLOW_EDGES = 64
 NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 EDGE_ID_PATTERN = NODE_ID_PATTERN
-PORT_NAME = "audio"
+AUDIO_PORT = "audio"
+TRANSCRIPT_PORT = "transcript"
+TEXT_PORT = "text"
+PORT_NAME = AUDIO_PORT
 PREPROCESS_NODE_TYPE = "preprocess"
+ASR_NODE_TYPE = "asr"
+TEXT_OUTPUT_NODE_TYPE = "text_output"
+INPUT_NODE_TYPE = "audio_input"
+AUDIO_OUTPUT_NODE_TYPE = "audio_output"
+DEFAULT_TEXT_FILENAME_STEM = "transcript"
+DEFAULT_TEXT_FORMAT = "txt"
+TEXT_FORMATS = frozenset({"txt", "srt", "vtt", "lrc"})
+NODE_PORTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    INPUT_NODE_TYPE: (frozenset(), frozenset({AUDIO_PORT})),
+    PREPROCESS_NODE_TYPE: (frozenset({AUDIO_PORT}), frozenset({AUDIO_PORT})),
+    AUDIO_OUTPUT_NODE_TYPE: (frozenset({AUDIO_PORT}), frozenset()),
+    ASR_NODE_TYPE: (frozenset({AUDIO_PORT}), frozenset({TRANSCRIPT_PORT})),
+    TEXT_OUTPUT_NODE_TYPE: (frozenset({TRANSCRIPT_PORT}), frozenset()),
+}
+OUTPUT_NODE_TYPES = frozenset({AUDIO_OUTPUT_NODE_TYPE, TEXT_OUTPUT_NODE_TYPE})
+ASR_CONFIG_FIELDS = frozenset(
+    {
+        "provider",
+        "provider_profile_id",
+        "backend",
+        "model",
+        "language",
+        "vad_enabled",
+        "chunk_seconds",
+    }
+)
+TEXT_OUTPUT_CONFIG_FIELDS = frozenset({"filename_stem", "format"})
+ASR_LANGUAGE_MAX_LENGTH = 32
 
 
 class WorkflowRunStatus(StrEnum):
@@ -98,7 +130,7 @@ class WorkflowValidationResponse(BaseModel):
 
 class WorkflowArtifact(BaseModel):
     artifact_id: str
-    port: Literal["audio"] = PORT_NAME
+    port: Literal["audio", "transcript", "text"] = AUDIO_PORT
     filename: str
     media_type: str
     size_bytes: int = Field(ge=0)
@@ -158,6 +190,93 @@ class WorkflowRunList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class TextOutputConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    filename_stem: str = Field(default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128)
+    format: Literal["txt", "srt", "vtt", "lrc"] = DEFAULT_TEXT_FORMAT
+
+    @model_validator(mode="after")
+    def validate_filename_stem(self):
+        valid, message = _valid_filename_stem(self.filename_stem)
+        if not valid:
+            raise ValueError(message or "filename_stem 无效")
+        return self
+
+
+def _default_asr_config() -> dict[str, object]:
+    return ASRConfig().model_dump(mode="json")
+
+
+def validate_asr_config(config: object) -> ASRConfig:
+    """Validate workflow-only ASR settings without changing legacy pipeline semantics."""
+
+    if not isinstance(config, dict):
+        raise ValueError("asr 配置必须是对象且不能为 null")
+    unexpected = set(config) - ASR_CONFIG_FIELDS
+    if unexpected:
+        raise ValueError(f"asr 配置包含未知字段: {sorted(unexpected)[0]}")
+    result = ASRConfig.model_validate(config, strict=True)
+    if result.provider not in {"mock", "crispasr"}:
+        raise ValueError("asr.provider 只能是 mock 或 crispasr")
+    if result.backend not in SUPPORTED_ASR_BACKENDS:
+        raise ValueError("asr.backend 不受支持")
+    if not _valid_asr_model(result.model):
+        raise ValueError("asr.model 必须是安全的模型文件名标识符")
+    # Workflow language is independent from the audio language, but it must
+    # be an actual trimmed value rather than a blank string that happens to
+    # pass the legacy pipeline model's min_length constraint.
+    if (
+        not result.language
+        or result.language != result.language.strip()
+        or len(result.language) > ASR_LANGUAGE_MAX_LENGTH
+        or any(ord(char) < 32 or ord(char) == 127 for char in result.language)
+    ):
+        raise ValueError("asr.language 必须非空、无首尾空白且不包含控制字符")
+    if result.provider_profile_id is not None:
+        raise ValueError("节点工作流不支持 provider_profile_id，必须为 null")
+    return result
+
+
+def validate_text_output_config(config: object) -> TextOutputConfig:
+    if not isinstance(config, dict):
+        raise ValueError("text_output 配置必须是对象且不能为 null")
+    return TextOutputConfig.model_validate(config, strict=True)
+
+
+def validate_workflow_transcript(transcript: object) -> None:
+    """Validate the common ASR result contract used by text outputs."""
+
+    from .transcript import Transcript
+
+    if not isinstance(transcript, Transcript):
+        raise ValueError("ASR 结果必须是 Transcript")
+    if not transcript.segments:
+        raise ValueError("ASR 结果必须至少包含一个片段")
+    if transcript.duration is not None and (
+        not math.isfinite(transcript.duration) or transcript.duration < 0
+    ):
+        raise ValueError("ASR 结果 duration 必须是有限非负数")
+    seen_ids: set[str] = set()
+    for segment in transcript.segments:
+        if not segment.id or segment.id in seen_ids:
+            raise ValueError("ASR 片段 ID 必须存在且唯一")
+        seen_ids.add(segment.id)
+        if not segment.source_text.strip():
+            raise ValueError("ASR 片段原文不能为空")
+        has_start = segment.start is not None
+        has_end = segment.end is not None
+        if has_start != has_end:
+            raise ValueError("ASR 片段时间范围必须同时提供起止时间")
+        if has_start and (
+            not math.isfinite(segment.start)
+            or not math.isfinite(segment.end)
+            or segment.start < 0
+            or segment.end < segment.start
+        ):
+            raise ValueError("ASR 片段时间范围无效")
 
 
 def default_workflow(project_id: str, updated_at: datetime | None = None) -> WorkflowDocument:
@@ -240,7 +359,7 @@ def normalize_workflow_graph(
     normalized: list[WorkflowNode] = []
     for node in nodes:
         config = dict(node.config)
-        if node.type == "audio_output" and set(config).issubset({"filename_stem"}):
+        if node.type == AUDIO_OUTPUT_NODE_TYPE and set(config).issubset({"filename_stem"}):
             config.setdefault("filename_stem", DEFAULT_FILENAME_STEM)
         elif node.type == PREPROCESS_NODE_TYPE and set(config).issubset(
             {"provider", "sample_rate", "channels", "preserve_original"}
@@ -253,8 +372,43 @@ def normalize_workflow_graph(
                 # Keep submitted values visible to graph validation. Defaults
                 # must never turn an invalid request into a valid graph.
                 pass
+        elif node.type == ASR_NODE_TYPE and set(config).issubset(ASR_CONFIG_FIELDS):
+            try:
+                config = validate_asr_config(config).model_dump(mode="json")
+            except (ValueError, ValidationError):
+                pass
+        elif node.type == TEXT_OUTPUT_NODE_TYPE and set(config).issubset(TEXT_OUTPUT_CONFIG_FIELDS):
+            try:
+                config = validate_text_output_config(config).model_dump(mode="json")
+            except (ValueError, ValidationError):
+                pass
         normalized.append(node.model_copy(update={"config": config}, deep=True))
     return normalized, [edge.model_copy(deep=True) for edge in edges]
+
+
+SAFE_ASR_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _valid_asr_model(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and SAFE_ASR_MODEL.fullmatch(value) is not None
+        and value not in {".", ".."}
+        and not value.endswith(".")
+    )
+
+
+def _config_issue(prefix: str, error: ValidationError, *, node_id: str):
+    detail = error.errors()[0]
+    field = ".".join(str(part) for part in detail.get("loc", ()))
+    message = f"{prefix}: {field or 'config'} {detail.get('msg', '')}".strip()
+    return _issue("INVALID_NODE_CONFIG", message, node_id=node_id)
+
+
+def _config_error_issue(prefix: str, error: Exception, *, node_id: str):
+    if isinstance(error, ValidationError):
+        return _config_issue(prefix, error, node_id=node_id)
+    return _issue("INVALID_NODE_CONFIG", f"{prefix}: {error}", node_id=node_id)
 
 
 def validate_workflow_graph(
@@ -292,7 +446,7 @@ def validate_workflow_graph(
             issues.append(_issue("DUPLICATE_NODE_ID", "节点 ID 重复", node_id=node.id))
             continue
         node_by_id[node.id] = node
-        if node.type == "audio_input":
+        if node.type == INPUT_NODE_TYPE:
             input_nodes.append(node)
             if node.config:
                 issues.append(
@@ -302,7 +456,7 @@ def validate_workflow_graph(
                         node_id=node.id,
                     )
                 )
-        elif node.type == "audio_output":
+        elif node.type == AUDIO_OUTPUT_NODE_TYPE:
             output_nodes.append(node)
             unexpected = set(node.config) - {"filename_stem"}
             if unexpected:
@@ -324,6 +478,12 @@ def validate_workflow_graph(
                         node_id=node.id,
                     )
                 )
+        elif node.type == TEXT_OUTPUT_NODE_TYPE:
+            output_nodes.append(node)
+            try:
+                validate_text_output_config(node.config)
+            except (ValueError, ValidationError) as error:
+                issues.append(_config_error_issue("text_output 配置无效", error, node_id=node.id))
         elif node.type == PREPROCESS_NODE_TYPE:
             unexpected = set(node.config) - {
                 "provider",
@@ -343,12 +503,9 @@ def validate_workflow_graph(
                 try:
                     config = PreprocessConfig.model_validate(node.config, strict=True)
                 except ValidationError as error:
-                    detail = error.errors()[0]
-                    field = ".".join(str(part) for part in detail.get("loc", ()))
-                    message = (
-                        f"preprocess 配置无效: {field or 'config'} {detail.get('msg', '')}"
-                    ).strip()
-                    issues.append(_issue("INVALID_NODE_CONFIG", message, node_id=node.id))
+                    issues.append(
+                        _config_error_issue("preprocess 配置无效", error, node_id=node.id)
+                    )
                 else:
                     if config.provider not in {"mock", "ffmpeg"}:
                         issues.append(
@@ -358,6 +515,11 @@ def validate_workflow_graph(
                                 node_id=node.id,
                             )
                         )
+        elif node.type == ASR_NODE_TYPE:
+            try:
+                validate_asr_config(node.config)
+            except (ValueError, ValidationError) as error:
+                issues.append(_config_error_issue("asr 配置无效", error, node_id=node.id))
         else:
             issues.append(
                 _issue(
@@ -370,7 +532,12 @@ def validate_workflow_graph(
     if len(input_nodes) != 1:
         issues.append(_issue("INVALID_INPUT_COUNT", "工作流必须恰好包含一个 audio_input 节点"))
     if not output_nodes:
-        issues.append(_issue("INVALID_OUTPUT_COUNT", "工作流必须至少包含一个 audio_output 节点"))
+        issues.append(
+            _issue(
+                "INVALID_OUTPUT_COUNT",
+                "工作流必须至少包含一个 audio_output 或 text_output 终端节点",
+            )
+        )
 
     edge_by_id: dict[str, WorkflowEdge] = {}
     incoming: dict[str, list[WorkflowEdge]] = {node_id: [] for node_id in node_by_id}
@@ -395,27 +562,34 @@ def validate_workflow_graph(
             issues.append(_issue("UNKNOWN_EDGE_ENDPOINT", "连接源节点不存在", edge_id=edge.id))
         if target is None:
             issues.append(_issue("UNKNOWN_EDGE_ENDPOINT", "连接目标节点不存在", edge_id=edge.id))
-        if edge.source_port != PORT_NAME or edge.target_port != PORT_NAME:
-            issues.append(
-                _issue(
-                    "INVALID_PORT",
-                    "首版连接端口只能是 audio",
-                    edge_id=edge.id,
+        if source is not None and target is not None:
+            source_ports = NODE_PORTS.get(source.type, (frozenset(), frozenset()))[1]
+            target_ports = NODE_PORTS.get(target.type, (frozenset(), frozenset()))[0]
+            if (
+                edge.source_port not in source_ports
+                or edge.target_port not in target_ports
+                or edge.source_port != edge.target_port
+            ):
+                issues.append(
+                    _issue(
+                        "INVALID_PORT",
+                        "连接端口必须与源节点输出端口和目标节点输入端口一致",
+                        edge_id=edge.id,
+                    )
                 )
-            )
-        if source is not None and source.type not in {"audio_input", PREPROCESS_NODE_TYPE}:
+        if source is not None and not NODE_PORTS.get(source.type, (frozenset(), frozenset()))[1]:
             issues.append(
                 _issue(
                     "INVALID_EDGE_DIRECTION",
-                    "只有 audio_input 或 preprocess 可以作为连接源",
+                    f"{source.type} 不能作为连接源",
                     edge_id=edge.id,
                 )
             )
-        if target is not None and target.type not in {PREPROCESS_NODE_TYPE, "audio_output"}:
+        if target is not None and not NODE_PORTS.get(target.type, (frozenset(), frozenset()))[0]:
             issues.append(
                 _issue(
                     "INVALID_EDGE_DIRECTION",
-                    "只有 preprocess 或 audio_output 可以作为连接目标",
+                    f"{target.type} 不能作为连接目标",
                     edge_id=edge.id,
                 )
             )
@@ -431,14 +605,16 @@ def validate_workflow_graph(
             issues.append(
                 _issue(
                     "INVALID_OUTPUT_INPUT_COUNT",
-                    "audio_output 必须恰好有一条输入连接",
+                    f"{node.type} 必须恰好有一条输入连接",
                     node_id=node.id,
                 )
             )
     for node in nodes:
         if node.id not in node_by_id or node.type not in {
             PREPROCESS_NODE_TYPE,
-            "audio_output",
+            ASR_NODE_TYPE,
+            TEXT_OUTPUT_NODE_TYPE,
+            AUDIO_OUTPUT_NODE_TYPE,
         }:
             continue
         if len(incoming[node.id]) != 1:
@@ -516,13 +692,13 @@ def validate_workflow_graph(
     for node in nodes:
         if (
             node.id in node_by_id
-            and node.type != "audio_output"
+            and node.type not in OUTPUT_NODE_TYPES
             and node.id not in can_reach_output
         ):
             issues.append(
                 _issue(
                     "NODE_HAS_NO_OUTPUT",
-                    "非输出节点必须能到达 audio_output",
+                    "非终端节点必须能到达 audio_output 或 text_output",
                     node_id=node.id,
                 )
             )

@@ -8,7 +8,7 @@
 
 - Vue WebUI 通过 REST 查询/操作资源，通过 WebSocket 接收通知；FastAPI 负责请求校验、路由和错误转换，不直接运行模型。
 - `domain/` 定义领域模型；`storage/` 的 ProjectStore 负责项目状态的读写、路径校验和恢复扫描。
-- `application/` 的 JobManager 管理任务、取消信号及全局并发；PipelineRunner 管理旧五阶段顺序、状态迁移和恢复，WorkflowRunner 按依赖顺序执行音频输入、预处理和音频输出节点。
+- `application/` 的 JobManager 管理任务、取消信号及全局并发；PipelineRunner 管理旧五阶段顺序、状态迁移和恢复，WorkflowRunner 按依赖顺序执行音频输入、预处理、ASR 及音频/文本输出节点。
 - Stage 调用 Provider/Exporter 并通过存储层保存产物；Provider 只实现算法或外部服务能力，不直接修改 Job/项目状态。
 - 当前使用单进程、单 Uvicorn worker 和进程内异步任务，全局并发默认 1；不同音频可以独立排队，同一音频不能同时运行或排队两个任务。
 - 阻塞型模型调用不能占用事件循环，应通过子进程或线程执行。数据库、外部 Worker、多进程调度不属于当前架构。
@@ -63,15 +63,19 @@
 
 ## 7. 节点工作流首版
 
-- 与旧 Pipeline 并存，包含一个 `audio_input`、零个或多个 `preprocess` 和至少一个 `audio_output`；支持直出、串联预处理及分支并存。处理节点和输出节点恰好一条音频入边，输入没有入边，输出没有出边；拒绝环和不可达节点。本轮不支持汇合、ASR 或文本/视频图输出。
+- 与旧 Pipeline 并存，包含一个 `audio_input`、零个或多个 `preprocess` / `asr` 和至少一个终端输出（`audio_output` 或 `text_output`）；支持直出、串联预处理、识别及分支并存。除输入外各节点恰好一条类型兼容入边，输入无入边，终端输出无出边；拒绝环和不可达节点。尚无汇合、对齐/翻译节点或视频图输出。
 - 预处理配置复用 `PreprocessConfig`，保存时补齐默认值；省略默认值与显式默认值具有相同执行语义。Mock 生成独立的原字节副本，不转换采样率/声道；FFmpeg 由服务端配置可执行文件，生成独立 WAV。`preserve_original` 为兼容字段，无论取值如何都不能删除或覆盖源文件。
-- 节点按拓扑依赖顺序逐个执行，读取其直接上游的产物；输出复制直接上游字节，沿用其后缀和媒体类型，FFmpeg 下游使用 `.wav` / `audio/wav`。节点数组顺序不决定执行顺序；单次图运行仍占一个全局并发名额，不增加节点并行调度。
+- 端口有类型：音频输入/预处理输出 `audio`，预处理/ASR/音频输出接收 `audio`；ASR 输出 `transcript`，文本输出接收 `transcript`。边的端口名与类型必须匹配，不能以音频字节冒充文本。仅含 ASR 与文本输出而无音频输出的图合法。
+- 节点按拓扑依赖顺序逐个执行，读取其直接上游的产物；音频输出复制直接上游字节，沿用其后缀和媒体类型，FFmpeg 下游使用 `.wav` / `audio/wav`。节点数组顺序不决定执行顺序；单次图运行仍占一个全局并发名额，不增加节点并行调度。
+- ASR 独立配置 Mock/CrispASR、语言、模型/后端、VAD 和分段时长，不绑定旧 Pipeline 配置或源语言。Mock 是固定示例识别，产物语言沿用节点设置；CrispASR 使用服务端程序/模型根目录和节点的安全标识，执行前要求直接上游为完整、非空、16 kHz 单声道 PCM WAV；不满足时提示添加或调整 FFmpeg，不隐式转换。已符合格式的源 WAV 可直接识别。服务端执行设置在运行提交时捕获，排队期间的设置变化不影响该运行；本机路径不写入图或识别产物。
+- ASR 结果保存独立 `transcript.json`（沿用 Transcript/Segment 格式），artifact.port 为 `transcript`；文本输出每节点选择 TXT/SRT/VTT/LRC 中一种，导出原文，artifact.port 为 `text`。TXT 不要求时间戳；字幕需完整有效时间范围，缺失时只使对应输出失败。字幕适配不修改上游译文字段或旧导出语义。
 - 每项目保存 `workflow.json` 和不可变的 `workflow-revisions/{revision:08d}.json`。`revision` 用于乐观锁；`workflow_revision` 用于执行版本。纯布局、节点/边数组排序、边 ID 的变化不提升执行版本。未保存时返回默认图（版本 0），第一次保存建立版本 1。
-- 每音频独立保存 `workflow-runs/{rid}/run.json` 与 `nodes/{node_id}/{filename}`；主音频放项目根目录，其他音频放 `audios/{aid}/` 下。运行包含不可变图/配置快照，成功的预处理及输出节点产物包含大小、SHA256 和下载地址，不覆盖旧 `job.json` 或旧产物。
-- API 在项目范围提供 `/workflow` 读取/保存、`/workflow/validate` 校验，在音频范围提供 `/workflow-runs` 创建/分页查询，以及运行详情、取消、逐节点输出元数据/下载。接口基线见[音频直通里程碑](../spec/workflow-audio-mvp.md)，预处理扩展见[预处理节点契约](../spec/workflow-preprocess.md)；预处理产物复用同一逐节点下载路由。
+- 每音频独立保存 `workflow-runs/{rid}/run.json` 与 `nodes/{node_id}/{filename}`；主音频放项目根目录，其他音频放 `audios/{aid}/` 下。运行包含不可变图/配置快照，成功的预处理、ASR 及输出节点产物包含大小、SHA256 和下载地址，不覆盖旧 `job.json` 或旧产物。
+- API 在项目范围提供 `/workflow` 读取/保存、`/workflow/validate` 校验，在音频范围提供 `/workflow-runs` 创建/分页查询，以及运行详情、取消、逐节点输出元数据/下载。接口基线见[音频直通里程碑](../spec/workflow-audio-mvp.md)，扩展见[预处理节点](../spec/workflow-preprocess.md)和[ASR/文本输出契约](../spec/workflow-asr.md)；所有节点产物复用同一逐节点下载路由，历史路径名 `outputs` 不限定音频。
 - 新旧任务共用 JobManager 注册表、音频锁和全局并发限制，同音频不能重叠；任一活动任务阻止项目删除。旧取消接口不能取消图运行，须用图运行自己的取消接口。
 - 复制在线程中分块执行，校验字节数、计算 SHA256，同目录临时文件同步后原子发布。成功节点立即落盘；节点失败只阻塞其依赖下游，独立分支继续。整体按最终输出聚合：全部成功为 `completed`，部分成功为 `partial`，无成功输出为 `failed`。拒绝危险文件名、目录穿越和源/产物路径符号链接。
 - FFmpeg 不经过 shell，写入同节点目录的临时 WAV，完成并校验后原子发布；固定超时为 300 秒。取消、超时和服务关闭需要终止并回收子进程、等待复制线程退出及清理未完成临时文件，之后才释放音频忙碌边界；错误不向客户端暴露绝对路径或原始 stderr。
+- CrispASR 同样使用安全参数数组而非 shell；超时取运行提交时生效的服务器配置，stdout/stderr 丢弃，不将原始诊断写入用户错误。取消和关闭须处理启动竞态、终止及回收进程，并等待产物写入线程退出；未完成节点不得在取消结束后发布产物。文本文件使用 UTF-8/LF，字幕原文适配使用片段副本，不改变上游识别结果。
 - 当前图运行通过 REST 轮询，不新增 WebSocket 事件。退出/重启将未完成图运行标为 `interrupted`，不自动恢复；可按当前图新建运行。历史默认保留，但尚无指定节点重跑、结果复用、空间统计或清理入口。
 
 各 Provider 的使用、限制和安全规则见 [CrispASR](crispasr_provider.md)、[全局本地 ASR 设置](voicetransl_global_settings.md)、[翻译 Provider](translation_providers.md) 与 [Provider Profile](provider_profiles.md)。测试命令及交付要求统一维护在 [AGENTS.md](../AGENTS.md)。

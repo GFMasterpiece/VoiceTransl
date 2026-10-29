@@ -428,7 +428,7 @@ function guardWorkflowNavigation(action: () => void, { resetPipeline = true } = 
     return
   }
   const leaveWorkflow = () => {
-    workflowStore.stop()
+    workflowStore.leaveEditor()
     workspaceMode.value = 'pipeline'
     if (resetPipeline) detail.stop()
   }

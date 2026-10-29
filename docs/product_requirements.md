@@ -18,7 +18,7 @@
 
 ## 当前版本与目标的区别
 
-当前保留固定的 `preprocess → asr → alignment → translation → export` 五阶段，并新增独立的音频节点图编辑器：能连接一个音频输入、多个 Mock/FFmpeg 预处理与音频输出，支持直出、串联与分支，独立配置节点，保存工作流修订并运行、查看历史和下载。当前不含 ASR/翻译处理节点、文本/视频图输出、从节点重跑或产物清理，不能等同于完整 ComfyUI 式处理图。现行阶段、任务和文件契约见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)、[首版里程碑](../spec/workflow-audio-mvp.md)和[预处理里程碑](../spec/workflow-preprocess.md)。
+当前保留固定的 `preprocess → asr → alignment → translation → export` 五阶段，并新增独立的节点图编辑器：能连接一个音频输入、多个 Mock/FFmpeg 预处理、Mock/CrispASR 识别与音频/文本输出，支持直出、串联与分支，独立配置节点，保存工作流修订并运行、查看历史和下载。文本输出支持 TXT/SRT/VTT/LRC 识别原文。当前不含对齐/翻译节点、视频图输出、从节点重跑或产物清理，不能等同于完整 ComfyUI 式处理图。现行契约见[架构约定](architecture.md)、[前端工作流](frontend_workflow.md)和 `spec/` 中[音频直通](../spec/workflow-audio-mvp.md)、[预处理](../spec/workflow-preprocess.md)、[ASR/文本输出](../spec/workflow-asr.md)里程碑。
 
 ## 初步验收方向
 
@@ -38,4 +38,4 @@
 
 已确认采用有类型端口的 DAG（允许分支、无循环）、项目级可编辑工作流、不可变运行快照和默认保留历史；处理步骤作为节点，Provider 属于节点配置。允许不含处理节点的输入输出直通；重跑仅重算所选节点及下游，必要上游失效时拒绝启动，不自动扩大范围。首版不增加音频加封面生成视频。详细决策维护在[节点工作流规格](../spec/workflow-editor.md)，不在此重复完整契约。
 
-后续仍需细化通用节点端口、配置/Provider 表达、缓存指纹、汇合调度、文本/视频节点、手动清理、旧配置迁移和更完整的画布操作。已确认方向不等于全部功能已经实现；以实际文档和逐个获批、验收的里程碑为准。
+后续仍需细化通用节点端口、配置/Provider 表达、缓存指纹、汇合调度、更多文本处理及视频节点、手动清理、旧配置迁移和更完整的画布操作。已确认方向不等于全部功能已经实现；以实际文档和逐个获批、验收的里程碑为准。

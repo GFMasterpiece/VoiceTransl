@@ -32,6 +32,8 @@ const knownBackends = [
   { value: 'whisper', label: 'Whisper' },
   { value: 'mega-asr', label: 'Mega ASR' },
   { value: 'voxtral', label: 'Voxtral' },
+  { value: 'voxtral4b', label: 'Voxtral 4B' },
+  { value: 'granite', label: 'Granite' },
 ]
 const backendOptions = computed(() => {
   const values = [...new Set([...knownBackends.map((item) => item.value), props.config.backend, ...(catalog.value?.backends || [])])]

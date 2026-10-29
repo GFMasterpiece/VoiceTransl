@@ -15,6 +15,11 @@ class PreprocessConfig(_ConfigModel):
     preserve_original: bool = True
 
 
+SUPPORTED_ASR_BACKENDS = frozenset(
+    {"qwen3", "qwen3-1.7b", "whisper", "mega-asr", "voxtral", "voxtral4b", "granite"}
+)
+
+
 class ASRConfig(_ConfigModel):
     provider: str = Field(default="mock", min_length=1, max_length=64)
     # The profile is resolved and copied into the job snapshot when a run
@@ -131,4 +136,5 @@ __all__ = [
     "PreprocessConfig",
     "TranslationConfig",
     "default_pipeline_config",
+    "SUPPORTED_ASR_BACKENDS",
 ]

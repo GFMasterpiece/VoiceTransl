@@ -35,6 +35,7 @@ from ..providers import (
     MockPreprocessProvider,
     MockTranslatorProvider,
 )
+from .workflow_asr import ASRSettings
 from .workflow_runner import execute_workflow_run
 
 logger = logging.getLogger("voicetransl.jobs")
@@ -120,6 +121,16 @@ class JobManager:
                 if issues:
                     raise ValueError("invalid workflow")
                 snapshot = workflow_snapshot(document)
+                # Queue-time capture: later runtime setting edits cannot alter
+                # an already accepted run.
+                asr_settings = ASRSettings(
+                    executable=self.crispasr_executable,
+                    model_dir=self.crispasr_model_dir,
+                    timeout_seconds=self.crispasr_timeout_seconds,
+                    process_factory=self.crispasr_process_factory,
+                    mock_delay_ms=self.delay_ms,
+                )
+                queued_ffmpeg_path = self.ffmpeg_path
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",
                     project_id=project_id,
@@ -154,7 +165,11 @@ class JobManager:
                                 store.save_workflow_run(run)
                                 return
                             await execute_workflow_run(
-                                store, run, event, ffmpeg_path=self.ffmpeg_path
+                                store,
+                                run,
+                                event,
+                                ffmpeg_path=queued_ffmpeg_path,
+                                asr_settings=asr_settings,
                             )
                     except asyncio.CancelledError:
                         if run.status in {
