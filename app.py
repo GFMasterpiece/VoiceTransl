@@ -6,32 +6,24 @@ os.chdir(sys._MEIPASS) if _FROZEN else os.chdir(os.path.dirname(os.path.abspath(
 _TRANSLATE_CMD = ['translate/translate'] if _FROZEN else [sys.executable, 'translate.py']
 _SEPARATE_CMD = ['separate/separate'] if _FROZEN else [sys.executable, 'separate.py']
 import shutil
-import shlex
 import socket
-import tempfile
+
+from desktop_runtime import (
+    ffmpeg_paths,
+    format_command,
+    popen as runtime_popen,
+    resolve_executable,
+    run as runtime_run,
+    split_command,
+    start_shutdown,
+    terminate_process,
+)
+
 
 def _resolve_ffmpeg() -> tuple[str, str]:
     """解析 ffmpeg/ffprobe 路径"""
-    if os.name == 'nt':
-        _ffmpeg = 'ffmpeg/ffmpeg.exe'
-        _ffprobe = 'ffmpeg/ffprobe.exe'
-    else:
-        _ffmpeg = 'ffmpeg/ffmpeg'
-        _ffprobe = 'ffmpeg/ffprobe'
+    return ffmpeg_paths()
 
-    # 优先使用本地 ffmpeg 目录
-    if not os.path.exists(_ffmpeg):
-        # 回退检查系统 PATH
-        _ffmpeg = shutil.which('ffmpeg') or _ffmpeg
-        _ffprobe = shutil.which('ffprobe') or _ffprobe
-
-    if not os.path.exists(_ffmpeg):
-        raise RuntimeError(
-            '未找到 ffmpeg，请将 ffmpeg.exe 放置在 ffmpeg 目录中，'
-            '或安装 ffmpeg 并添加到系统 PATH 环境变量'
-        )
-
-    return _ffmpeg, _ffprobe
 
 _FFMPEG, _FFPROBE = _resolve_ffmpeg()
 from i18n import _, set_language, get_language
@@ -74,13 +66,7 @@ NO_TRANSLATION = '不进行翻译'
 
 
 def _split_command_template(value):
-    if os.name != 'nt':
-        return shlex.split(value)
-    tokens = shlex.split(value, posix=False)
-    return [
-        token[1:-1] if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'" else token
-        for token in tokens
-    ]
+    return split_command(value)
 
 
 def _set_command_option(command, option_names, preferred_option, value):
@@ -100,7 +86,7 @@ def _set_command_option(command, option_names, preferred_option, value):
 
 
 def _format_command(command):
-    return subprocess.list2cmdline(command) if os.name == 'nt' else shlex.join(command)
+    return format_command(command)
 
 
 def _build_llama_server_command(model_file, gpu_layers, param_llama, port):
@@ -134,15 +120,10 @@ def _build_llama_server_command(model_file, gpu_layers, param_llama, port):
     if unresolved:
         raise ValueError(f'Unresolved llama-server placeholders: {unresolved}')
 
-    executable = Path(command[0])
-    if not executable.is_absolute():
-        executable = Path.cwd() / executable
-    if os.name == 'nt' and not executable.is_file() and not executable.suffix:
-        executable = Path(str(executable) + '.exe')
-    if executable.is_file():
-        command[0] = str(executable.resolve())
-    elif shutil.which(command[0]) is None:
+    executable = resolve_executable(command[0])
+    if executable is None:
         raise FileNotFoundError(f'llama-server executable not found: {command[0]}')
+    command[0] = str(executable)
 
     _set_command_option(command, ('--model', '-m'), '--model', model_value)
     _set_command_option(command, ('--port',), '--port', str(port))
@@ -493,7 +474,8 @@ class ConcurrentTranslationPool:
 
     @staticmethod
     def _translate_worker_thread(task_queue, result_queue, msg_queue, stop_event,
-                                 project_dir, base_config_path, engine, worker_idx):
+                                 project_dir, base_config_path, engine, worker_idx,
+                                 active_procs=None, procs_lock=None):
         """工作线程函数：从队列取任务并执行翻译"""
         while not stop_event.is_set():
             try:
@@ -512,14 +494,15 @@ class ConcurrentTranslationPool:
             # 执行翻译
             try:
                 ConcurrentTranslationPool._translate_one_impl(
-                    tf_dict, worker_idx, project_dir, base_config_path, engine, msg_queue)
+                    tf_dict, worker_idx, project_dir, base_config_path, engine, msg_queue,
+                    active_procs=active_procs, procs_lock=procs_lock)
                 result_queue.put(('success', worker_idx))
             except Exception as e:
                 result_queue.put(('error', worker_idx, str(e)))
 
     @staticmethod
     def _translate_one_impl(tf_dict, worker_idx, project_dir, base_config_path,
-                            engine, msg_queue):
+                            engine, msg_queue, active_procs=None, procs_lock=None):
         """在线程中执行单个文件的翻译"""
         base_path = tf_dict['base_path']
         json_src = tf_dict['json_src']
@@ -545,10 +528,9 @@ class ConcurrentTranslationPool:
         # 准备独立配置文件
         ConcurrentTranslationPool._prepare_config_impl(workspace, base_config_path, project_dir)
 
+        proc = None
         try:
             send_status(_("status_translating_with", idx=worker_idx, engine=engine, workspace=workspace))
-            creationflags = 0x08000000 if os.name == 'nt' else 0
-
             # Force the translation subprocess and this reader to agree on
             # UTF-8. Windows otherwise selects GBK for redirected pipes, and
             # valid filename characters such as ♪ make logging.StreamHandler
@@ -559,13 +541,16 @@ class ConcurrentTranslationPool:
             if ConcurrentTranslationPool.verbose_galtransl:
                 proc_env['GALTRANSL_VERBOSE_STDOUT'] = '1'
 
-            proc = subprocess.Popen(
+            proc = runtime_popen(
                 [*_TRANSLATE_CMD, workspace, engine],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding='utf-8', errors='replace',
-                creationflags=creationflags, bufsize=1,
+                bufsize=1,
                 env=proc_env,
             )
+            if active_procs is not None and procs_lock is not None:
+                with procs_lock:
+                    active_procs.append(proc)
 
             # 翻译日志解析器：将 GalTransl 三行格式转换为 JSON
             _trans_parser = _TranslationLogParser()
@@ -596,6 +581,11 @@ class ConcurrentTranslationPool:
         except Exception as e:
             send_status(_("status_translating_error", idx=worker_idx, base=base, error=e))
             raise
+        finally:
+            if proc is not None and active_procs is not None and procs_lock is not None:
+                with procs_lock:
+                    if proc in active_procs:
+                        active_procs.remove(proc)
 
         # 生成翻译后字幕
         send_status(_("status_translating_srt", idx=worker_idx, base=base))
@@ -737,7 +727,7 @@ class ConcurrentTranslationPool:
                 target=ConcurrentTranslationPool._translate_worker_thread,
                 args=(self._task_queue, self._result_queue, self._msg_queue,
                       self._thread_stop_event, self._project_dir, self._base_config_path,
-                      engine, i),
+                      engine, i, self._active_translate_procs, self._procs_lock),
                 daemon=True
             )
             self._active_threads.append(t)
@@ -773,7 +763,9 @@ class ConcurrentTranslationPool:
                 try:
                     ConcurrentTranslationPool._translate_one_impl(
                         tf_dict, 0, self._project_dir, self._base_config_path,
-                        self._engine, self._msg_queue)
+                        self._engine, self._msg_queue,
+                        active_procs=self._active_translate_procs,
+                        procs_lock=self._procs_lock)
                 except Exception as e:
                     with self._error_lock:
                         self._error_count += 1
@@ -829,23 +821,7 @@ class ConcurrentTranslationPool:
             self._thread_stop_event.set()
 
         # 终止所有在途的 GalTransl 翻译子进程
-        with self._procs_lock:
-            for proc in self._active_translate_procs:
-                try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                except Exception:
-                    pass
-            # 等待子进程终止
-            for proc in self._active_translate_procs:
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-            self._active_translate_procs.clear()
+        self._terminate_active_translate_procs()
 
         # 清空任务队列（丢弃未处理的任务）
         while True:
@@ -867,23 +843,37 @@ class ConcurrentTranslationPool:
         # 排空消息队列中所有残留
         self._msg_queue.drain_all(timeout=2.0)
 
+    def _terminate_active_translate_procs(self):
+        """终止并回收所有在途的翻译子进程。"""
+        with self._procs_lock:
+            procs = list(self._active_translate_procs)
+        for proc in procs:
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        for proc in procs:
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=3)
+                except (OSError, subprocess.SubprocessError):
+                    terminate_process(proc, timeout=3)
+        with self._procs_lock:
+            self._active_translate_procs[:] = [
+                proc for proc in self._active_translate_procs
+                if proc.poll() is None
+            ]
+
     def _stop_shared_local_model(self):
         """停止共享的本地模型"""
         with self._local_model_lock:
             proc = self._shared_local_model_proc
             self._shared_local_model_proc = None
             self._shared_local_model_port = None
-        if proc:
-            try:
-                if proc.poll() is None:
-                    self._msg_queue.put("status", _("status_local_model_stopping"))
-                    proc.terminate()
-                    proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        if proc and proc.poll() is None:
+            self._msg_queue.put("status", _("status_local_model_stopping"))
+            terminate_process(proc, timeout=5)
 
     def _start_local_model(self, worker_idx):
         """启动共享的本地模型服务"""
@@ -906,12 +896,10 @@ class ConcurrentTranslationPool:
             args = _build_llama_server_command(
                 sakura_file, sakura_mode, param_llama, port
             )
-            creationflags = 0x08000000 if os.name == 'nt' else 0
             expected_model = str(Path(sakura_file).name)
-            proc = subprocess.Popen(
+            proc = runtime_popen(
                 args,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                creationflags=creationflags,
             )
             threading.Thread(
                 target=_stream_proc_to_queue,
@@ -948,11 +936,7 @@ class ConcurrentTranslationPool:
                 if time() - start_wait > 120:
                     self._msg_queue.put("status",
                         _("status_local_model_timeout"))
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
+                    terminate_process(proc, timeout=3)
                     return None, None
                 sleep(1)
 
@@ -1884,16 +1868,9 @@ class MainWindow(QMainWindow):
         if not self.auto_shutdown_checkbox.isChecked():
             return
 
-        if sys.platform == 'darwin':
-            command = ['osascript', '-e', 'tell application "System Events" to shut down']
-        elif os.name == 'nt':
-            command = ['shutdown', '/s', '/t', '0']
-        else:
-            command = ['shutdown', '-h', 'now']
-
         self._emit_status(_("status_auto_shutdown"))
         try:
-            subprocess.Popen(command)
+            start_shutdown()
         except Exception as e:
             self._emit_status(_("status_auto_shutdown_error", error=e))
 
@@ -1951,11 +1928,7 @@ class MainWindow(QMainWindow):
                         # 再次检查
                         if proc.poll() is None:
                             # 强制终止
-                            try:
-                                proc.kill()
-                                proc.wait(timeout=2)
-                            except Exception:
-                                pass
+                            terminate_process(proc, timeout=2)
 
         if local_model_running:
             print(_("status_local_model_closed"))
@@ -2901,11 +2874,9 @@ class MainWorker(QObject):
         self.status.emit(msg)
 
     def _start_process(self, args, label=None):
-        creationflags = 0x08000000 if os.name == 'nt' else 0
-        proc = subprocess.Popen(
+        proc = runtime_popen(
             args,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            creationflags=creationflags,
         )
         reader = threading.Thread(
             target=_stream_proc_to_queue,
@@ -2923,14 +2894,7 @@ class MainWorker(QObject):
         if not proc:
             return
         try:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait(timeout=3)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            terminate_process(proc, timeout=3)
         finally:
             reader = None
             with self._child_processes_lock:
@@ -3437,11 +3401,10 @@ class MainWorker(QObject):
     def _get_audio_duration(self, audio_file):
         """获取音频文件时长（秒）"""
         try:
-            creationflags = 0x08000000 if os.name == 'nt' else 0
-            result = subprocess.run(
+            result = runtime_run(
                 [_FFPROBE, '-v', 'error', '-show_entries', 'format=duration',
                  '-of', 'default=noprint_wrappers=1:nokey=1', audio_file],
-                capture_output=True, text=True, timeout=30, creationflags=creationflags
+                capture_output=True, text=True, timeout=30,
             )
             return float(result.stdout.strip())
         except Exception as e:

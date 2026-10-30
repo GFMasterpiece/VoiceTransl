@@ -50,6 +50,10 @@ Download the latest version from [GitHub Releases](https://github.com/shinnpuru/
 
 See the [video tutorial](https://www.bilibili.com/video/BV12FjN6iEmz) for usage instructions.
 
+The desktop app uses `desktop_runtime.py` for executable lookup, command handling, and child processes. FFmpeg and FFprobe are resolved independently, first from the app's `ffmpeg/` directory, then from PATH. Supply executables for the current operating system. Source and packaged entry points and existing command templates remain supported.
+
+Task cleanup stops and waits for directly launched child processes, killing and reaping them after a timeout. This does not guarantee cleanup of descendants created by external tools. Necessary differences such as hidden Windows consoles, legacy command parsing, and shutdown commands stay in the same module; ordinary filesystem operations use Python's standard library.
+
 ## Disclaimer
 
 This software is intended only for learning and communication and must not be used for commercial purposes. The authors are not responsible for user conduct and do not guarantee the accuracy of translation results. By using this software, you agree to assume all associated risks, including copyright and legal risks. Follow your local laws and regulations, and do not use this software for unlawful activities.
