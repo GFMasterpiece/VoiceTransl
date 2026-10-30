@@ -1,4 +1,3 @@
-import { computed, inject, provide, type ComputedRef, type InjectionKey } from 'vue'
 import type { Capabilities, CapabilityNode } from './capabilities'
 
 export type PortName = string
@@ -13,8 +12,6 @@ export interface NodeRegistry {
   kinds: readonly CapabilityNode[]
   kind(type: string): CapabilityNode | null
   has(type: string): boolean
-  outputPorts(type: string): readonly PortName[]
-  inputPorts(type: string): readonly PortName[]
   outputPortForNode(type: string): PortName | null
   inputPortForNode(type: string): PortName | null
   isTerminalNode(type: string): boolean
@@ -46,8 +43,6 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     kinds: nodes,
     kind: (type) => byType.get(type) || null,
     has: (type) => byType.has(type),
-    outputPorts: (type) => byType.get(type)?.outputPorts || [],
-    inputPorts: (type) => byType.get(type)?.inputPorts || [],
     outputPortForNode: (type) => byType.get(type)?.outputPorts[0] || null,
     inputPortForNode: (type) => byType.get(type)?.inputPorts[0] || null,
     isTerminalNode: (type) => byType.get(type)?.terminal === true,
@@ -84,11 +79,4 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     },
   }
   return registry
-}
-
-export const NODE_REGISTRY_KEY: InjectionKey<ComputedRef<NodeRegistry | null>> = Symbol('workflow-node-registry')
-
-export function provideNodeRegistry(registry: ComputedRef<NodeRegistry | null>) { provide(NODE_REGISTRY_KEY, registry) }
-export function useNodeRegistry(): ComputedRef<NodeRegistry | null> {
-  return inject(NODE_REGISTRY_KEY, computed(() => null))
 }
