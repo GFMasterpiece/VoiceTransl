@@ -1,67 +1,104 @@
-<p align="center">
-  <img src="avatar.png" alt="VoiceTransl logo" width="160" />
-</p>
+# VoiceTransl
 
-<h1 align="center">VoiceTransl</h1>
+[简体中文](README.md) | English
 
-<div align="center">
-  <img src="https://img.shields.io/github/v/release/shinnpuru/VoiceTransl" alt="Latest release" />
-  <img src="https://img.shields.io/github/license/shinnpuru/VoiceTransl" alt="License" />
-  <img src="https://img.shields.io/github/stars/shinnpuru/VoiceTransl" alt="GitHub stars" />
-</div>
+VoiceTransl is building a visual audio workflow with ComfyUI-style node connections, independent node settings, and immutable snapshots for each run.
 
-<p align="center"><a href="README.md">简体中文</a> | English</p>
+**This is a Web development version with audio passthrough and Mock validation only. It does not perform real transcription, translation, or media conversion.** The historical desktop app is no longer maintained or used as the current installation entry point. See the [roadmap](docs/roadmap.md) for legacy-file cleanup progress.
 
-VoiceTransl is a Windows subtitle-processing and translation application with tools for video downloading, audio extraction, existing-subtitle translation, video rendering, and subtitle summarization. This project is based on [GalTransl](https://github.com/xd2333/GalTransl) and is licensed under the GPLv3. Automatic transcription is no longer available in the desktop app; audio/video translation requires a matching SRT sidecar file.
+## Current Features
 
-The Web development version currently provides only a minimal audio input/output workflow and Mock validation nodes, not real recognition or translation. See the [roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) for its scope. The features listed here primarily describe the desktop app.
+- Paginated projects, multi-audio upload queues, and per-file retries. Creating a project requires explicit source and target languages; uploading does not start a run.
+- A project-level workflow canvas with independent node settings, typed-port validation, saved revisions, and conflict detection. The backend capability API supplies the node catalog and settings.
+- A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
+- Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.
+- Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
 
-## Features
+Real cloud/local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
 
-- Supports multiple translation models, including online models through any OpenAI-compatible API and local models through Sakura, GalTransl, Ollama, and llama.cpp.
-- Supports AMD, NVIDIA, and Intel GPU acceleration, with configurable VRAM usage for the translation engine.
-- Accepts multiple input formats, including audio, video, and SRT subtitle files.
-- Produces SRT and LRC subtitles.
-- Supports Japanese, English, Korean, Russian, and French.
-- Accepts existing SRT subtitles and converts, translates, and merges them into the requested output formats.
-- Supports custom translation dictionaries for input and output replacement.
-- Accepts world-book and script content as custom translation reference material.
-- Downloads videos directly from YouTube, Bilibili, and other media links.
-- Supports batch processing of files and links with automatic file-type detection.
-- Includes audio splitting, subtitle merging, and video rendering tools.
-- Summarizes video content into concise, timestamped text.
-- Separates vocals from accompaniment with support for multiple models.
+## Development Requirements
 
-<div align="center">
-  <img src="title.jpg" alt="VoiceTransl interface" width="512" />
-</div>
+- Python 3.12 or newer in an activated isolated environment, such as venv or Conda.
+- Node.js 24 and npm. Install frontend dependencies using the committed lockfile.
+- The current Web skeleton requires no local models, FFmpeg, llama.cpp, or desktop dependencies.
 
-## Online Image
+From the repository root, with the Python environment activated:
 
-For a ready-to-use cloud environment, VoiceTransl is available on the UCloud-backed Compshare GPU rental platform. Open the [VoiceTransl image](https://www.compshare.cn/images/compshareImage-16qc028dgfoh?referral_code=1RFfR2FQ2FyEVRJMyrOn5d&ytag=GPU_YY-GH_simple) and see the [video tutorial](https://b23.tv/qN9bDHi) for instructions.
+```text
+cd backend
+python -m pip install -e ".[test]" ruff "uvicorn[standard]"
+```
 
-Registering through the author's [referral link](https://passport.compshare.cn/register?referral_code=1RFfR2FQ2FyEVRJMyrOn5d&ytag=simple_bilibili) may provide account credits and a discount, subject to the platform's current terms.
+From `frontend/`:
 
-## Download
+```text
+npm ci
+```
 
-Download the latest version from [GitHub Releases](https://github.com/shinnpuru/VoiceTransl/releases/). Extract the archive, then run `VoiceTransl.exe` on Windows.
+On Windows PowerShell, use `npm.cmd` for these npm commands if script execution policy blocks `npm`.
 
-## Usage
+## Start
 
-See the [video tutorial](https://www.bilibili.com/video/BV12FjN6iEmz) for usage instructions.
+Use two terminals. Start the backend from `backend/`, keeping a single process and worker:
 
-The desktop app uses `desktop_runtime.py` for executable lookup, command handling, and child processes. FFmpeg and FFprobe are resolved independently, first from the app's `ffmpeg/` directory, then from PATH. Supply executables for the current operating system. Source and packaged entry points and existing command templates remain supported.
+```text
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+```
 
-Task cleanup stops and waits for directly launched child processes, killing and reaping them after a timeout. This does not guarantee cleanup of descendants created by external tools. Necessary differences such as hidden Windows consoles, legacy command parsing, and shutdown commands stay in the same module; ordinary filesystem operations use Python's standard library.
+Start the frontend from `frontend/`:
 
-## Disclaimer
+```text
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
 
-This software is intended only for learning and communication and must not be used for commercial purposes. The authors are not responsible for user conduct and do not guarantee the accuracy of translation results. By using this software, you agree to assume all associated risks, including copyright and legal risks. Follow your local laws and regulations, and do not use this software for unlawful activities.
+- UI: [http://127.0.0.1:5173](http://127.0.0.1:5173/)
+- Health check: [http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
+- Interactive API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-## Contributors
+Vite proxies `/api` to the local backend. This is a local development setup, not a production deployment; do not expose it directly to the public internet. Multiple workers would have independent in-memory schedulers and are unsupported.
 
-[@shinnpuru](https://github.com/shinnpuru) [@MurthiNext](https://github.com/MurthiNext)
+## Configuration and Data
 
-## If VoiceTransl helps you, please give it a star!
+Service settings live in `config/app.yaml`. Set `VOICETRANSL_CONFIG` to use another file. Data defaults to `data/` at the repository root; `VOICETRANSL_DATA_DIR` overrides it. Relative data paths in environment variables resolve against the launch directory, so absolute paths are recommended.
 
-![Star History Chart](https://star-history.dera.page/svg?repos=shinnpuru/VoiceTransl&type=Date)
+The backend stores projects, audio, graph revisions, run snapshots, and artifacts on the filesystem without a database. Source cleanup does not delete or automatically migrate existing data. Keep `data/`, `scripts/`, personal `.codex/` settings, secrets, and local environment files out of Git.
+
+## Validation
+
+From `backend/`:
+
+```text
+python -m pytest -q
+ruff check app tests
+ruff format --check app tests
+```
+
+From `frontend/`:
+
+```text
+npm test -- --run
+npm run build
+```
+
+Web CI is configured for backend tests and Ruff on Linux/Windows, plus frontend tests and builds on Linux. It no longer packages or releases the desktop app. Configuration does not prove a successful remote run; check Actions for results. Symlink tests may skip when the Windows account lacks symlink privileges, leaving that scenario unverified.
+
+## Structure and Documentation
+
+| Path | Purpose |
+| --- | --- |
+| `backend/` | FastAPI service, node registry, storage, execution, and tests |
+| `frontend/` | Vue 3 UI, workflow canvas, and tests |
+| `config/` | Service settings |
+| `docs/` | Current architecture, behavior, product goals, and roadmap |
+| `spec/` | Feature scope, status, and acceptance criteria; Draft is not approval or implementation |
+
+- [Architecture](docs/architecture.md) / [Backend development](backend/README.md)
+- [Multi-audio resources and API](docs/voicetransl_multi_audio_project.md) / [Frontend workflow](docs/frontend_workflow.md)
+- [Roadmap](docs/roadmap.md) / [Specification index](spec/README.md)
+- [Repository collaboration rules](AGENTS.md)
+
+## Origins and License
+
+This project historically derives from [shinnpuru/VoiceTransl](https://github.com/shinnpuru/VoiceTransl) and [GalTransl](https://github.com/xd2333/GalTransl). Thanks to [shinnpuru](https://github.com/shinnpuru), [MurthiNext](https://github.com/MurthiNext), and other original contributors. Earlier implementations remain traceable through Git history; the current Web version does not promise the upstream desktop features.
+
+The project retains the [GNU GPLv3](LICENSE). Respect the license, media copyright, and applicable laws. The license text is unchanged.

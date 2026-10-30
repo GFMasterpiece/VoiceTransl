@@ -1,267 +1,54 @@
-name: Create Executable
+name: Web CI
 
 on:
   push:
-    tags:
-      - '*'
+  pull_request:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Package version (for example: v1.30)'
-        required: true
-        default: 'v1.30'
-
-env:
-  LLAMA_CPP_VERSION: b10430
-  FFMPEG_VERSION: 9.0.1
-  FFMPEG_SHA256: fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  pyinstaller-build:
+  backend:
+    name: Backend (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            package_suffix: win
-            llama_variant: vulkan
-            spec: app.spec
-            requirements: requirements.txt
-          - os: windows-latest
-            package_suffix: win-cuda
-            llama_variant: cuda-12.4
-            spec: app.spec
-            requirements: requirements.txt
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-
-      - name: Resolve package name
-        shell: bash
-        env:
-          MANUAL_VERSION: ${{ inputs.version }}
-          PACKAGE_SUFFIX: ${{ matrix.package_suffix }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
-            package_version="$GITHUB_REF_NAME"
-          else
-            package_version="$MANUAL_VERSION"
-          fi
-          if [[ -z "$package_version" ]]; then
-            echo 'A package version is required for manual builds.' >&2
-            exit 1
-          fi
-          if [[ "$package_version" != v* ]]; then
-            package_version="v${package_version}"
-          fi
-          echo "PACKAGE_NAME=VoiceTransl-${package_version}-${PACKAGE_SUFFIX}" >> "$GITHUB_ENV"
-
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
+          python-version: '3.12'
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip wheel setuptools
-          python -m pip install pyinstaller
-          python -m pip install -r ${{ matrix.requirements }}
+        run: python -m pip install -e '.[test]' ruff
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Lint
+        run: ruff check app tests
+      - name: Check formatting
+        run: ruff format --check app tests
 
-      - name: Download FFmpeg (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $nativeRoot = Join-Path $env:RUNNER_TEMP 'voicetransl-native'
-          $ffmpegExtract = Join-Path $nativeRoot 'ffmpeg-extracted'
-          $ffmpegArchive = Join-Path $nativeRoot 'ffmpeg.zip'
-          New-Item -ItemType Directory -Force -Path $ffmpegExtract | Out-Null
-
-          $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-$env:FFMPEG_VERSION-essentials_build.zip"
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegArchive
-          $actualHash = (Get-FileHash -LiteralPath $ffmpegArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $env:FFMPEG_SHA256) {
-            throw "FFmpeg archive checksum mismatch: expected $env:FFMPEG_SHA256, got $actualHash"
-          }
-          Expand-Archive -LiteralPath $ffmpegArchive -DestinationPath $ffmpegExtract -Force
-
-          $ffmpegExecutable = Get-ChildItem -LiteralPath $ffmpegExtract -Recurse -File -Filter 'ffmpeg.exe' | Select-Object -First 1
-          $ffprobeExecutable = Get-ChildItem -LiteralPath $ffmpegExtract -Recurse -File -Filter 'ffprobe.exe' | Select-Object -First 1
-          if (-not $ffmpegExecutable -or -not $ffprobeExecutable) {
-            throw 'ffmpeg.exe or ffprobe.exe was not found in the downloaded FFmpeg archive'
-          }
-
-          New-Item -ItemType Directory -Force -Path 'ffmpeg' | Out-Null
-          Copy-Item -LiteralPath $ffmpegExecutable.FullName -Destination 'ffmpeg/ffmpeg.exe' -Force
-          Copy-Item -LiteralPath $ffprobeExecutable.FullName -Destination 'ffmpeg/ffprobe.exe' -Force
-          & 'ffmpeg/ffmpeg.exe' -version
-          & 'ffmpeg/ffprobe.exe' -version
-
-      - name: Download llama-server (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $nativeRoot = Join-Path $env:RUNNER_TEMP 'voicetransl-native'
-          $llamaExtract = Join-Path $nativeRoot 'llama-extracted'
-          New-Item -ItemType Directory -Force -Path $llamaExtract | Out-Null
-
-          $llamaVariant = '${{ matrix.llama_variant }}'
-          $llamaAsset = switch ($llamaVariant) {
-            'vulkan' { "llama-$env:LLAMA_CPP_VERSION-bin-win-vulkan-x64.zip" }
-            'cuda-12.4' { "llama-$env:LLAMA_CPP_VERSION-bin-win-cuda-12.4-x64.zip" }
-            default { throw "Unsupported Windows llama.cpp variant: $llamaVariant" }
-          }
-          $llamaArchive = Join-Path $nativeRoot 'llama.zip'
-          $llamaUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$env:LLAMA_CPP_VERSION/$llamaAsset"
-          Invoke-WebRequest -Uri $llamaUrl -OutFile $llamaArchive
-          Expand-Archive -LiteralPath $llamaArchive -DestinationPath $llamaExtract -Force
-          $llamaServer = Get-ChildItem -LiteralPath $llamaExtract -Recurse -File -Filter 'llama-server.exe' | Select-Object -First 1
-          if (-not $llamaServer) {
-            throw 'llama-server.exe was not found in the downloaded llama.cpp archive'
-          }
-          New-Item -ItemType Directory -Force -Path 'llama' | Out-Null
-          Copy-Item -Path (Join-Path $llamaServer.Directory.FullName '*') -Destination 'llama' -Recurse -Force
-
-          if ($llamaVariant -eq 'cuda-12.4') {
-            # llama.cpp publishes the CUDA runtime/cuBLAS DLLs separately from the
-            # CUDA-enabled llama binaries. Both archives are required at runtime.
-            $cudaRuntimeExtract = Join-Path $nativeRoot 'cuda-runtime-extracted'
-            $cudaRuntimeArchive = Join-Path $nativeRoot 'cuda-runtime.zip'
-            New-Item -ItemType Directory -Force -Path $cudaRuntimeExtract | Out-Null
-            $cudaRuntimeAsset = 'cudart-llama-bin-win-cuda-12.4-x64.zip'
-            $cudaRuntimeUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$env:LLAMA_CPP_VERSION/$cudaRuntimeAsset"
-            Invoke-WebRequest -Uri $cudaRuntimeUrl -OutFile $cudaRuntimeArchive
-            Expand-Archive -LiteralPath $cudaRuntimeArchive -DestinationPath $cudaRuntimeExtract -Force
-            $cudaRuntimeDll = Get-ChildItem -LiteralPath $cudaRuntimeExtract -Recurse -File -Filter 'cudart64_12.dll' | Select-Object -First 1
-            if (-not $cudaRuntimeDll) {
-              throw 'cudart64_12.dll was not found in the downloaded llama.cpp CUDA runtime archive'
-            }
-            Copy-Item -Path (Join-Path $cudaRuntimeDll.Directory.FullName '*') -Destination 'llama' -Recurse -Force
-          }
-
-          Set-Content -LiteralPath 'llama/param.txt' -Encoding utf8 -Value 'llama/llama-server -m llama/$model_file -ngl $num_layers --port $port'
-
-      - name: Build auxiliary executables
-        run: |
-          python -m PyInstaller --clean --noconfirm separate.spec --distpath .
-          python -m PyInstaller --clean --noconfirm translate.spec --distpath .
-
-      - name: Prepare runtime directories
-        shell: bash
-        run: mkdir -p project
-
-      - name: Build main executable
-        run: python -m PyInstaller --clean --noconfirm ${{ matrix.spec }}
-
-      - name: Verify bundled executables (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $requiredFiles = 'translate.exe', 'separate.exe', 'llama-server.exe', 'ffmpeg.exe', 'ffprobe.exe'
-          if ('${{ matrix.llama_variant }}' -eq 'vulkan') {
-            $requiredFiles += 'ggml-vulkan.dll'
-          }
-          if ('${{ matrix.llama_variant }}' -eq 'cuda-12.4') {
-            $requiredFiles += 'ggml-cuda.dll', 'cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll'
-          }
-          foreach ($fileName in $requiredFiles) {
-            $matches = @(Get-ChildItem -LiteralPath 'dist' -Recurse -File -Filter $fileName)
-            if ($matches.Count -eq 0) {
-              throw "Required bundled executable is missing: $fileName"
-            }
-            $matches | ForEach-Object { Write-Host "Bundled $fileName -> $($_.FullName)" }
-          }
-
-      - name: Package Windows app
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path -LiteralPath 'dist/VoiceTransl' -PathType Container)) {
-            throw 'dist/VoiceTransl is missing'
-          }
-          New-Item -ItemType Directory -Force -Path 'artifact' | Out-Null
-          $archivePath = Join-Path 'artifact' "$env:PACKAGE_NAME.zip"
-          Compress-Archive -LiteralPath 'dist/VoiceTransl' -DestinationPath $archivePath -CompressionLevel Optimal
-          if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Windows app archive was not created: $archivePath"
-          }
-          Get-Item -LiteralPath $archivePath | Format-List FullName, Length
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PACKAGE_NAME }}
-          path: artifact/${{ env.PACKAGE_NAME }}.zip
-          compression-level: 0
-          if-no-files-found: error
-
-  release:
-    name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: pyinstaller-build
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          pattern: VoiceTransl-*
-          path: release
-          merge-multiple: true
-
-      - name: Publish release assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test -s "release/VoiceTransl-${GITHUB_REF_NAME}-win.zip"
-          test -s "release/VoiceTransl-${GITHUB_REF_NAME}-win-cuda.zip"
-
-          # GitHub Releases limits each asset to less than 2 GiB. The CUDA
-          # package is larger, so convert it to a standard split ZIP that can
-          # be opened with 7-Zip after downloading both volumes.
-          cuda_archive="release/VoiceTransl-${GITHUB_REF_NAME}-win-cuda.zip"
-          cuda_full_archive="release/VoiceTransl-${GITHUB_REF_NAME}-win-cuda.full.zip"
-          mv "$cuda_archive" "$cuda_full_archive"
-          zip -s 1800m "$cuda_full_archive" --out "$cuda_archive"
-          rm "$cuda_full_archive"
-          test -s "release/VoiceTransl-${GITHUB_REF_NAME}-win-cuda.z01"
-
-          cat > "release/VoiceTransl-${GITHUB_REF_NAME}-win-cuda-INSTRUCTIONS.txt" <<EOF
-          Download both VoiceTransl-${GITHUB_REF_NAME}-win-cuda.z01 and VoiceTransl-${GITHUB_REF_NAME}-win-cuda.zip into the same directory, then open the .zip file with 7-Zip to extract the CUDA package.
-          EOF
-
-          while IFS= read -r -d '' release_asset; do
-            asset_size="$(stat -c '%s' "$release_asset")"
-            if (( asset_size >= 2147483648 )); then
-              echo "Release asset exceeds GitHub's 2 GiB limit: $release_asset ($asset_size bytes)" >&2
-              exit 1
-            fi
-          done < <(find release -maxdepth 1 -type f -print0)
-          ls -lh release/*.zip
-
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" release/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes \
-              --verify-tag
-          fi
-
-          # Remove assets from the legacy CPU-only release after the new assets
-          # have been uploaded successfully.
-          for legacy_asset in VoiceTransl-windows.zip VoiceTransl-macos.zip; do
-            gh release delete-asset "$GITHUB_REF_NAME" "$legacy_asset" \
-              --repo "$GITHUB_REPOSITORY" \
-              --yes 2>/dev/null || true
-          done
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test -- --run
+      - name: Build
+        run: npm run build
