@@ -4,7 +4,7 @@
 
 VoiceTransl is building a visual audio workflow with ComfyUI-style node connections, independent node settings, and immutable snapshots for each run.
 
-**This is a Web development version with audio passthrough and Mock validation only. It does not perform real transcription, translation, or media conversion.** The historical desktop app is no longer maintained or used as the current installation entry point. See the [roadmap](docs/roadmap.md) for legacy-file cleanup progress.
+**This is a Web development version with audio passthrough and Mock validation only. It does not perform real transcription, translation, or media conversion.** The old desktop implementation, GalTransl, plugins, dependencies, and packaging resources have been removed from the current source tree. The [roadmap](docs/roadmap.md) summarizes their history; full implementations remain in Git history.
 
 ## Current Features
 

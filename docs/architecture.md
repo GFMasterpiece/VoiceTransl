@@ -1,6 +1,6 @@
 # VoiceTransl 架构约定
 
-本文描述当前维护的 Web 实现，范围是 `backend/` 与 `frontend/`。旧桌面字幕翻译程序已退役，其遗留源码不是当前运行入口，历史实现可通过 Git 追溯。资源与 API 见[多音频项目契约](voicetransl_multi_audio_project.md)，交互见[前端工作流](frontend_workflow.md)，清理进度见[线路图](roadmap.md)。
+本文描述当前维护的 Web 实现，范围是 `backend/` 与 `frontend/`。旧桌面字幕翻译程序及其依赖资源已从当前源码移除，历史实现可通过 Git 追溯。资源与 API 见[多音频项目契约](voicetransl_multi_audio_project.md)，交互见[前端工作流](frontend_workflow.md)，进度见[线路图](roadmap.md)。
 
 ## 1. 分层与运行方式
 
