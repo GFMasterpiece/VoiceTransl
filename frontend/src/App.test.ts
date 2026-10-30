@@ -15,7 +15,7 @@ const response = (payload: unknown, status = 200) => ({ ok: status >= 200 && sta
 async function settle() { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() }
 
 async function mount(policyAvailable = true) {
-  const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.1', nodes: [
+  const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [
     { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
     { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
   ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {
@@ -388,7 +388,7 @@ describe('workflow navigation guards', () => {
   async function mountWorkflow() {
     const firstAudio = { id: 'aud_primary', source: project.source }
     const secondAudio = { id: 'aud_second', source: { ...project.source, original_name: 'second.wav' } }
-    const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.1', nodes: [
+    const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [
       { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
       { type: 'audio_output', label: '音频输出', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] }, position_x: 420 },
     ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {

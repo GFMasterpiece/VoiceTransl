@@ -59,9 +59,9 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.1`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。此能力目录变化不改变工作流文档或运行快照格式；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.2`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。此能力目录变化不改变工作流文档或运行快照格式；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
 
-节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 定义端口运行时数据契约。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`。新增已有数据类型的节点应通过独立执行器与注册接入，而不是修改通用调度器。不能让客户端提交任意导入路径或代码。
+节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。新增已有数据类型的节点应通过独立执行器与注册接入，而不是修改通用调度器。不能让客户端提交任意导入路径或代码。
 
 当前仅支持单源、非源节点单输入、画布每侧一个端口；多输入汇合、新数据源、视频及真实云端 Provider 需要先确认独立规格。全局 Profile CRUD 的留存不代表云端调用可用，见[Profile 兼容边界](provider_profiles.md)。
 

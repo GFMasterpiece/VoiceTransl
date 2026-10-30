@@ -1,7 +1,18 @@
 import { API_BASE_URL, parseApiError } from '../api'
 import { message } from '../i18n'
 
-export type CapabilityPort = string
+export interface CapabilityPort {
+  id: string
+  typeId: string
+  label: string
+  capabilityRequirements: readonly string[]
+}
+export interface CapabilityDataType {
+  id: string
+  label: string
+  parentTypeId: string | null
+  capabilities: readonly string[]
+}
 export type CapabilityValue = unknown
 
 export interface CapabilityOption { value: string; label: string }
@@ -25,8 +36,8 @@ export interface CapabilityNode {
   label: string
   addLabel: string
   idPrefix: string
-  inputPorts: readonly CapabilityPort[]
-  outputPorts: readonly CapabilityPort[]
+  inputPorts: readonly string[]
+  outputPorts: readonly string[]
   terminal: boolean
   isSource: boolean
   maxInstances: number | null
@@ -48,6 +59,7 @@ export interface Capabilities {
   nodeTypes: readonly string[]
   nodes: readonly CapabilityNode[]
   ports: readonly CapabilityPort[]
+  dataTypes: readonly CapabilityDataType[]
   constraints: {
     maxNodes: number
     maxEdges: number
@@ -116,6 +128,31 @@ function field(value: unknown): CapabilityField {
     description: text(item.description),
   }
 }
+function port(value: unknown): CapabilityPort {
+  if (typeof value === 'string') {
+    if (!safePort(value)) fail('workflow.capPorts')
+    return { id: value, typeId: value, label: value, capabilityRequirements: [] }
+  }
+  const item = object(value, 'workflow.port')
+  const id = text(item.id)
+  const typeId = text(item.type_id)
+  const label = text(item.label)
+  if (!id || !typeId || !label) fail('workflow.capPorts')
+  if (!safePort(id) || !safePort(typeId)) fail('workflow.capPorts')
+  const capabilityRequirements = item.capability_requirements === undefined ? [] : item.capability_requirements
+  if (!Array.isArray(capabilityRequirements) || !capabilityRequirements.every((value) => typeof value === 'string' && value.trim())) fail('workflow.capPorts')
+  return { id, typeId, label, capabilityRequirements }
+}
+function dataType(value: unknown): CapabilityDataType {
+  const item = object(value, 'workflow.dataType')
+  const id = text(item.id)
+  const label = text(item.label)
+  const parentTypeId = item.parent_type_id === null || item.parent_type_id === undefined ? null : text(item.parent_type_id)
+  const capabilities = item.capabilities === undefined ? [] : item.capabilities
+  if (!safePort(id) || !label || (parentTypeId !== null && !safePort(parentTypeId)) || !Array.isArray(capabilities) || !capabilities.every(safePort)) fail('workflow.capTypes')
+  return { id, label, parentTypeId, capabilities }
+}
+
 function node(value: unknown): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
@@ -165,16 +202,23 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.1') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.2') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map(node)
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
   const ports = workflow.ports === undefined
-    ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))]
-    : workflow.ports
-  if (!Array.isArray(ports) || !ports.every(safePort) || new Set(ports).size !== ports.length) fail('workflow.capPorts')
+    ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))].map((id) => ({ id, typeId: id, label: id, capabilityRequirements: [] as string[] }))
+    : Array.isArray(workflow.ports) ? workflow.ports.map(port) : fail('workflow.capPorts')
+  if (!Array.isArray(ports) || new Set(ports.map((item) => item.id)).size !== ports.length) fail('workflow.capPorts')
+  const portIds = new Set(ports.map((item) => item.id))
+  const dataTypes = workflow.data_types === undefined
+    ? ports.map((item) => ({ id: item.typeId, label: item.label, parentTypeId: null, capabilities: [] as string[] }))
+    : Array.isArray(workflow.data_types) ? workflow.data_types.map(dataType) : fail('workflow.capTypes')
+  if (new Set(dataTypes.map((item) => item.id)).size !== dataTypes.length) fail('workflow.capTypes')
+  const typeIds = new Set(dataTypes.map((item) => item.id))
+  if (ports.some((item) => !typeIds.has(item.typeId))) fail('workflow.capTypes')
   for (const entry of nodes) {
-    for (const port of [...entry.inputPorts, ...entry.outputPorts]) if (!ports.includes(port)) fail('workflow.capUndeclaredPort')
+    for (const port of [...entry.inputPorts, ...entry.outputPorts]) if (!portIds.has(port)) fail('workflow.capUndeclaredPort')
   }
   const rawConstraints = object(workflow.constraints, 'workflow.capConstraints')
   const constraints = {
@@ -205,10 +249,11 @@ export function readCapabilities(value: unknown): Capabilities {
   }
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
-    schemaVersion: '1.1',
+    schemaVersion: '1.2',
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,
+    dataTypes,
     constraints: constraints as Capabilities['constraints'],
     defaultGraph,
     asr: asr(root.asr),

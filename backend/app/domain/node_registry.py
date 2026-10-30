@@ -249,41 +249,164 @@ def _config_fields(
 MOCK_PROVIDER_OPTIONS = [{"value": "mock", "label": "Mock"}]
 
 
+@dataclass(frozen=True)
+class DataTypeDefinition:
+    """Runtime data contract independent from a graph port identifier.
+
+    A concrete type may declare a parent logical type. This lets values such as
+    decoded, streamed, or remote audio satisfy a node that requests ``audio``
+    without making every implementation inherit one application class.
+    """
+
+    type_id: str
+    label: str
+    is_valid: Callable[[object], bool]
+    parent_type_id: str | None = None
+    capabilities: frozenset[str] = frozenset()
+
+
 class PortDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-    data_type: type
-    is_valid: Callable[[object], bool]
+
+    port_id: str
+    type_id: str
+    label: str
+    capability_requirements: frozenset[str] = frozenset()
+    # Kept as compatibility properties for existing extensions. New code
+    # should validate through the referenced DataTypeDefinition.
+    data_type: type = object
+    is_valid: Callable[[object], bool] | None = None
 
 
+TYPE_DEFINITIONS: dict[str, DataTypeDefinition] = {}
 PORT_DEFINITIONS: dict[str, PortDefinition] = {}
 
 
-def register_port(
-    name: str, data_type: type, *, validator: Callable[[object], bool] | None = None
-) -> PortDefinition:
-    if not re.fullmatch(PORT_PATTERN, name):
-        raise ValueError("port name must be a lowercase identifier")
-    if name in PORT_DEFINITIONS:
-        raise ValueError("port already registered")
-    definition = PortDefinition(
-        data_type=data_type, is_valid=validator or (lambda value: isinstance(value, data_type))
+def _validate_identifier(value: str, message: str) -> None:
+    if not re.fullmatch(PORT_PATTERN, value):
+        raise ValueError(message)
+
+
+def register_type(
+    type_id: str,
+    *,
+    label: str | None = None,
+    validator: Callable[[object], bool] | None = None,
+    data_type: type = object,
+    parent_type_id: str | None = None,
+    capabilities: set[str] | frozenset[str] = frozenset(),
+) -> DataTypeDefinition:
+    """Register a logical runtime type used by one or more ports."""
+
+    _validate_identifier(type_id, "type id must be a lowercase identifier")
+    if parent_type_id is not None and parent_type_id not in TYPE_DEFINITIONS:
+        raise ValueError(f"parent type is not registered: {parent_type_id}")
+    if type_id in TYPE_DEFINITIONS:
+        raise ValueError("type already registered")
+    check = validator or (lambda value: isinstance(value, data_type))
+    definition = DataTypeDefinition(
+        type_id=type_id,
+        label=label or type_id,
+        is_valid=check,
+        parent_type_id=parent_type_id,
+        capabilities=frozenset(capabilities),
     )
-    PORT_DEFINITIONS[name] = definition
+    TYPE_DEFINITIONS[type_id] = definition
     return definition
 
 
-def _is_audio_data(value: object) -> bool:
-    # Keep the registry importable without pulling the application runner into
-    # the domain layer merely to define the built-in protocol port.
-    from ..application.workflow_runner import AudioData
+def register_port(
+    port_id: str,
+    data_type: type = object,
+    *,
+    type_id: str | None = None,
+    label: str | None = None,
+    validator: Callable[[object], bool] | None = None,
+    capability_requirements: set[str] | frozenset[str] = frozenset(),
+) -> PortDefinition:
+    """Register a stable port ID and bind it to a logical data type.
 
-    return isinstance(value, AudioData)
+    ``data_type`` and ``validator`` remain accepted so older node extensions
+    continue to work while migrating to an explicit ``type_id``.
+    """
+
+    _validate_identifier(port_id, "port name must be a lowercase identifier")
+    if port_id in PORT_DEFINITIONS:
+        raise ValueError("port already registered")
+    resolved_type_id = type_id or port_id
+    if resolved_type_id not in TYPE_DEFINITIONS:
+        register_type(
+            resolved_type_id,
+            label=resolved_type_id,
+            validator=validator,
+            data_type=data_type,
+        )
+    elif validator is not None or data_type is not object:
+        raise ValueError("registered types own their runtime validator")
+    type_definition = TYPE_DEFINITIONS[resolved_type_id]
+    definition = PortDefinition(
+        port_id=port_id,
+        type_id=resolved_type_id,
+        label=label or type_definition.label,
+        capability_requirements=frozenset(capability_requirements),
+        data_type=data_type,
+        is_valid=type_definition.is_valid,
+    )
+    PORT_DEFINITIONS[port_id] = definition
+    return definition
+
+
+def type_is_compatible(source_type_id: str, target_type_id: str) -> bool:
+    """Return whether a source value can be consumed by a target type."""
+
+    if source_type_id == target_type_id:
+        return True
+    current = TYPE_DEFINITIONS.get(source_type_id)
+    visited: set[str] = set()
+    while current is not None and current.type_id not in visited:
+        visited.add(current.type_id)
+        if current.parent_type_id == target_type_id:
+            return True
+        current = TYPE_DEFINITIONS.get(current.parent_type_id or "")
+    return False
+
+
+def ports_are_compatible(source_port_id: str, target_port_id: str) -> bool:
+    source = PORT_DEFINITIONS.get(source_port_id)
+    target = PORT_DEFINITIONS.get(target_port_id)
+    return bool(
+        source
+        and target
+        and type_is_compatible(source.type_id, target.type_id)
+        and target.capability_requirements <= TYPE_DEFINITIONS[source.type_id].capabilities
+    )
+
+
+def validate_port_value(port_id: str, value: object) -> bool:
+    definition = PORT_DEFINITIONS.get(port_id)
+    if definition is None:
+        return False
+    type_definition = TYPE_DEFINITIONS.get(definition.type_id)
+    return bool(type_definition and type_definition.is_valid(value))
+
+
+def _is_audio_data(value: object) -> bool:
+    # Structural validation keeps concrete audio implementations replaceable.
+    path = getattr(value, "path", None)
+    return (
+        path is not None
+        and hasattr(path, "open")
+        and isinstance(getattr(value, "suffix", None), str)
+        and isinstance(getattr(value, "media_type", None), str)
+        and isinstance(getattr(value, "size_bytes", None), int)
+        and getattr(value, "size_bytes", -1) >= 0
+    )
 
 
 def _is_transcript_data(value: object) -> bool:
-    from ..application.workflow_asr import TranscriptData
+    from .transcript import Transcript
 
-    return isinstance(value, TranscriptData)
+    return isinstance(getattr(value, "transcript", None), Transcript) and hasattr(value, "path")
 
 
 def _is_text_artifact(value: object) -> bool:
@@ -294,9 +417,12 @@ def _is_text_artifact(value: object) -> bool:
 
 # Built-in protocol ports, not a separate node whitelist. TEXT is currently a
 # terminal artifact contract and has no built-in producer node.
-register_port(AUDIO_PORT, object, validator=_is_audio_data)
-register_port(TRANSCRIPT_PORT, object, validator=_is_transcript_data)
-register_port(TEXT_PORT, object, validator=_is_text_artifact)
+register_type(AUDIO_PORT, label="音频", validator=_is_audio_data)
+register_type(TRANSCRIPT_PORT, label="转写结果", validator=_is_transcript_data)
+register_type(TEXT_PORT, label="文本产物", validator=_is_text_artifact)
+register_port(AUDIO_PORT, type_id=AUDIO_PORT)
+register_port(TRANSCRIPT_PORT, type_id=TRANSCRIPT_PORT)
+register_port(TEXT_PORT, type_id=TEXT_PORT)
 
 
 NODE_DEFINITIONS: dict[str, NodeDefinition] = {
@@ -387,6 +513,34 @@ def workflow_ports() -> tuple[str, ...]:
     return tuple(PORT_DEFINITIONS)
 
 
+def port_catalog() -> list[dict[str, str]]:
+    """Publish stable port IDs separately from their logical data types."""
+
+    return [
+        {
+            "id": definition.port_id,
+            "type_id": definition.type_id,
+            "label": definition.label,
+            "capability_requirements": sorted(definition.capability_requirements),
+        }
+        for definition in PORT_DEFINITIONS.values()
+    ]
+
+
+def type_catalog() -> list[dict[str, object]]:
+    """Publish logical types so clients can mirror compatibility feedback."""
+
+    return [
+        {
+            "id": definition.type_id,
+            "label": definition.label,
+            "parent_type_id": definition.parent_type_id,
+            "capabilities": sorted(definition.capabilities),
+        }
+        for definition in TYPE_DEFINITIONS.values()
+    ]
+
+
 # Compatibility name for importers that need the built-in port set. The API
 # consumes workflow_ports() so newly registered ports are included live.
 WORKFLOW_PORTS = (AUDIO_PORT, TRANSCRIPT_PORT, TEXT_PORT)
@@ -456,7 +610,7 @@ def validate_node_result(definition: NodeDefinition, result: NodeResult) -> Node
         port_definition = PORT_DEFINITIONS.get(port)
         if port_definition is None:
             raise TypeError(f"node output {port} has no registered runtime type")
-        if not port_definition.is_valid(data.value):
+        if not validate_port_value(port, data.value):
             raise TypeError(f"node output {port} has an invalid runtime type")
     return result
 
@@ -509,9 +663,15 @@ __all__ = [
     "CapabilityField",
     "NodeConfigCapability",
     "NodeDefinition",
+    "DataTypeDefinition",
     "NodeResult",
+    "TYPE_DEFINITIONS",
     "PortDefinition",
     "PORT_DEFINITIONS",
+    "ports_are_compatible",
+    "type_is_compatible",
+    "validate_port_value",
+    "register_type",
     "register_port",
     "validate_node_result",
     "register_node",
@@ -520,6 +680,8 @@ __all__ = [
     "NODE_PORTS",
     "OUTPUT_NODE_TYPES",
     "workflow_ports",
+    "port_catalog",
+    "type_catalog",
     "WORKFLOW_PORTS",
     "node_catalog",
     "asr_provider_catalog",

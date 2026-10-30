@@ -1,5 +1,5 @@
 import { t, hasMessage, type MessageParams } from '../i18n'
-import type { Capabilities, CapabilityNode } from './capabilities'
+import type { Capabilities, CapabilityNode, CapabilityPort } from './capabilities'
 
 export type PortName = string
 export type NodeType = string
@@ -17,6 +17,8 @@ export interface NodeRegistry {
   has(type: string): boolean
   outputPortForNode(type: string): PortName | null
   inputPortForNode(type: string): PortName | null
+  port(id: string): CapabilityPort | null
+  portsCompatible(sourceId: string, targetId: string): boolean
   isTerminalNode(type: string): boolean
   label(type: string): string
   createDefaultConfig(type: string): Record<string, unknown>
@@ -60,6 +62,19 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     positionX: entry.positionX ?? 96 + index * 190,
   }))
   const byType = new Map(nodes.map((entry) => [entry.type, entry]))
+  const byPort = new Map(capabilities.ports.map((entry) => [entry.id, entry]))
+  const byDataType = new Map(capabilities.dataTypes.map((entry) => [entry.id, entry]))
+  const typeCompatible = (sourceTypeId: string, targetTypeId: string): boolean => {
+    if (sourceTypeId === targetTypeId) return true
+    const visited = new Set<string>()
+    let current = byDataType.get(sourceTypeId) || undefined
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id)
+      if (current.parentTypeId === targetTypeId) return true
+      current = current.parentTypeId ? byDataType.get(current.parentTypeId) || undefined : undefined
+    }
+    return false
+  }
   const registry: NodeRegistry = {
     capabilities,
     kinds: nodes,
@@ -67,6 +82,15 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     has: (type) => byType.has(type),
     outputPortForNode: (type) => byType.get(type)?.outputPorts[0] || null,
     inputPortForNode: (type) => byType.get(type)?.inputPorts[0] || null,
+    port: (id) => byPort.get(id) || null,
+    portsCompatible: (sourceId, targetId) => {
+      const source = byPort.get(sourceId)
+      const target = byPort.get(targetId)
+      const sourceType = source ? byDataType.get(source.typeId) : null
+      return !!source && !!target && !!sourceType
+        && typeCompatible(source.typeId, target.typeId)
+        && (target.capabilityRequirements || []).every((item) => sourceType.capabilities.includes(item))
+    },
     isTerminalNode: (type) => byType.get(type)?.terminal === true,
     label: (type) => byType.get(type)?.label || type,
     createDefaultConfig: (type) => Object.fromEntries((byType.get(type)?.fields || [])

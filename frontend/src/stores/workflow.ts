@@ -862,7 +862,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       errorState.set(message('workflow.noPorts'))
       return false
     }
-    if (sourcePort !== targetPort) {
+    if (!registry.value.portsCompatible(sourcePort, targetPort)) {
       errorState.set(message('workflow.connectPortMismatch', { p0: sourcePort, p1: targetPort }))
       return false
     }

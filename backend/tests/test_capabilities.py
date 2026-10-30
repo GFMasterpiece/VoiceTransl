@@ -14,8 +14,17 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.1"
-    assert body["workflow"]["ports"] == ["audio", "transcript", "text"]
+    assert body["workflow"]["schema_version"] == "1.2"
+    assert body["workflow"]["ports"] == [
+        {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
+        {"id": "transcript", "type_id": "transcript", "label": "转写结果", "capability_requirements": []},
+        {"id": "text", "type_id": "text", "label": "文本产物", "capability_requirements": []},
+    ]
+    assert body["workflow"]["data_types"] == [
+        {"id": "audio", "label": "音频", "parent_type_id": None, "capabilities": []},
+        {"id": "transcript", "label": "转写结果", "parent_type_id": None, "capabilities": []},
+        {"id": "text", "label": "文本产物", "parent_type_id": None, "capabilities": []},
+    ]
     nodes = {node["type"]: node for node in body["workflow"]["nodes"]}
     assert set(nodes) == set(NODE_DEFINITIONS)
     assert set(nodes) == {"audio_input", "preprocess", "asr", "text_output", "audio_output"}

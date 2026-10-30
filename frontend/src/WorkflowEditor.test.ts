@@ -16,7 +16,7 @@ import { workflowErrorLabel, workflowIssueLabel } from './stores/workflow'
 const testCapabilities: Record<string, any> = {
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.1',
+    schema_version: '1.2',
     nodes: [
       { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
       { type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
@@ -609,7 +609,7 @@ describe('capability catalog and node registry', () => {
     const backendShape = {
       schema_version: '1.0',
       workflow: {
-        schema_version: '1.1',
+        schema_version: '1.2',
         nodes: [
           { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
           { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [{ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] }] } },
@@ -631,7 +631,7 @@ describe('capability catalog and node registry', () => {
     const live = {
       schema_version: '1.0',
       workflow: {
-        schema_version: '1.1',
+        schema_version: '1.2',
         ports: ['audio', 'transcript', 'text'],
         nodes: [
           { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },

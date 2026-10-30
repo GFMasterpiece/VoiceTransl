@@ -1,3 +1,6 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 from app.domain import (
     ASR_NODE_TYPE,
@@ -15,6 +18,14 @@ from app.domain import (
     validate_text_output_config,
     validate_workflow_graph,
     validate_workflow_transcript,
+)
+from app.domain.node_registry import (
+    PORT_DEFINITIONS,
+    TYPE_DEFINITIONS,
+    ports_are_compatible,
+    register_port,
+    register_type,
+    validate_port_value,
 )
 
 
@@ -142,6 +153,48 @@ def test_graph_rejects_type_mismatched_or_unknown_ports(source_port, target_port
     edges[-1] = wf_edge("e3", "asr", source_port, "text", target_port)
     errors = validate_workflow_graph(nodes, edges)
     assert any(error.code == "INVALID_PORT" for error in errors)
+
+
+def test_registered_data_types_are_polymorphic_and_ports_keep_stable_ids():
+    register_type(
+        "audio_pcm",
+        label="PCM 音频",
+        parent_type_id="audio",
+        validator=lambda value: getattr(value, "encoding", None) == "pcm",
+    )
+    register_port("pcm_audio_out", type_id="audio_pcm", label="PCM 输出")
+
+    assert TYPE_DEFINITIONS["audio_pcm"].parent_type_id == "audio"
+    assert PORT_DEFINITIONS["pcm_audio_out"].type_id == "audio_pcm"
+    assert ports_are_compatible("pcm_audio_out", "audio")
+    assert validate_port_value("pcm_audio_out", SimpleNamespace(encoding="pcm"))
+    assert not validate_port_value("pcm_audio_out", SimpleNamespace(encoding="wav"))
+
+
+def test_port_capability_requirements_are_checked_after_type_compatibility():
+    register_type(
+        "seekable_audio",
+        label="可定位音频",
+        parent_type_id="audio",
+        capabilities={"read", "seek"},
+        validator=lambda value: getattr(value, "seekable", False) is True,
+    )
+    register_port("seekable_audio_out", type_id="seekable_audio")
+    register_port("seek_audio_in", type_id="audio", capability_requirements={"seek"})
+    register_port("duration_audio_in", type_id="audio", capability_requirements={"duration"})
+
+    assert ports_are_compatible("seekable_audio_out", "seek_audio_in")
+    assert not ports_are_compatible("seekable_audio_out", "duration_audio_in")
+
+
+def test_audio_port_accepts_structural_audio_implementations():
+    value = SimpleNamespace(
+        path=Path("input.wav"), suffix=".wav", media_type="audio/wav", size_bytes=10
+    )
+    assert validate_port_value("audio", value)
+    assert not validate_port_value(
+        "audio", SimpleNamespace(path=Path("input.wav"), suffix=".wav", size_bytes=-1)
+    )
 
 
 def test_graph_requires_terminal_text_output_and_rejects_islands():

@@ -16,6 +16,7 @@ from .node_registry import (
     DEFAULT_TEXT_FILENAME_STEM,
     DEFAULT_TEXT_FORMAT,
     PORT_NAME,
+    ports_are_compatible,
 )
 from .schema import require_schema_version
 
@@ -144,7 +145,9 @@ class WorkflowValidationResponse(BaseModel):
 
 class WorkflowArtifact(BaseModel):
     artifact_id: str
-    port: Literal["audio", "transcript", "text"] = AUDIO_PORT
+    # Port IDs are registry data. Keep the built-ins as the default without
+    # constraining future registered artifact ports to a hard-coded union.
+    port: str = Field(default=AUDIO_PORT, min_length=1, max_length=64)
     filename: str
     media_type: str
     size_bytes: int = Field(ge=0)
@@ -511,7 +514,7 @@ def validate_workflow_graph(
             if (
                 edge.source_port not in source_ports
                 or edge.target_port not in target_ports
-                or edge.source_port != edge.target_port
+                or not ports_are_compatible(edge.source_port, edge.target_port)
             ):
                 issues.append(
                     _issue(

@@ -9,7 +9,8 @@ from ..domain.node_registry import (
     TEXT_OUTPUT_NODE_TYPE,
     asr_provider_catalog,
     node_catalog,
-    workflow_ports,
+    port_catalog,
+    type_catalog,
 )
 from ..domain.schema import SCHEMA_VERSION
 from ..domain.workflow import (
@@ -39,8 +40,9 @@ class WorkflowDefaultGraph(BaseModel):
 
 class CapabilitiesWorkflow(BaseModel):
     model_config = {"extra": "forbid"}
-    schema_version: str = "1.1"
-    ports: list[str]
+    schema_version: str = "1.2"
+    ports: list[dict[str, object]]
+    data_types: list[dict[str, object]]
     nodes: list[dict[str, object]]
     constraints: WorkflowGraphConstraints
     default_graph: WorkflowDefaultGraph
@@ -93,8 +95,9 @@ async def capabilities():
     return {
         "schema_version": SCHEMA_VERSION,
         "workflow": {
-            "schema_version": "1.1",
-            "ports": list(workflow_ports()),
+            "schema_version": "1.2",
+            "ports": port_catalog(),
+            "data_types": type_catalog(),
             "nodes": nodes,
             "constraints": WORKFLOW_GRAPH_CONSTRAINTS,
             "default_graph": {

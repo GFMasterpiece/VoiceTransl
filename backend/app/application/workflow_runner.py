@@ -49,10 +49,12 @@ class AudioData:
 
 
 def _ensure_runtime_ports() -> None:
+    # Built-in logical validators are registered by the domain registry. This
+    # hook remains for third-party deployments that load extensions lazily.
     if "audio" not in PORT_DEFINITIONS:
-        register_port("audio", AudioData)
+        register_port("audio", type_id="audio")
     if "transcript" not in PORT_DEFINITIONS:
-        register_port("transcript", TranscriptData)
+        register_port("transcript", type_id="transcript")
 
 
 async def _copy_audio(
