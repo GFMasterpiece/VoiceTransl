@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useProjectDetailStore, type AudioJobSummary } from './projectDetail'
 import { useProjectsStore, type Project } from './projects'
+import { setLocale } from '../i18n'
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return {
@@ -38,6 +39,24 @@ afterEach(() => {
 })
 
 describe('projects store', () => {
+  it('retranslates existing errors while keeping the loaded page intact', async () => {
+    setActivePinia(createPinia())
+    const store = useProjectsStore()
+    store.projects = [project]
+    store.total = 45
+    store.offset = 20
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ items: null })))
+    await store.fetchProjects()
+    expect(store.error).toContain('响应不完整')
+    setLocale('en')
+    expect(store.error).toContain('project list response is incomplete')
+    expect(store.projects).toEqual([project])
+    expect(store.offset).toBe(20)
+    expect(store.total).toBe(45)
+    store.error = ''
+    expect(store.error).toBe('')
+  })
+
   it('loads projects and clears loading state on success', async () => {
     setActivePinia(createPinia())
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [project], total: 1, limit: 20, offset: 0 }))
@@ -241,6 +260,20 @@ describe('projects store', () => {
 })
 
 describe('project detail store', () => {
+  it('retranslates an existing detail error without another request or changing project data', async () => {
+    setActivePinia(createPinia())
+    const fetchMock = vi.fn((input: RequestInfo | URL) => Promise.resolve(jsonResponse(String(input).endsWith('/audios') ? { items: null } : project)))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+    await expect(store.load(project.id)).rejects.toThrow('音频响应不完整')
+    const count = fetchMock.mock.calls.length
+    setLocale('en')
+    expect(store.error).toContain('project audio response is incomplete')
+    expect(store.project).toEqual(project)
+    expect(fetchMock).toHaveBeenCalledTimes(count)
+  })
+
   function workspaceResponse(path: string, audios: unknown[]) {
     if (path.endsWith('/audios')) return Promise.resolve(jsonResponse({ items: audios }))
     return Promise.resolve(jsonResponse(project))

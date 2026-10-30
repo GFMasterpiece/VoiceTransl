@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { displayError, locale, message, messageRef, t } from '../i18n'
 
 export interface UploadPolicy {
   allowed_extensions: string[]
@@ -33,37 +34,56 @@ export function fileStem(name: string) {
   return fileExtension(name) ? basename.slice(0, basename.lastIndexOf('.')) : basename
 }
 
-export function validateUpload(file: File, policy: UploadPolicy | null): string {
-  if (!policy) return '尚未获取上传限制，请重试加载限制。'
+// Keep the error source rather than a translated snapshot so existing rows update
+// with the interface locale without replacing files, status, or retry snapshots.
+function deferredMessage(render: () => string): Error {
+  return Object.defineProperty(new Error(), 'message', { get: render })
+}
+
+function uploadValidation(file: File, policy: UploadPolicy | null): Error | null {
+  if (!policy) return message('app.upload.policyMissing')
   if (!policy.allowed_extensions.includes(fileExtension(file.name))) {
-    return `格式不支持，请选择 ${policy.allowed_extensions.map((extension) => extension.toUpperCase()).join(' / ')} 文件。`
+    return message('app.upload.unsupported', { extensions: policy.allowed_extensions.map((extension) => extension.toUpperCase()).join(' / ') })
   }
   if (file.size > policy.max_upload_bytes) {
-    return `超过 ${policy.max_upload_bytes / 1024 / 1024} MB 限制，请压缩或拆分音频后重新选择。`
+    return deferredMessage(() => t('app.upload.tooLarge', { size: new Intl.NumberFormat(locale.value, { maximumFractionDigits: 20 }).format(policy.max_upload_bytes / 1024 / 1024) }))
   }
-  // The server stores MIME/name as metadata and generates the source path itself.
-  // Empty files and unusual MIME types are accepted by its creation endpoint too.
-  return ''
+  // Empty files and unusual MIME types are accepted by the creation endpoint.
+  return null
+}
+
+export function validateUpload(file: File, policy: UploadPolicy | null): string {
+  const reason = uploadValidation(file, policy)
+  return reason ? displayError(reason) : ''
+}
+
+function sourceLanguageValidation(sourceLanguage: string): Error | null {
+  return !!sourceLanguage && sourceLanguage === sourceLanguage.trim() && sourceLanguage.length <= 32 && !/[\u0000-\u001f\u007f]/.test(sourceLanguage)
+    ? null
+    : message('app.upload.invalidSource')
 }
 
 export function validateSourceLanguage(sourceLanguage: string): string {
-  return !!sourceLanguage && sourceLanguage === sourceLanguage.trim() && sourceLanguage.length <= 32 && !/[\u0000-\u001f\u007f]/.test(sourceLanguage)
-    ? ''
-    : '源语言必须非空、无首尾空白且最多 32 个字符。'
+  const reason = sourceLanguageValidation(sourceLanguage)
+  return reason ? displayError(reason) : ''
+}
+
+function languagesValidation(sourceLanguage: string, targetLanguage: string): Error | null {
+  const sourceError = sourceLanguageValidation(sourceLanguage)
+  if (sourceError) return sourceError
+  if (!targetLanguage || targetLanguage !== targetLanguage.trim() || targetLanguage.length > 32 || /[\u0000-\u001f\u007f]/.test(targetLanguage)) return message('app.upload.invalidTarget')
+  if (sourceLanguage.toLowerCase() === targetLanguage.toLowerCase()) return message('app.upload.sameLanguage')
+  return null
 }
 
 export function validateLanguages(sourceLanguage: string, targetLanguage: string): string {
-  const sourceError = validateSourceLanguage(sourceLanguage)
-  if (sourceError) return sourceError
-  if (!targetLanguage || targetLanguage !== targetLanguage.trim() || targetLanguage.length > 32 || /[\u0000-\u001f\u007f]/.test(targetLanguage)) return '目标语言必须非空、无首尾空白且最多 32 个字符。'
-  if (sourceLanguage.toLowerCase() === targetLanguage.toLowerCase()) return '源语言与目标语言不能相同。'
-  return ''
+  const reason = languagesValidation(sourceLanguage, targetLanguage)
+  return reason ? displayError(reason) : ''
 }
 
-function uploadError(reason: unknown) {
-  if (reason instanceof TypeError) return '无法连接后端，请检查服务和网络后重试此文件。'
-  const message = reason instanceof Error ? reason.message : '音频上传失败'
-  return `${message}。请检查文件或后端服务后重试此文件；已上传的音频会保留。`
+function uploadError(reason: unknown): Error {
+  if (reason instanceof TypeError) return message('app.upload.network')
+  return deferredMessage(() => t('app.upload.recovery', { error: displayError(reason, 'app.upload.failed') }))
 }
 
 export function useUploadQueue(
@@ -72,7 +92,9 @@ export function useUploadQueue(
 ) {
   const items = ref<UploadItem[]>([])
   const busy = ref(false)
-  const feedback = ref('')
+  const { text: feedback, set: setFeedback } = messageRef()
+  const itemErrors = new Map<number, ReturnType<typeof messageRef>>()
+  function setItemError(item: UploadItem, reason: unknown) { itemErrors.get(item.id)!.set(reason) }
   const policy = ref<UploadPolicy | null>(null)
   const targetProjectId = ref<string | null>(null)
   const targetName = ref('')
@@ -89,27 +111,31 @@ export function useUploadQueue(
     policy.value = value
     for (const item of items.value) {
       if (item.status !== 'invalid' && item.status !== 'ready') continue
-      item.error = validateUpload(item.file, value)
-      item.status = item.error ? 'invalid' : 'ready'
+      const reason = uploadValidation(item.file, value)
+      setItemError(item, reason || '')
+      item.status = reason ? 'invalid' : 'ready'
     }
     return true
   }
 
   function add(files: Iterable<File>) {
     if (busy.value) return false
-    const messages: string[] = []
+    const messages: Error[] = []
     for (const file of files) {
       if (items.value.some((item) => item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified && item.file.type === file.type)) {
-        messages.push(`“${file.name}”已在队列中，未重复添加。`)
+        messages.push(message('app.upload.duplicate', { name: file.name }))
         continue
       }
       if (items.value.some((item) => item.file.name === file.name)) {
-        messages.push(`“${file.name}”与队列中文件同名，将作为不同音频保存，不会覆盖。`)
+        messages.push(message('app.upload.sameName', { name: file.name }))
       }
-      const error = validateUpload(file, policy.value)
-      items.value.push({ id: ++nextId, file, status: error ? 'invalid' : 'ready', error })
+      const reason = uploadValidation(file, policy.value)
+      const error = messageRef(reason || '')
+      const id = ++nextId
+      itemErrors.set(id, error)
+      items.value.push({ id, file, status: reason ? 'invalid' : 'ready', get error() { return error.text.value }, set error(value: string) { error.text.value = value } })
     }
-    feedback.value = messages.join(' ')
+    setFeedback(messages.length ? deferredMessage(() => messages.map((reason) => displayError(reason)).join(' ')) : '')
     return true
   }
 
@@ -118,12 +144,14 @@ export function useUploadQueue(
     const item = items.value.find((entry) => entry.id === id)
     if (!item || item.status === 'created') return false
     items.value = items.value.filter((entry) => entry.id !== id)
+    itemErrors.delete(id)
     return true
   }
 
   function clear() {
     if (busy.value) return false
     items.value = []
+    itemErrors.clear()
     feedback.value = ''
     targetProjectId.value = null
     targetName.value = ''
@@ -159,7 +187,7 @@ export function useUploadQueue(
           item.projectId = targetProjectId.value!
           item.status = 'created'
         } catch (reason) {
-          item.error = uploadError(reason)
+          setItemError(item, uploadError(reason))
           item.status = 'failed'
         }
       }
@@ -173,9 +201,9 @@ export function useUploadQueue(
     const selected = items.value.filter((item) => item.status === 'ready')
     // A new project requires both languages; appending validates only the
     // new audio's source because the parent project owns the target.
-    feedback.value = targetProjectId.value
-      ? validateSourceLanguage(options.language)
-      : validateLanguages(options.language, options.targetLanguage || '')
+    setFeedback((targetProjectId.value
+      ? sourceLanguageValidation(options.language)
+      : languagesValidation(options.language, options.targetLanguage || '')) || '')
     if (feedback.value) return
     if (!projectSnapshot && selected.length) projectSnapshot = { name: options.name.trim() || fileStem(selected[0].file.name), language: options.language, targetLanguage: options.targetLanguage }
     for (const item of selected) {
@@ -191,5 +219,5 @@ export function useUploadQueue(
     if (item) await process([item])
   }
 
-  return { items, busy, feedback, policy, targetProjectId, targetName, validCount, readyCount, createdCount, failedCount, pendingCount, setTarget, setPolicy, add, remove, clear, submit, retry }
+  return { items, busy, feedback, setFeedback, policy, targetProjectId, targetName, validCount, readyCount, createdCount, failedCount, pendingCount, setTarget, setPolicy, add, remove, clear, submit, retry }
 }

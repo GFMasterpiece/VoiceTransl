@@ -1,3 +1,4 @@
+import { t, hasMessage, type MessageParams } from '../i18n'
 import type { Capabilities, CapabilityNode } from './capabilities'
 
 export type PortName = string
@@ -6,6 +7,8 @@ export type NodeType = string
 export interface NodeRegistryIssue {
   code: string
   message: string
+  messageKey?: string
+  messageParams?: MessageParams
 }
 export interface NodeRegistry {
   capabilities: Capabilities
@@ -18,6 +21,10 @@ export interface NodeRegistry {
   label(type: string): string
   createDefaultConfig(type: string): Record<string, unknown>
   validateConfig(type: string, config: Record<string, unknown>): NodeRegistryIssue[]
+}
+
+function issueText(messageKey: string, messageParams?: MessageParams) {
+  return { message: t(messageKey, messageParams), messageKey, messageParams }
 }
 
 function cloneDefault(value: unknown): unknown {
@@ -36,7 +43,22 @@ function valueMatchesType(item: CapabilityNode['fields'][number], value: unknown
 }
 
 export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
-  const nodes = capabilities.nodes.map((entry, index) => ({ ...entry, positionX: entry.positionX ?? 96 + index * 190 }))
+  // Presentation is derived without mutating the server's capability contract.
+  const present = (key: string, fallback: string) => hasMessage(key) ? t(key) : fallback
+  const nodes = capabilities.nodes.map((entry, index) => ({
+    ...entry,
+    get label() { return present(`workflow.node_${entry.type}_label`, entry.label) },
+    get addLabel() { return present(`workflow.node_${entry.type}_add`, entry.addLabel) },
+    fields: entry.fields.map((field) => ({
+      ...field,
+      get label() { return present(`workflow.field_${entry.configKind}_${field.key}`, field.label) },
+      options: field.options.map((option) => ({
+        ...option,
+        get label() { return present(`workflow.option_${entry.configKind}_${field.key}_${option.value}`, option.label) },
+      })),
+    })),
+    positionX: entry.positionX ?? 96 + index * 190,
+  }))
   const byType = new Map(nodes.map((entry) => [entry.type, entry]))
   const registry: NodeRegistry = {
     capabilities,
@@ -52,27 +74,27 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
       .map((field) => [field.key, cloneDefault(field.default)])),
     validateConfig: (type, config) => {
       const definition = byType.get(type)
-      if (!definition) return [{ code: 'UNKNOWN_NODE_TYPE', message: `不支持的节点类型：${type}` }]
+      if (!definition) return [{ code: 'UNKNOWN_NODE_TYPE', ...issueText('workflow.unknownType', { p0: type }) }]
       const issues: NodeRegistryIssue[] = []
       const allowed = new Set(definition.fields.map((field) => field.key))
       const unexpected = Object.keys(config || {}).filter((key) => !allowed.has(key))
-      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `节点配置包含未知字段：${unexpected.join(', ')}` })
+      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: unexpected.join(', ') }) })
       for (const field of definition.fields) {
         const value = config?.[field.key]
         if (value === undefined) {
-          if (field.required) issues.push({ code: 'INVALID_NODE_CONFIG', message: `缺少必填字段：${field.key}` })
+          if (field.required) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue
         }
         if (!valueMatchesType(field, value)) {
-          issues.push({ code: 'INVALID_NODE_CONFIG', message: `字段 ${field.key} 类型无效` })
+          issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: field.key }) })
           continue
         }
         if ((field.type === 'integer' || field.type === 'number') && typeof value === 'number') {
-          if (field.minimum !== null && value < field.minimum) issues.push({ code: 'INVALID_NODE_CONFIG', message: `字段 ${field.key} 小于最小值` })
-          if (field.maximum !== null && value > field.maximum) issues.push({ code: 'INVALID_NODE_CONFIG', message: `字段 ${field.key} 大于最大值` })
+          if (field.minimum !== null && value < field.minimum) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
+          if (field.maximum !== null && value > field.maximum) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
         }
         if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
-          issues.push({ code: 'INVALID_NODE_CONFIG', message: `字段 ${field.key} 不是可用选项` })
+          issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
         }
       }
       return issues

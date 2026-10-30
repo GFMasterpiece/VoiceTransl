@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readCapabilities } from './capabilities'
 import { createNodeRegistry } from './nodeRegistry'
+import { setLocale } from '../i18n'
 
 const livePayload = {
   schema_version: '1.0',
@@ -86,5 +87,58 @@ describe('capabilities parser', () => {
     expect(registry.createDefaultConfig('denoise')).toEqual({ strength: 2, mode: 'soft' })
     expect(registry.validateConfig('denoise', { strength: 3, mode: 'hard' })).toEqual([])
     expect(registry.validateConfig('denoise', { strength: 0, mode: 'other' }).map((issue) => issue.code)).toEqual(['INVALID_NODE_CONFIG', 'INVALID_NODE_CONFIG'])
+  })
+
+  it('translates built-in presentation without changing raw capabilities, defaults, or ports', () => {
+    const caps = readCapabilities(livePayload)
+    const original = JSON.stringify(caps)
+    const registry = createNodeRegistry(caps)
+    expect(registry.label('asr')).toBe('语音识别')
+    setLocale('en')
+    expect(registry.label('asr')).toBe('Speech recognition')
+    expect(registry.kind('asr')?.fields.find((field) => field.key === 'language')?.label).toBe('Language')
+    expect(registry.kind('audio_input')?.addLabel).toBe('Audio input')
+    expect(registry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
+    expect(registry.inputPortForNode('asr')).toBe('audio')
+    expect(registry.outputPortForNode('asr')).toBe('transcript')
+    expect(JSON.stringify(caps)).toBe(original)
+    setLocale('zh-CN')
+    expect(registry.label('asr')).toBe('语音识别')
+  })
+
+  it('preserves exact extension node, field, and option labels in both languages', () => {
+    const extended = structuredClone(livePayload) as any
+    extended.workflow.nodes.push({
+      type: 'extension', label: '扩展节点 · Plugin', add_label: '插件入口',
+      input_ports: ['audio'], output_ports: ['audio'], config: { kind: 'extension', fields: [
+        { key: 'provider', label: '插件服务', type: 'select', default: 'future', options: [{ value: 'future', label: 'Future 服务' }] },
+      ] },
+    })
+    extended.workflow.nodes[1].config.fields[0].options.push({ value: 'future', label: 'Future 服务' })
+    extended.workflow.nodes[1].config.fields.push({ key: 'custom', label: '自定义选项', type: 'string', default: '用户值' })
+    const caps = readCapabilities(extended)
+    const before = JSON.stringify(caps)
+    const registry = createNodeRegistry(caps)
+    for (const language of ['en', 'zh-CN']) {
+      setLocale(language)
+      expect(registry.kind('extension')?.label).toBe('扩展节点 · Plugin')
+      expect(registry.kind('extension')?.addLabel).toBe('插件入口')
+      expect(registry.kind('extension')?.fields[0].label).toBe('插件服务')
+      expect(registry.kind('extension')?.fields[0].options[0].label).toBe('Future 服务')
+      expect(registry.kind('asr')?.fields[0].options[1].label).toBe('Future 服务')
+      expect(registry.kind('asr')?.fields[2].label).toBe('自定义选项')
+      expect(registry.createDefaultConfig('extension')).toEqual({ provider: 'future' })
+      expect(registry.validateConfig('extension', { provider: 'future' })).toEqual([])
+      expect(registry.has('extension')).toBe(true)
+    }
+    expect(JSON.stringify(caps)).toBe(before)
+  })
+
+  it('keeps parser errors localizable after they have been thrown', () => {
+    let failure: unknown
+    try { readCapabilities({ ...livePayload, workflow: { ...livePayload.workflow, nodes: [] } }) } catch (reason) { failure = reason }
+    expect((failure as Error).message).toContain('没有节点')
+    setLocale('en')
+    expect((failure as Error).message).toBe('The capability catalog has no node definitions.')
   })
 })

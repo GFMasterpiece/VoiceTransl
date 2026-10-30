@@ -10,6 +10,8 @@ import {
 } from './stores/workflow'
 import { readCapabilities } from './workflow/capabilities'
 import { createNodeRegistry, type NodeRegistry } from './workflow/nodeRegistry'
+import { setLocale, message } from './i18n'
+import { workflowErrorLabel, workflowIssueLabel } from './stores/workflow'
 
 const testCapabilities: Record<string, any> = {
   schema_version: '1.0',
@@ -157,6 +159,260 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe('workflow localization', () => {
+  it('renders English settings, controls, and accessible port labels without translating user filenames', async () => {
+    setLocale('en')
+    setup(undefined, createPinia(), { audioName: '用户录音.wav' })
+    await settle()
+    expect(root!.querySelector('h2')?.textContent).toContain('Node workflow')
+    expect(button('Validate & save')).toBeTruthy()
+    expect(button('Run workflow')).toBeTruthy()
+    expect(root!.querySelector('[aria-label="Workflow tools"]')).toBeTruthy()
+    expect(root!.querySelector('[aria-label="Output port audio"] title')?.textContent).toBe('Output port audio')
+    expect(root!.textContent).toContain('用户录音.wav')
+    node('audio_output').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await settle()
+    expect(root!.querySelector('#workflow-settings-title')?.textContent).toBe('Audio output settings')
+    expect(root!.querySelector('[aria-label="Close node settings"]')).toBeTruthy()
+    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Output filename (without extension)')
+    expect((root!.querySelector('#workflow-filename-stem') as HTMLInputElement).value).toBe('audio-copy')
+    expect(root!.textContent).not.toMatch(/[节点工作流设置]/)
+  })
+
+  it('keeps an open settings draft and its error intact while translating them immediately', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const graph = JSON.stringify(store.draft)
+    const signature = executionSignature(store.draft, store.registry!)
+    const calls = fetchMock.mock.calls.length
+    node('audio_output').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await settle()
+    const filename = root!.querySelector<HTMLInputElement>('#workflow-filename-stem')!
+    filename.value = '../用户音频'
+    filename.dispatchEvent(new Event('input', { bubbles: true }))
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(root!.querySelector('.settings-error')?.textContent).toContain('输出文件名不能为空')
+    setLocale('en')
+    await settle()
+    expect(root!.querySelector('#workflow-settings-title')?.textContent).toBe('Audio output settings')
+    expect(root!.querySelector('.settings-error')?.textContent).toContain('The output filename cannot be empty')
+    expect(filename.value).toBe('../用户音频')
+    expect(JSON.stringify(store.draft)).toBe(graph)
+    expect(executionSignature(store.draft, store.registry!)).toBe(signature)
+    expect(store.dirty).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(calls)
+    setLocale('zh-CN')
+    await settle()
+    expect(root!.querySelector('.settings-error')?.textContent).toContain('输出文件名不能为空')
+  })
+
+  it('switches node field labels and dirty presentation without changing any execution data or run snapshot', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const run = runBody({ status: 'completed' })
+    run.nodes.forEach((record) => { record.status = 'completed' })
+    store.run = run
+    const cleanDraft = JSON.stringify(store.draft)
+    const snapshot = JSON.stringify(store.run)
+    const cleanSignature = executionSignature(store.draft, store.registry!)
+    const calls = fetchMock.mock.calls.length
+    expect(store.runMatchesDraft).toBe(true)
+    setLocale('en')
+    await settle()
+    expect(store.dirty).toBe(false)
+    expect(store.runMatchesDraft).toBe(true)
+    expect(JSON.stringify(store.draft)).toBe(cleanDraft)
+    expect(executionSignature(store.draft, store.registry!)).toBe(cleanSignature)
+    expect(JSON.stringify(store.run)).toBe(snapshot)
+    expect(root!.textContent).toContain('Snapshot matches the current canvas')
+    store.addNode('asr')
+    await settle()
+    const dirtyDraft = JSON.stringify(store.draft)
+    const dirtySignature = executionSignature(store.draft, store.registry!)
+    const newNode = root!.querySelector<SVGGElement>('.workflow-node.is-asr')!
+    newNode.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await settle()
+    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Language')
+    expect(store.draft.nodes.find((item) => item.type === 'asr')?.config).toEqual({ provider: 'mock', language: 'ja' })
+    setLocale('zh-CN')
+    await settle()
+    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('语言')
+    expect(store.dirty).toBe(true)
+    expect(store.runMatchesDraft).toBe(false)
+    expect(JSON.stringify(store.draft)).toBe(dirtyDraft)
+    expect(executionSignature(store.draft, store.registry!)).toBe(dirtySignature)
+    expect(JSON.stringify(store.run)).toBe(snapshot)
+    expect(fetchMock).toHaveBeenCalledTimes(calls)
+  })
+
+  it('retranslates stored API errors and notices while keeping unknown server errors verbatim', async () => {
+    setup((path, init) => path.endsWith('/workflow-runs') && init?.method === 'POST'
+      ? Promise.resolve(response({ error: { code: 'AUDIO_BUSY', message: '此音频忙碌' } }, 409)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    await expect(store.startRun()).rejects.toMatchObject({ name: 'AUDIO_BUSY' })
+    expect(store.error).toContain('正在运行')
+    setLocale('en')
+    await settle()
+    expect(store.error).toBe('This audio already has a running or queued task')
+    store.setError(new Error('插件保留的服务端错误'))
+    setLocale('zh-CN')
+    expect(store.error).toBe('插件保留的服务端错误')
+    store.setError('')
+    await store.save()
+    expect(store.notice).toBe('节点工作流已保存。')
+    setLocale('en')
+    expect(store.notice).toBe('Workflow saved.')
+    expect(store.error).toBe('')
+  })
+
+  it('keeps local validation descriptors and machine references unchanged while translating their display', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const issues = validateDraft({ nodes: [structuredClone(output)], edges: [] }, store.registry!)
+    const issue = issues.find((item) => item.code === 'INPUT_COUNT')!
+    expect(issue.messageKey).toBe('workflow.inputCount')
+    expect(workflowIssueLabel(issue)).toContain('需要恰好一个音频输入节点')
+    store.validationIssues = issues
+    const raw = JSON.stringify(store.validationIssues)
+    setLocale('en')
+    await settle()
+    expect(workflowIssueLabel(issue)).toBe('Exactly one audio input node is required; found 0.')
+    expect(root!.querySelector('.workflow-issues')?.textContent).toContain('Exactly one audio input node is required')
+    expect(JSON.stringify(store.validationIssues)).toBe(raw)
+    expect(issue.code).toBe('INPUT_COUNT')
+    expect(issue.node_id).toBeNull()
+    expect(workflowIssueLabel({ code: 'INVALID_PORT', message: '服务器端口错误', edge_id: 'edge-extension' })).toBe('The connection ports do not match or are not defined by the capability catalog.')
+    expect(workflowIssueLabel({ code: 'EXTENSION_VALIDATION', message: '插件原始错误', node_id: 'extension-1' })).toBe('插件原始错误')
+  })
+
+  it('translates statuses, dates, known run errors and legacy type-based node errors without mutating history', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const failed = runBody({ status: 'partial', error: { code: 'PARTIAL_FAILURE', message: '后端部分失败' } })
+    failed.nodes[0].status = 'completed'
+    failed.nodes[1].status = 'blocked'
+    failed.nodes[1].error = { type: 'DEPENDENCY_BLOCKED', message: '后端上游阻塞' }
+    store.run = failed
+    store.history = [summaryBody({ status: 'partial' })]
+    const snapshot = JSON.stringify(store.run)
+    const history = JSON.stringify(store.history)
+    setLocale('en')
+    await settle()
+    expect(root!.textContent).toContain('Partially completed')
+    expect(root!.textContent).toContain('Blocked')
+    expect(root!.textContent).toContain('Some output nodes failed.')
+    expect(root!.textContent).toContain('upstream dependency did not complete successfully')
+    expect(root!.textContent).toContain(new Intl.DateTimeFormat('en', { dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(new Date(failed.created_at)))
+    expect(workflowErrorLabel({ code: 'EXTENSION_ERROR', message: '未知服务错误' })).toBe('未知服务错误')
+    setLocale('zh-CN')
+    await settle()
+    expect(root!.textContent).toContain('部分成功')
+    expect(root!.textContent).toContain('上游节点未成功完成')
+    expect(JSON.stringify(store.run)).toBe(snapshot)
+    expect(JSON.stringify(store.history)).toBe(history)
+  })
+
+  it.each([
+    ['checking', 'Checking the artifact file…'],
+    ['missing', 'The artifact is missing and cannot be downloaded.'],
+    ['failed', 'The artifact check failed. You can retry.'],
+    ['available', 'The artifact is available.'],
+  ] as const)('translates the %s artifact state', async (state, label) => {
+    setLocale('en')
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const completed = runBody({ status: 'completed' })
+    completed.nodes[1].status = 'completed'
+    completed.nodes[1].artifact = structuredClone(outputArtifact)
+    store.run = completed
+    store.outputChecks = { output: { state } }
+    if (state === 'available') store.outputs = { output: structuredClone(outputArtifact) }
+    await settle()
+    expect(root!.querySelector('.workflow-output-state')?.textContent).toBe(label)
+    if (state === 'available') expect(button('Download audio-copy.wav')).toBeTruthy()
+    if (state === 'failed') expect(button('Retry check')).toBeTruthy()
+  })
+
+  it('keeps extension labels and configuration editable in English without describing it as audio output', async () => {
+    const extended = structuredClone(testCapabilities)
+    extended.workflow.nodes.push({
+      type: 'extension', label: '插件处理节点', add_label: 'Plugin node', id_prefix: 'plugin',
+      input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1,
+      config: { kind: 'extension', fields: [
+        { key: 'mode', label: '插件模式', type: 'select', required: true, default: 'future', options: [{ value: 'future', label: '扩展选项' }] },
+        { key: 'custom', label: 'User field', type: 'string', default: '保留原文' },
+      ] },
+    })
+    setLocale('en')
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
+    await settle()
+    button('＋ Plugin node')!.click()
+    await settle()
+    const store = useWorkflowStore()
+    const extension = store.draft.nodes.find((item) => item.type === 'extension')!
+    const card = root!.querySelector<SVGGElement>('.workflow-node.is-extension')!
+    expect(card.textContent).toContain('插件处理节点')
+    expect(card.textContent).not.toContain('AUDIO OUTPUT')
+    expect(card.textContent).not.toContain('audio-copy')
+    expect(root!.querySelector('.inspector-type')?.textContent).toBe('插件处理节点 · configuration defined by the server capability catalog')
+    card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await settle()
+    const modal = root!.querySelector('.workflow-settings-modal')!
+    expect(modal.textContent).toContain('插件处理节点 settings')
+    expect(modal.textContent).toContain('插件模式')
+    expect(modal.textContent).toContain('扩展选项')
+    expect(modal.textContent).not.toContain('copies bytes and media type')
+    const input = modal.querySelector<HTMLInputElement>('input[type=text]')!
+    input.value = '用户新配置'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    modal.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(store.draft.nodes.find((item) => item.id === extension.id)?.config).toEqual({ mode: 'future', custom: '用户新配置' })
+    const draft = JSON.stringify(store.draft)
+    setLocale('zh-CN')
+    await settle()
+    expect(JSON.stringify(store.draft)).toBe(draft)
+    expect(button('＋ Plugin node')).toBeTruthy()
+    expect(store.registry!.label('extension')).toBe('插件处理节点')
+  })
+
+  it('uses English delete confirmations and live localized external errors', async () => {
+    setLocale('en')
+    setup()
+    await settle()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    node('audio_output').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await settle()
+    button('Delete output node')!.click()
+    expect(confirm).toHaveBeenCalledWith('Delete node “Audio output”? Its connections will also be removed.')
+    const store = useWorkflowStore()
+    store.setError(message('workflow.saveFirst'))
+    expect(store.error).toBe('Save the current workflow first.')
+    setLocale('zh-CN')
+    expect(store.error).toBe('请先保存当前工作流。')
+  })
+
+  it('uses a live translated fallback for malformed successful workflow responses', async () => {
+    setup((path) => path.endsWith('/workflow') ? Promise.resolve({
+      ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token') },
+    } as unknown as Response) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.error).toBe('节点工作流响应不完整，请检查后端版本后重试。')
+    setLocale('en')
+    await settle()
+    expect(store.error).toBe('The workflow response is incomplete. Check the backend version and retry.')
+    expect(root!.querySelector('[role=alert]')?.textContent).not.toContain('Unexpected token')
+  })
 })
 
 describe('workflow validation and helpers', () => {

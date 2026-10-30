@@ -1,6 +1,8 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
+import { i18n, initializeLocale } from './i18n'
 import './style.css'
 
-createApp(App).use(createPinia()).mount('#app')
+initializeLocale()
+createApp(App).use(createPinia()).use(i18n).mount('#app')

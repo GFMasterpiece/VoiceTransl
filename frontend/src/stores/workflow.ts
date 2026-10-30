@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { API_BASE_URL } from '../api'
+import { API_BASE_URL, parseApiError } from '../api'
+import { t, locale, message, messageRef, hasMessage, type MessageParams } from '../i18n'
 import { computed as vueComputed } from 'vue'
 import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
@@ -74,6 +75,8 @@ export interface WorkflowIssue {
   node_id?: string | null
   edge_id?: string | null
   field?: string | null
+  messageKey?: string
+  messageParams?: MessageParams
 }
 
 export interface WorkflowArtifact {
@@ -140,35 +143,27 @@ export interface WorkflowRunSummary {
   error: WorkflowError | null
 }
 
-interface ApiErrorShape {
-  error?: { code?: unknown; message?: unknown; details?: unknown }
+const readApiError = parseApiError
+const workflowApiError = parseApiError
+
+async function readJson(response: Response, fallbackKey: string): Promise<unknown> {
+  try { return await response.json() } catch { throw message(fallbackKey) }
 }
 
-function apiError(response: Response, payload?: unknown): Error {
-  const error = (payload as ApiErrorShape | null)?.error
-  const message = typeof error?.message === 'string' && error.message.trim()
-    ? error.message
-    : `节点工作流接口不可用（${response.status}）`
-  const value = new Error(message)
-  value.name = typeof error?.code === 'string' ? error.code : `HTTP_${response.status}`
-  return value
+export function issueText(messageKey: string, messageParams?: MessageParams) {
+  return { message: t(messageKey, messageParams), messageKey, messageParams }
 }
 
-async function readApiError(response: Response): Promise<Error> {
-  let payload: unknown
-  try { payload = await response.json() } catch { /* Use the status fallback. */ }
-  return apiError(response, payload)
+export function workflowIssueLabel(issue: WorkflowIssue): string {
+  return issue.messageKey ? t(issue.messageKey, issue.messageParams) : workflowErrorLabel(issue)
 }
 
-async function workflowApiError(response: Response): Promise<Error> {
-  let payload: unknown
-  try { payload = await response.json() } catch { /* Use the status fallback. */ }
-  const body = payload as { error?: ApiErrorShape['error']; detail?: unknown } | null
-  const detail = body?.detail
-  const nested = detail && typeof detail === 'object' && 'error' in detail
-    ? (detail as ApiErrorShape).error
-    : undefined
-  return apiError(response, { error: body?.error || nested })
+export function workflowErrorLabel(error: WorkflowError): string {
+  const code = error.code || error.type
+  const key = `workflow.error_${code}`
+  if (code && hasMessage(key)) return t(key)
+  const apiKey = `common.api.${code}`
+  return code && hasMessage(apiKey) ? t(apiKey) : error.message
 }
 
 export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInput {
@@ -251,7 +246,7 @@ function readWorkflow(value: unknown): WorkflowDocument {
     || typeof document.project_id !== 'string' || !Number.isInteger(document.revision)
     || !Number.isInteger(document.workflow_revision) || !Array.isArray(document.nodes)
     || !Array.isArray(document.edges)) {
-    throw new Error('节点工作流响应不完整，请检查后端版本后重试。')
+    throw message('workflow.invalidWorkflow')
   }
   return document
 }
@@ -265,7 +260,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
     || !Number.isInteger(artifact.size_bytes) || artifact.size_bytes < 0
     || typeof artifact.sha256 !== 'string'
     || (artifact.download_url !== null && typeof artifact.download_url !== 'string')) {
-    throw new Error('节点产物响应不完整，请检查后端版本后重试。')
+    throw message('workflow.invalidArtifact')
   }
   return artifact
 }
@@ -275,12 +270,12 @@ function readRun(value: unknown): WorkflowRun {
   if (!run || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
     || !run.workflow || !Array.isArray(run.workflow.nodes) || !Array.isArray(run.workflow.edges)) {
-    throw new Error('节点工作流运行响应不完整，请检查后端版本后重试。')
+    throw message('workflow.invalidRun')
   }
   for (const node of run.nodes) {
     if (!node || typeof node.node_id !== 'string' || typeof node.node_type !== 'string'
       || typeof node.status !== 'string') {
-      throw new Error('节点工作流运行响应不完整，请检查后端版本后重试。')
+      throw message('workflow.invalidRun')
     }
     readArtifact(node.artifact)
   }
@@ -293,7 +288,7 @@ function readRunSummary(value: unknown): WorkflowRunSummary {
     || typeof run.status !== 'string' || typeof run.created_at !== 'string'
     || (run.finished_at !== null && typeof run.finished_at !== 'string')
     || (run.error !== null && (typeof run.error !== 'object' || typeof run.error.message !== 'string'))) {
-    throw new Error('运行历史响应不完整，请检查后端版本后重试。')
+    throw message('workflow.invalidHistory')
   }
   return run
 }
@@ -312,21 +307,21 @@ export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'con
   const issues: WorkflowIssue[] = []
   const keys = Object.keys(node.config || {})
   if (node.type === 'audio_input') {
-    if (keys.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: '音频输入节点不需要配置字段', node_id: node.id })
+    if (keys.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.inputNoConfig'), node_id: node.id })
   } else if (node.type === 'audio_output') {
     const unexpected = keys.filter((key) => key !== 'filename_stem')
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `音频输出只支持 filename_stem，未知字段：${unexpected.join(', ')}`, node_id: node.id })
+    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.audioUnknownFields', { p0: unexpected.join(', ') }), node_id: node.id })
     const stem = node.config.filename_stem === undefined ? 'audio-copy' : node.config.filename_stem
-    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', message: '输出文件名必须是无路径的安全文件名主体', node_id: node.id })
+    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', ...issueText('workflow.audioSafeFilename'), node_id: node.id })
   } else if (node.type === 'text_output') {
     const allowed = new Set(['filename_stem', 'format'])
     const unexpected = keys.filter((key) => !allowed.has(key))
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', message: `文本输出只支持 filename_stem、format，未知字段：${unexpected.join(', ')}`, node_id: node.id })
+    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.textUnknownFields', { p0: unexpected.join(', ') }), node_id: node.id })
     const stem = node.config.filename_stem === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.filename_stem : node.config.filename_stem
-    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', message: '文本输出文件名必须是无路径的安全文件名主体', node_id: node.id })
+    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', ...issueText('workflow.textSafeFilename'), node_id: node.id })
     const format = node.config.format === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.format : node.config.format
     if (typeof format !== 'string' || !['txt', 'srt', 'vtt', 'lrc'].includes(format)) {
-      issues.push({ code: 'INVALID_TEXT_FORMAT', message: '文本输出格式只能是 txt、srt、vtt 或 lrc', node_id: node.id })
+      issues.push({ code: 'INVALID_TEXT_FORMAT', ...issueText('workflow.textFormat'), node_id: node.id })
     }
   } else {
     for (const issue of registry.validateConfig(node.type, node.config)) issues.push({ ...issue, node_id: node.id })
@@ -339,23 +334,23 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
   const inputKinds = new Set(registry.kinds.filter((kind) => kind.inputPorts.length === 0 && kind.outputPorts.length > 0).map((kind) => kind.type))
   const inputs = value.nodes.filter((node) => inputKinds.has(node.type))
   const outputs = value.nodes.filter((node) => isTerminalNode(node.type, registry))
-  if (inputs.length !== 1) issues.push({ code: 'INPUT_COUNT', message: `需要恰好一个音频输入节点，当前为 ${inputs.length} 个`, node_id: null })
-  if (!outputs.length) issues.push({ code: 'OUTPUT_MISSING', message: '至少需要一个音频输出或文本输出节点', node_id: null })
-  if (value.nodes.length > MAX_WORKFLOW_NODES) issues.push({ code: 'TOO_MANY_NODES', message: `节点数不能超过 ${MAX_WORKFLOW_NODES}`, node_id: null })
-  if (value.edges.length > MAX_WORKFLOW_EDGES) issues.push({ code: 'TOO_MANY_EDGES', message: `连接数不能超过 ${MAX_WORKFLOW_EDGES}`, node_id: null })
+  if (inputs.length !== 1) issues.push({ code: 'INPUT_COUNT', ...issueText('workflow.inputCount', { p0: inputs.length }), node_id: null })
+  if (!outputs.length) issues.push({ code: 'OUTPUT_MISSING', ...issueText('workflow.outputMissing'), node_id: null })
+  if (value.nodes.length > MAX_WORKFLOW_NODES) issues.push({ code: 'TOO_MANY_NODES', ...issueText('workflow.nodeLimit', { p0: MAX_WORKFLOW_NODES }), node_id: null })
+  if (value.edges.length > MAX_WORKFLOW_EDGES) issues.push({ code: 'TOO_MANY_EDGES', ...issueText('workflow.edgeLimit', { p0: MAX_WORKFLOW_EDGES }), node_id: null })
 
   const ids = new Set<string>()
   const nodeTypes = new Map<string, NodeType>()
   const supportedTypes = new Set<NodeType>(registry.kinds.map((kind) => kind.type))
   for (const node of value.nodes) {
     if (ids.has(node.id)) {
-      issues.push({ code: 'DUPLICATE_NODE', message: `节点 ID 重复：${node.id}`, node_id: node.id })
+      issues.push({ code: 'DUPLICATE_NODE', ...issueText('workflow.duplicateNode', { p0: node.id }), node_id: node.id })
       continue
     }
     ids.add(node.id)
     nodeTypes.set(node.id, node.type)
     if (!supportedTypes.has(node.type)) {
-      issues.push({ code: 'UNKNOWN_NODE_TYPE', message: `不支持的节点类型：${node.type}`, node_id: node.id })
+      issues.push({ code: 'UNKNOWN_NODE_TYPE', ...issueText('workflow.unknownNodeType', { p0: node.type }), node_id: node.id })
     }
   }
 
@@ -363,28 +358,28 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
   const incoming = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
   const outgoing = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
   for (const edge of value.edges) {
-    if (edgeIds.has(edge.id)) issues.push({ code: 'DUPLICATE_EDGE', message: `连线 ID 重复：${edge.id}`, edge_id: edge.id })
+    if (edgeIds.has(edge.id)) issues.push({ code: 'DUPLICATE_EDGE', ...issueText('workflow.duplicateEdge', { p0: edge.id }), edge_id: edge.id })
     edgeIds.add(edge.id)
-    if (!ids.has(edge.source)) issues.push({ code: 'UNKNOWN_SOURCE', message: `连线起点不存在：${edge.source}`, edge_id: edge.id })
-    if (!ids.has(edge.target)) issues.push({ code: 'UNKNOWN_TARGET', message: `连线终点不存在：${edge.target}`, edge_id: edge.id })
+    if (!ids.has(edge.source)) issues.push({ code: 'UNKNOWN_SOURCE', ...issueText('workflow.unknownSource', { p0: edge.source }), edge_id: edge.id })
+    if (!ids.has(edge.target)) issues.push({ code: 'UNKNOWN_TARGET', ...issueText('workflow.unknownTarget', { p0: edge.target }), edge_id: edge.id })
     if (ids.has(edge.source)) outgoing.get(edge.source)!.push(edge)
     if (ids.has(edge.target)) incoming.get(edge.target)!.push(edge)
     const sourceType = nodeTypes.get(edge.source)
     const targetType = nodeTypes.get(edge.target)
     if (sourceType && targetType && (!outputPortForNode(sourceType, registry) || !inputPortForNode(targetType, registry))) {
-      issues.push({ code: 'INVALID_DIRECTION', message: '节点方向不符合工作流端口规则', edge_id: edge.id })
+      issues.push({ code: 'INVALID_DIRECTION', ...issueText('workflow.invalidDirection'), edge_id: edge.id })
     }
-    if (edge.source === edge.target) issues.push({ code: 'SELF_LOOP', message: '节点不能连接到自身', edge_id: edge.id })
+    if (edge.source === edge.target) issues.push({ code: 'SELF_LOOP', ...issueText('workflow.selfLoop'), edge_id: edge.id })
     const expectedSourcePort = sourceType ? outputPortForNode(sourceType, registry) : null
     const expectedTargetPort = targetType ? inputPortForNode(targetType, registry) : null
     if (expectedSourcePort && edge.source_port !== expectedSourcePort) {
-      issues.push({ code: 'INVALID_PORT', message: `连线源端口必须是 ${expectedSourcePort}`, edge_id: edge.id })
+      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.sourcePort', { p0: expectedSourcePort }), edge_id: edge.id })
     }
     if (expectedTargetPort && edge.target_port !== expectedTargetPort) {
-      issues.push({ code: 'INVALID_PORT', message: `连线目标端口必须是 ${expectedTargetPort}`, edge_id: edge.id })
+      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.targetPort', { p0: expectedTargetPort }), edge_id: edge.id })
     }
     if (expectedSourcePort && expectedTargetPort && expectedSourcePort !== expectedTargetPort) {
-      issues.push({ code: 'INVALID_PORT', message: `端口类型不匹配：${expectedSourcePort} 不能连接到 ${expectedTargetPort}`, edge_id: edge.id })
+      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.invalidPort', { p0: expectedSourcePort, p1: expectedTargetPort }), edge_id: edge.id })
     }
   }
 
@@ -393,19 +388,19 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
     const outbound = outgoing.get(node.id) || []
     const definition = registry.kind(node.type)
     if (definition && definition.requiredInbound !== inbound.length && !definition.terminal) {
-      issues.push({ code: 'NODE_INPUT_COUNT', message: `节点“${node.id}”需要 ${definition.requiredInbound} 条输入，当前为 ${inbound.length} 条`, node_id: node.id })
+      issues.push({ code: 'NODE_INPUT_COUNT', ...issueText('workflow.nodeInputCount', { p0: node.id, p1: definition.requiredInbound, p2: inbound.length }), node_id: node.id })
     }
     if (definition?.terminal && inbound.length !== definition.requiredInbound) {
-      issues.push({ code: 'NODE_INPUT_COUNT', message: `节点“${node.id}”需要 ${definition.requiredInbound} 条输入，当前为 ${inbound.length} 条`, node_id: node.id })
+      issues.push({ code: 'NODE_INPUT_COUNT', ...issueText('workflow.nodeInputCount', { p0: node.id, p1: definition.requiredInbound, p2: inbound.length }), node_id: node.id })
     }
     if (definition && definition.inputPorts.length === 0 && inbound.length) {
-      issues.push({ code: 'NODE_SOURCE_REQUIRED', message: `节点“${node.id}”不能有入边`, node_id: node.id })
+      issues.push({ code: 'NODE_SOURCE_REQUIRED', ...issueText('workflow.noInbound', { p0: node.id }), node_id: node.id })
     }
     if (isTerminalNode(node.type, registry) && outbound.length) {
-      issues.push({ code: 'OUTPUT_SINK_REQUIRED', message: '输出节点不能有出边', node_id: node.id })
+      issues.push({ code: 'OUTPUT_SINK_REQUIRED', ...issueText('workflow.outputNoOutbound'), node_id: node.id })
     }
     if (!inbound.length && !outbound.length) {
-      issues.push({ code: 'ISOLATED_NODE', message: `节点“${node.id}”尚未连接到工作流`, node_id: node.id })
+      issues.push({ code: 'ISOLATED_NODE', ...issueText('workflow.isolatedNode', { p0: node.id }), node_id: node.id })
     }
   }
 
@@ -419,7 +414,7 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
   if (inputs.length === 1) {
     visit(inputs[0].id)
     for (const node of value.nodes) {
-      if (!visitFromInput.has(node.id)) issues.push({ code: 'UNREACHABLE_FROM_INPUT', message: `节点“${node.id}”无法从音频输入到达`, node_id: node.id })
+      if (!visitFromInput.has(node.id)) issues.push({ code: 'UNREACHABLE_FROM_INPUT', ...issueText('workflow.unreachableInput', { p0: node.id }), node_id: node.id })
     }
   }
 
@@ -435,7 +430,7 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
   }
   for (const node of value.nodes) {
     if (!isTerminalNode(node.type, registry) && !reachesOutput.has(node.id)) {
-      issues.push({ code: 'OUTPUT_UNREACHABLE', message: `节点“${node.id}”无法到达任何终端输出`, node_id: node.id })
+      issues.push({ code: 'OUTPUT_UNREACHABLE', ...issueText('workflow.unreachableOutput', { p0: node.id }), node_id: node.id })
     }
   }
 
@@ -452,7 +447,7 @@ export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegist
     }
   }
   if (value.nodes.length && visited !== value.nodes.length) {
-    issues.push({ code: 'CYCLE', message: '工作流不能包含循环连线', node_id: null })
+    issues.push({ code: 'CYCLE', ...issueText('workflow.cycle'), node_id: null })
   }
 
   for (const node of value.nodes) issues.push(...validateNodeConfig(node, registry))
@@ -508,9 +503,14 @@ function isActiveRunStatus(status: RunStatus) {
 
 export const useWorkflowStore = defineStore('workflow', () => {
   const capabilities = ref<Awaited<ReturnType<typeof fetchCapabilities>> | null>(null)
-  const capabilitiesError = ref('')
+  const capabilitiesErrorState = messageRef()
+  const capabilitiesError = capabilitiesErrorState.text
+  let capabilitiesFailure: unknown
   const capabilitiesLoading = ref(false)
-  const registry = vueComputed(() => capabilities.value ? createNodeRegistry(capabilities.value) : null)
+  const registry = vueComputed(() => {
+    void locale.value
+    return capabilities.value ? createNodeRegistry(capabilities.value) : null
+  })
   const projectId = ref<string | null>(null)
   const audioId = ref<string | null>(null)
   const document = ref<WorkflowDocument | null>(null)
@@ -522,17 +522,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const starting = ref(false)
   const cancelling = ref(false)
   const actionLoading = computed(() => starting.value || cancelling.value)
-  const error = ref('')
-  const notice = ref('')
+  const errorState = messageRef()
+  const error = errorState.text
+  const noticeState = messageRef()
+  const notice = noticeState.text
   const validationIssues = ref<WorkflowIssue[]>([])
   const selectedNodeId = ref<string | null>(null)
   const activeRunId = ref<string | null>(null)
   const run = ref<WorkflowRun | null>(null)
   const history = ref<WorkflowRunSummary[]>([])
   const historyLoading = ref(false)
-  const historyError = ref('')
+  const historyErrorState = messageRef()
+  const historyError = historyErrorState.text
   const runLoading = ref(false)
-  const runError = ref('')
+  const runErrorState = messageRef()
+  const runError = runErrorState.text
   const outputs = ref<Record<string, WorkflowArtifact>>({})
   const outputChecks = ref<Record<string, WorkflowOutputCheck>>({})
   const zoom = ref(1)
@@ -574,10 +578,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     activeRunId.value = null
     outputs.value = {}
     outputChecks.value = {}
-    runError.value = ''
+    runErrorState.set('')
     runLoading.value = false
     history.value = []
-    historyError.value = ''
+    historyErrorState.set('')
   }
 
   function resetRunState() {
@@ -585,7 +589,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     activeRunId.value = null
     outputs.value = {}
     outputChecks.value = {}
-    runError.value = ''
+    runErrorState.set('')
     if (pollTimer) clearTimeout(pollTimer)
     pollTimer = null
   }
@@ -608,7 +612,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     validateSequence += 1
     validating.value = false
     validationIssues.value = []
-    notice.value = ''
+    noticeState.set('')
   }
 
   function setCleanBaseline(value: WorkflowDocumentInput) {
@@ -622,7 +626,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const token = sessionGeneration
     const sequence = ++validateSequence
     validating.value = true
-    error.value = ''
+    errorState.set('')
     const draftSnapshot = cloneDocument(draft.value)
     try {
       const response = await fetch(endpoint(projectPath(id) + '/validate'), {
@@ -631,15 +635,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
         body: JSON.stringify(draftSnapshot),
       })
       if (!response.ok) throw await readApiError(response)
-      const payload = await response.json() as { valid?: unknown; errors?: unknown }
-      if (!Array.isArray(payload.errors) || typeof payload.valid !== 'boolean') throw new Error('校验响应不完整，请检查后端版本后重试。')
+      const payload = await readJson(response, 'workflow.invalidValidation') as { valid?: unknown; errors?: unknown }
+      if (!payload || !Array.isArray(payload.errors) || typeof payload.valid !== 'boolean') throw message('workflow.invalidValidation')
       if (!isCurrent(id, aid, token) || sequence !== validateSequence) return payload.errors as WorkflowIssue[]
       validationIssues.value = payload.errors as WorkflowIssue[]
-      if (!payload.valid) error.value = '工作流校验未通过，请按节点定位修正后重试。'
+      if (!payload.valid) errorState.set(message('workflow.validationFailed'))
       return payload.errors as WorkflowIssue[]
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === validateSequence) {
-        error.value = reason instanceof Error ? reason.message : '节点工作流接口不可用'
+        errorState.set(reason instanceof Error ? reason : message('workflow.apiUnavailable'))
       }
       throw reason
     } finally {
@@ -650,13 +654,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
   async function loadCapabilities() {
     if (capabilities.value || capabilitiesLoading.value) return
     capabilitiesLoading.value = true
-    capabilitiesError.value = ''
+    capabilitiesErrorState.set('')
+    capabilitiesFailure = undefined
     try {
       const value = await fetchCapabilities()
       if (stopped) return
       capabilities.value = value
     } catch (reason) {
-      capabilitiesError.value = reason instanceof Error ? reason.message : '能力目录读取失败，请检查后端服务后重试。'
+      capabilitiesFailure = reason instanceof Error ? reason : message('workflow.capReadFailed')
+      capabilitiesErrorState.set(capabilitiesFailure)
     } finally {
       capabilitiesLoading.value = false
     }
@@ -676,22 +682,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     historyLoading.value = false
     runLoading.value = false
     loading.value = true
-    error.value = ''
-    notice.value = ''
+    errorState.set('')
+    noticeState.set('')
     validationIssues.value = []
     document.value = null
     draft.value = { nodes: [], edges: [] }
     savedSignature.value = ''
     selectedNodeId.value = null
     clearHistoryState()
-    runError.value = ''
+    runErrorState.set('')
     try {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
-      if (!capabilities.value || !registry.value) throw new Error(capabilitiesError.value || '能力目录不可用，节点工作流已停止加载。')
+      if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
-      const value = readWorkflow(await response.json())
+      const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
       if (!isCurrent(id, aid, token)) return
       document.value = value
       setDraft(value)
@@ -701,7 +707,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       pan.value = { x: 0, y: 0 }
       void loadHistory(id, aid)
     } catch (reason) {
-      if (isCurrent(id, aid, token)) error.value = reason instanceof Error ? reason.message : '节点工作流接口不可用'
+      if (isCurrent(id, aid, token)) errorState.set(reason instanceof Error ? reason : message('workflow.apiUnavailable'))
     } finally {
       if (isCurrent(id, aid, token)) loading.value = false
     }
@@ -713,11 +719,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const token = sessionGeneration
     const sequence = ++saveSequence
     const draftSnapshot = cloneDocument(draft.value)
-    if (!registry.value) { error.value = '能力目录不可用，不能保存节点工作流。'; return null }
+    if (!registry.value) { errorState.set(message('workflow.capSave')); return null }
     const body = { expected_revision: document.value?.revision ?? 1, nodes: draftSnapshot.nodes, edges: draftSnapshot.edges }
     saving.value = true
-    error.value = ''
-    notice.value = ''
+    errorState.set('')
+    noticeState.set('')
     try {
       const response = await fetch(endpoint(projectPath(id)), {
         method: 'PUT',
@@ -732,17 +738,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
         throw await workflowApiError(response)
       }
-      const value = readWorkflow(await response.json())
+      const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
       if (!isCurrent(id, aid, token) || sequence !== saveSequence) return null
       document.value = value
       setDraft(value)
       savedSignature.value = executionSignature(value, registry.value || undefined)
       validationIssues.value = []
-      notice.value = '节点工作流已保存。'
+      noticeState.set(message('workflow.saved'))
       return value
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === saveSequence) {
-        error.value = reason instanceof Error ? reason.message : '节点工作流保存失败'
+        errorState.set(reason instanceof Error ? reason : message('workflow.saveFailed'))
       }
       throw reason
     } finally {
@@ -754,14 +760,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const { id, audioId: aid } = currentKey()
     if (!id || !aid || stopped || starting.value || activeRun.value || !document.value) return null
     if (dirty.value) {
-      error.value = '请先保存当前工作流再运行。'
+      errorState.set(message('workflow.saveBeforeRun'))
       return null
     }
     const token = sessionGeneration
     const sequence = ++startSequence
     starting.value = true
-    error.value = ''
-    runError.value = ''
+    errorState.set('')
+    runErrorState.set('')
     try {
       const response = await fetch(endpoint(runPath(id, aid)), {
         method: 'POST',
@@ -769,7 +775,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         body: JSON.stringify({ workflow_revision: document.value.workflow_revision }),
       })
       if (!response.ok) throw await readApiError(response)
-      const value = readRun(await response.json())
+      const value = readRun(await readJson(response, 'workflow.invalidRun'))
       if (!isCurrent(id, aid, token) || sequence !== startSequence) return null
       ++runDetailSequence
       outputs.value = {}
@@ -782,7 +788,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       return value
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === startSequence) {
-        error.value = reason instanceof Error ? reason.message : '节点工作流启动失败'
+        errorState.set(reason instanceof Error ? reason : message('workflow.startFailed'))
       }
       throw reason
     } finally {
@@ -797,16 +803,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const token = sessionGeneration
     const sequence = ++cancelSequence
     cancelling.value = true
-    error.value = ''
+    errorState.set('')
     try {
       const response = await fetch(endpoint(`${runPath(id, aid)}/${encodeURIComponent(runId)}/cancel`), { method: 'POST' })
       if (!response.ok) throw await readApiError(response)
-      const value = readRun(await response.json())
+      const value = readRun(await readJson(response, 'workflow.invalidRun'))
       if (!isCurrent(id, aid, token) || sequence !== cancelSequence) return
       applyRun(value)
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === cancelSequence) {
-        error.value = reason instanceof Error ? reason.message : '节点工作流取消失败'
+        errorState.set(reason instanceof Error ? reason : message('workflow.cancelFailed'))
       }
       throw reason
     } finally {
@@ -830,12 +836,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const token = sessionGeneration
     const sequence = ++historySequence
     historyLoading.value = true
-    historyError.value = ''
+    historyErrorState.set('')
     try {
       const response = await fetch(endpoint(`${runPath(id, aid)}?limit=30&offset=0`))
       if (!response.ok) throw await readApiError(response)
-      const value = await response.json() as WorkflowRunList
-      if (!Array.isArray(value.items)) throw new Error('运行历史响应不完整，请检查后端版本后重试。')
+      const value = await readJson(response, 'workflow.invalidHistory') as WorkflowRunList
+      if (!value || !Array.isArray(value.items)) throw message('workflow.invalidHistory')
       if (!isCurrent(id, aid, token) || sequence !== historySequence) return
       history.value = value.items.map(readRunSummary)
       if (!run.value && history.value[0] && isActiveRunStatus(history.value[0].status)) {
@@ -844,7 +850,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === historySequence) {
-        historyError.value = reason instanceof Error ? reason.message : '运行历史读取失败'
+        historyErrorState.set(reason instanceof Error ? reason : message('workflow.historyFailed'))
       }
     } finally {
       if (isCurrent(id, aid, token) && sequence === historySequence) historyLoading.value = false
@@ -855,17 +861,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const { id, audioId: aid } = currentKey()
     if (!id || !aid || stopped) return
     if (activeRun.value && run.value?.id !== runId) {
-      runError.value = '活动运行尚未结束，暂不能切换到其他历史运行。'
+      runErrorState.set(message('workflow.activeHistory'))
       return
     }
     const token = sessionGeneration
     const sequence = ++runDetailSequence
     runLoading.value = true
-    runError.value = ''
+    runErrorState.set('')
     try {
       const response = await fetch(endpoint(`${runPath(id, aid)}/${encodeURIComponent(runId)}`))
       if (!response.ok) throw await readApiError(response)
-      const value = readRun(await response.json())
+      const value = readRun(await readJson(response, 'workflow.invalidRun'))
       if (!isCurrent(id, aid, token) || sequence !== runDetailSequence) return
       outputs.value = {}
       outputChecks.value = {}
@@ -873,7 +879,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadOutputs(id, aid, runId, token)
     } catch (reason) {
       if (isCurrent(id, aid, token) && sequence === runDetailSequence) {
-        runError.value = reason instanceof Error ? reason.message : '运行详情读取失败'
+        runErrorState.set(reason instanceof Error ? reason : message('workflow.runFailed'))
       }
     } finally {
       if (isCurrent(id, aid, token) && sequence === runDetailSequence) runLoading.value = false
@@ -930,13 +936,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
       try {
         const response = await fetch(endpoint(`${runPath(id, aid)}/${encodeURIComponent(runId)}`))
         if (!response.ok) throw await readApiError(response)
-        const value = readRun(await response.json())
+        const value = readRun(await readJson(response, 'workflow.invalidRun'))
         if (!isCurrent(id, aid, token) || run.value?.id !== runId) return
         applyRun(value)
         await loadOutputs(id, aid, runId, token)
       } catch (reason) {
         if (isCurrent(id, aid, token) && run.value?.id === runId) {
-          runError.value = reason instanceof Error ? reason.message : '运行状态刷新失败'
+          runErrorState.set(reason instanceof Error ? reason : message('workflow.pollFailed'))
           if (activeRun.value) schedulePoll()
         }
       }
@@ -956,26 +962,26 @@ export const useWorkflowStore = defineStore('workflow', () => {
   async function downloadArtifact(nodeId: string) {
     const record = run.value?.nodes.find((node) => node.node_id === nodeId)
     if (!record || record.status !== 'completed' || !record.artifact || record.node_type === 'audio_input') {
-      error.value = record?.status === 'completed' ? '此节点没有可下载的产物。' : '节点尚未成功完成，不能下载产物。'
+      errorState.set(record?.status === 'completed' ? message('workflow.noArtifact') : message('workflow.nodeIncomplete'))
       return
     }
     const value = outputs.value[nodeId]
     if (!value) {
       const state = outputChecks.value[nodeId]?.state
-      error.value = state === 'missing'
-        ? '产物缺失，不可下载。'
+      errorState.set(state === 'missing'
+        ? message('workflow.artifactMissing')
         : state === 'failed'
-          ? '产物检查失败，请重试。'
-          : '产物仍在检查中，请稍候。'
+          ? message('workflow.artifactRetry')
+          : message('workflow.artifactWait'))
       return
     }
     if (!value.download_url) {
-      error.value = '此产物没有可用的下载地址。'
+      errorState.set(message('workflow.artifactNoUrl'))
       return
     }
     const downloadUrl = resolveArtifactUrl(value.download_url)
     if (!downloadUrl) {
-      error.value = '服务端返回了无效的产物下载地址。'
+      errorState.set(message('workflow.artifactInvalidUrl'))
       return
     }
     const link = window.document.createElement('a')
@@ -989,9 +995,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (stopped || loading.value || activeRun.value || !registry.value || draft.value.nodes.length >= MAX_WORKFLOW_NODES) return
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
-    if (!definition) { error.value = `能力目录未注册节点类型：${type}`; return }
+    if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
     if (definition.maxInstances !== null && nodes.filter((node) => node.type === type).length >= definition.maxInstances) {
-      error.value = definition.maxInstances === 1 ? `节点“${definition.label}”最多只能添加一个。` : `节点“${definition.label}”最多添加 ${definition.maxInstances} 个。`
+      errorState.set(definition.maxInstances === 1 ? message('workflow.maxOne', { p0: type }) : message('workflow.maxMany', { p0: type, p1: definition.maxInstances }))
       return
     }
     const id = nextNodeId(type, nodes, registry.value)
@@ -1011,7 +1017,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (stopped || activeRun.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node || node.type === 'audio_input') {
-      error.value = '工作流保留唯一的音频输入节点，请删除其他节点。'
+      errorState.set(message('workflow.keepInput'))
       return
     }
     draft.value.nodes = draft.value.nodes.filter((item) => item.id !== id)
@@ -1037,22 +1043,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const sourcePort = from ? outputPortForNode(from.type, registry.value) : null
     const targetPort = to ? inputPortForNode(to.type, registry.value) : null
     if (!from || !to || !sourcePort || !targetPort) {
-      error.value = '源节点没有可用输出端口，或目标节点没有可用输入端口。'
+      errorState.set(message('workflow.noPorts'))
       return false
     }
     if (sourcePort !== targetPort) {
-      error.value = `端口类型不匹配：${sourcePort} 不能连接到 ${targetPort}。`
+      errorState.set(message('workflow.connectPortMismatch', { p0: sourcePort, p1: targetPort }))
       return false
     }
     if (source === target) {
-      error.value = '节点不能连接到自身。'
+      errorState.set(message('workflow.connectSelf'))
       return false
     }
     const exists = draft.value.edges.some((edge) => edge.source === source && edge.target === target)
     if (exists) return false
-    if (!registry.value) { error.value = '能力目录不可用，不能连接受限的工作流。'; return false }
+    if (!registry.value) { errorState.set(message('workflow.capConnect')); return false }
     if (draft.value.edges.length >= MAX_WORKFLOW_EDGES) {
-      error.value = `连接数不能超过 ${MAX_WORKFLOW_EDGES}，请先删除一条现有连线。`
+      errorState.set(message('workflow.connectLimit', { p0: MAX_WORKFLOW_EDGES }))
       return false
     }
     const outgoing = new Map(draft.value.nodes.map((node) => [node.id, [] as string[]]))
@@ -1062,7 +1068,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     while (pending.length) {
       const nodeId = pending.shift()!
       if (nodeId === source) {
-        error.value = '该连线会形成循环，不能连接。'
+        errorState.set(message('workflow.connectCycle'))
         return false
       }
       if (visited.has(nodeId)) continue
@@ -1071,7 +1077,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
     draft.value.edges = draft.value.edges.filter((edge) => edge.target !== target)
     draft.value.edges.push({ id: nextEdgeId(draft.value.edges), source, source_port: sourcePort, target, target_port: targetPort })
-    error.value = ''
+    errorState.set('')
     markDirty()
     return true
   }
@@ -1109,8 +1115,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
     discardSelection()
     validationIssues.value = []
-    notice.value = ''
-    error.value = ''
+    noticeState.set('')
+    errorState.set('')
   }
 
   function discardSelection() {
@@ -1123,7 +1129,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     validationIssues, selectedNodeId, selectedNode, currentOutputNode, activeRunId, run, activeRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty,
     runMatchesDraft,
-    load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
+    setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
     updateNode, connect, disconnect, selectNode, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
     discardDraft,
   }

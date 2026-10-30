@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { API_BASE_URL } from '../api'
+import { API_BASE_URL, parseApiError } from '../api'
+import { message, messageRef } from '../i18n'
 import type { Audio, Project } from './projects'
 
 export interface AudioJobSummary {
@@ -11,20 +12,6 @@ export interface AudioJobSummary {
 
 export interface AudioItem extends Audio {
   job?: AudioJobSummary | null
-}
-
-async function parseError(response: Response): Promise<Error> {
-  try {
-    const payload = await response.json() as {
-      error?: { message?: string }
-      detail?: { message?: string; error?: { message?: string } } | string
-    }
-    const detail = payload.detail
-    const message = typeof detail === 'string' ? detail : detail?.error?.message || detail?.message
-    return new Error(payload.error?.message || message || `请求失败（${response.status}）`)
-  } catch {
-    return new Error(`请求失败（${response.status}）`)
-  }
 }
 
 function isBusy(job: AudioJobSummary | null | undefined): boolean {
@@ -38,7 +25,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   const audios = ref<AudioItem[]>([])
   const activeAudioId = ref<string | null>(null)
   const loading = ref(false)
-  const error = ref('')
+  const { text: error, set: setError } = messageRef()
   let generation = 0
   let stopped = true
   let requestedProjectId: string | null = null
@@ -52,7 +39,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
 
   async function request<T>(path: string): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`)
-    if (!response.ok) throw await parseError(response)
+    if (!response.ok) throw await parseApiError(response)
     return await response.json() as T
   }
 
@@ -66,7 +53,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
   async function fetchAudios(id: string) {
     const token = generation
     const payload = await request<{ items?: unknown }>(`/projects/${encodeURIComponent(id)}/audios`)
-    if (!Array.isArray(payload.items)) throw new Error('项目音频响应不完整，请检查后端版本后重试。')
+    if (!Array.isArray(payload.items)) throw message('app.errors.audioIncomplete')
     const items = payload.items as AudioItem[]
     if (isCurrent(id, token)) {
       audios.value = items
@@ -94,7 +81,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
       activeAudioId.value = chosen
     } catch (reason) {
       if (isCurrent(id, token)) {
-        error.value = reason instanceof Error ? reason.message : '项目详情加载失败'
+        setError(reason instanceof Error ? reason : message('app.errors.detail'))
         throw reason
       }
     } finally {
@@ -124,6 +111,7 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     anyRunning,
     loading,
     error,
+    setError,
     load,
     fetchProject,
     fetchAudios,

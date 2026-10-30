@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fileStem, useUploadQueue, validateUpload, type UploadPolicy } from './useUploadQueue'
+import { message, setLocale } from '../i18n'
 
 const policy: UploadPolicy = { allowed_extensions: ['wav', 'mp3', 'm4a', 'flac', 'aac', 'ogg', 'opus'], max_upload_bytes: 1024 }
 const file = (name: string, lastModified = 1) => new File(['audio'], name, { type: 'audio/wav', lastModified })
@@ -42,6 +43,54 @@ describe('upload validation matches the server creation contract', () => {
 })
 
 describe('upload queue', () => {
+  it('retranslates invalid files and duplicate feedback without replacing queue entries', () => {
+    const { queue } = queueWith()
+    const selected = file('bad.exe')
+    queue.add([selected])
+    queue.add([selected])
+    const item = queue.items.value[0]
+    expect(item.error).toContain('格式不支持')
+    expect(queue.feedback.value).toContain('未重复添加')
+    setLocale('en')
+    expect(queue.items.value[0]).toBe(item)
+    expect(item.file).toBe(selected)
+    expect(item.status).toBe('invalid')
+    expect(item.error).toContain('Unsupported format')
+    expect(queue.feedback.value).toContain('was not added again')
+    setLocale('zh-CN')
+    expect(item.error).toContain('格式不支持')
+  })
+
+  it('retranslates validation feedback and failed known errors while preserving immutable retry snapshots', async () => {
+    const create = vi.fn().mockRejectedValueOnce(message('app.errors.create')).mockResolvedValue({ id: 'created' })
+    const { queue } = queueWith(create)
+    const selected = file('voice.wav')
+    queue.add([selected])
+    await queue.submit({ name: '原始项目', language: 'ja', targetLanguage: 'ja' })
+    setLocale('en')
+    expect(queue.feedback.value).toBe('Source and target languages must differ.')
+    await queue.submit({ name: '原始项目', language: 'ja', targetLanguage: 'zh-CN' })
+    const item = queue.items.value[0]
+    const snapshot = item.snapshot
+    expect(item.error).toContain('Failed to create the project')
+    setLocale('zh-CN')
+    expect(item.error).toContain('项目创建失败')
+    expect(item.status).toBe('failed')
+    expect(item.snapshot).toBe(snapshot)
+    expect(item.file).toBe(selected)
+    await queue.retry(item.id)
+    expect(create.mock.calls[1].slice(1)).toEqual(['原始项目', 'ja', 'zh-CN'])
+  })
+
+  it('preserves unknown server error text while translating recovery instructions', async () => {
+    const { queue } = queueWith(vi.fn().mockRejectedValue(new Error('CUSTOM server extension')))
+    queue.add([file('voice.wav')])
+    await queue.submit({ name: '', language: 'ja', targetLanguage: 'zh-CN' })
+    setLocale('en')
+    expect(queue.items.value[0].error).toContain('CUSTOM server extension')
+    expect(queue.items.value[0].error).toContain('uploaded audio will be kept')
+  })
+
   it('creates one parent then appends sequentially, isolates failures and retries into the same parent', async () => {
     let release: ((project: { id: string }) => void) | undefined
     const create = vi.fn().mockImplementationOnce(() => new Promise<{ id: string }>((resolve) => { release = resolve }))
@@ -187,5 +236,8 @@ describe('upload queue', () => {
     await queue.submit({ name: '', language: 'en', targetLanguage: 'zh-CN' })
     expect(queue.items.value[0].error).toContain('检查服务和网络')
     expect(queue.busy.value).toBe(false)
+    setLocale('en')
+    expect(queue.items.value[0].error).toBe('Cannot connect to the server. Check the service and network, then retry this file.')
+    expect(queue.items.value[0].status).toBe('failed')
   })
 })
