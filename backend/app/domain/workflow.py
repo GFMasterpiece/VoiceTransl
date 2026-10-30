@@ -22,6 +22,15 @@ from .schema import require_schema_version
 WORKFLOW_SCHEMA_VERSION = "1.0"
 MAX_WORKFLOW_NODES = 64
 MAX_WORKFLOW_EDGES = 64
+# Graph-level limits are shared with the capabilities API so clients can render
+# current constraints without maintaining their own policy copy.
+WORKFLOW_GRAPH_CONSTRAINTS = {
+    "max_nodes": MAX_WORKFLOW_NODES,
+    "max_edges": MAX_WORKFLOW_EDGES,
+    "min_sources": 1,
+    "max_sources": 1,
+    "min_terminals": 1,
+}
 NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 EDGE_ID_PATTERN = NODE_ID_PATTERN
 TRANSCRIPT_PORT = _nodes.TRANSCRIPT_PORT
@@ -203,11 +212,10 @@ class WorkflowRunList(BaseModel):
     offset: int
 
 
-class TextOutputConfig(BaseModel):
+class AudioOutputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    filename_stem: str = Field(default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128)
-    format: Literal["txt", "srt", "vtt", "lrc"] = DEFAULT_TEXT_FORMAT
+    filename_stem: str = Field(default=DEFAULT_FILENAME_STEM, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_filename_stem(self):
@@ -215,6 +223,11 @@ class TextOutputConfig(BaseModel):
         if not valid:
             raise ValueError(message or "filename_stem 无效")
         return self
+
+
+class TextOutputConfig(AudioOutputConfig):
+    filename_stem: str = Field(default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128)
+    format: Literal["txt", "srt", "vtt", "lrc"] = DEFAULT_TEXT_FORMAT
 
 
 def validate_asr_config(config: object) -> MockASRNodeConfig:
@@ -452,12 +465,16 @@ def validate_workflow_graph(
                     f"{node_type} 最多允许 {limit} 个节点",
                 )
             )
-    if not explicit_sources:
+    if len(explicit_sources) < WORKFLOW_GRAPH_CONSTRAINTS["min_sources"]:
         issues.append(_issue("INVALID_SOURCE_NODE", "工作流缺少注册表声明的源节点"))
 
-    if len(input_nodes) != 1:
+    if not (
+        WORKFLOW_GRAPH_CONSTRAINTS["min_sources"]
+        <= len(input_nodes)
+        <= WORKFLOW_GRAPH_CONSTRAINTS["max_sources"]
+    ):
         issues.append(_issue("INVALID_INPUT_COUNT", "工作流必须恰好包含一个 audio_input 节点"))
-    if not output_nodes:
+    if len(output_nodes) < WORKFLOW_GRAPH_CONSTRAINTS["min_terminals"]:
         issues.append(
             _issue(
                 "INVALID_OUTPUT_COUNT",

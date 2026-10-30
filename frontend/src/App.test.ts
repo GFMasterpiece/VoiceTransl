@@ -15,10 +15,13 @@ const response = (payload: unknown, status = 200) => ({ ok: status >= 200 && sta
 async function settle() { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() }
 
 async function mount(policyAvailable = true) {
-  const capabilities = { schema_version: '1.0', workflow: { nodes: [
-    { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
+  const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.1', nodes: [
+    { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
     { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
-  ], ports: ['audio'] }, asr: { providers: [{ id: 'mock', label: 'Mock' }], status: 'available' } }
+  ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {
+    nodes: [{ id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } }, { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }],
+    edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
+  } }, asr: { providers: [{ id: 'mock', label: 'Mock' }], status: 'available' } }
   const workflowDocument = { schema_version: '1.0', project_id: 'created-project', revision: 1, workflow_revision: 1, updated_at: '2026-01-01', nodes: [{ id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } }, { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }], edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }] }
   vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(String(url).endsWith('/upload-policy')
     ? policyAvailable ? response({ allowed_extensions: ['wav', 'ogg'], max_upload_bytes: 1024 }) : { ok: false }
@@ -385,10 +388,13 @@ describe('workflow navigation guards', () => {
   async function mountWorkflow() {
     const firstAudio = { id: 'aud_primary', source: project.source }
     const secondAudio = { id: 'aud_second', source: { ...project.source, original_name: 'second.wav' } }
-    const capabilities = { schema_version: '1.0', workflow: { nodes: [
-      { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
+    const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.1', nodes: [
+      { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
       { type: 'audio_output', label: '音频输出', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] }, position_x: 420 },
-    ], ports: ['audio'] }, asr: { providers: [{ id: 'mock', label: 'Mock' }] }, export: { formats: [], naming_modes: [] } }
+    ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {
+      nodes: [{ id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } }, { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }],
+      edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
+    } }, asr: { providers: [{ id: 'mock', label: 'Mock' }] }, export: { formats: [], naming_modes: [] } }
     const workflowDocument = {
       schema_version: '1.0', project_id: project.id, revision: 1, workflow_revision: 1,
       updated_at: '2026-01-01T00:00:00Z',

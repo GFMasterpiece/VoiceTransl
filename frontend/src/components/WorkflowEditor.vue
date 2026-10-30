@@ -10,11 +10,9 @@ import {
   isTerminalNode,
   nodeLabel as registeredNodeLabel,
   outputPortForNode as registeredOutputPortForNode,
-  readTextOutputConfig,
   issueText,
   useWorkflowStore,
   validateNodeConfig as registeredValidateNodeConfig,
-  type TextOutputFormat,
   type WorkflowNode,
 } from '../stores/workflow'
 
@@ -30,14 +28,11 @@ const settingsOpen = ref(false)
 const historyOpen = ref(false)
 const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
-const filenameDraft = ref('')
-const textFormatDraft = ref<TextOutputFormat>('txt')
 const genericDraft = ref<Record<string, unknown>>({})
 const settingsErrorState = messageRef()
 const settingsError = settingsErrorState.text
 const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
-const dedicatedOutputKinds = new Set(['audio_output', 'text_output'])
-const genericFields = computed(() => selectedKind.value && !dedicatedOutputKinds.has(selectedKind.value.configKind) ? selectedKind.value.fields : [])
+const genericFields = computed(() => selectedKind.value?.fields || [])
 function fieldValue(field: { key: string; default: unknown }) {
   const value = genericDraft.value[field.key]
   return value === undefined ? (field.default ?? '') : value
@@ -58,7 +53,7 @@ function setJsonFieldValue(field: { key: string }, event: Event) {
   } catch { settingsErrorState.set(message('workflow.jsonInvalid')) }
 }
 const selected = computed(() => store.selectedNode)
-const currentInput = computed(() => store.draft.nodes.find((node) => node.type === 'audio_input'))
+const currentInput = computed(() => store.draft.nodes.find((node) => registry.value?.kind(node.type)?.isSource))
 const connectionSources = computed(() => store.draft.nodes.filter((node) => !!outputPortForNode(node.type)))
 const connectionTargets = computed(() => store.draft.nodes.filter((node) => !!inputPortForNode(node.type)))
 const connectionSource = computed(() => selected.value && outputPortForNode(selected.value.type) ? selected.value : currentInput.value)
@@ -110,15 +105,12 @@ function canvasPoint(event: PointerEvent) {
 function openNode(node: WorkflowNode) {
   if (controlsLocked.value) return
   store.selectNode(node.id)
-  filenameDraft.value = typeof node.config.filename_stem === 'string' ? node.config.filename_stem : 'audio-copy'
-  textFormatDraft.value = readTextOutputConfig(node.config).format
   const defaults = registry.value?.createDefaultConfig(node.type) || {}
   genericDraft.value = { ...defaults, ...node.config }
   settingsErrorState.set('')
   settingsOpen.value = true
   void nextTick(() => {
-    const target = document.getElementById(node.type === 'audio_output' || node.type === 'text_output' ? 'workflow-filename-stem' : 'workflow-config-provider')
-    const focusTarget = target || document.querySelector<HTMLElement>('.workflow-settings-modal select, .workflow-settings-modal input, .workflow-settings-modal button')
+    const focusTarget = document.querySelector<HTMLElement>('.workflow-settings-modal select, .workflow-settings-modal input, .workflow-settings-modal textarea, .workflow-settings-modal button')
     focusTarget?.focus()
   })
 }
@@ -130,32 +122,18 @@ function closeSettings() {
 
 function commitSettings() {
   if (!selected.value || store.saving || store.activeRun) return
-  if (selected.value.type === 'audio_output' || selected.value.type === 'text_output') {
-    const stem = filenameDraft.value.trim()
-    const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)
-    if (!stem || stem === '.' || stem === '..' || stem.endsWith('.') || reserved || stem.includes(String.fromCharCode(92)) || /[\/<>:"|?*\u0000-\u001f\u007f]/.test(stem) || stem.length > 128) {
-      settingsErrorState.set(message('workflow.filenameInvalid'))
-      return
-    }
-    store.updateNode(selected.value.id, {
-      config: selected.value.type === 'text_output'
-        ? { filename_stem: stem, format: textFormatDraft.value }
-        : { filename_stem: stem },
-    })
-  } else {
-    const config = { ...genericDraft.value }
-    const issues = validateNodeConfig({ id: selected.value.id, type: selected.value.type, config })
-    if (issues.length) {
-      settingsErrorState.set(issues[0].messageKey ? message(issues[0].messageKey, issues[0].messageParams) : issues[0].message)
-      return
-    }
-    store.updateNode(selected.value.id, { config })
+  const config = { ...genericDraft.value }
+  const issues = validateNodeConfig({ id: selected.value.id, type: selected.value.type, config })
+  if (issues.length) {
+    settingsErrorState.set(issues[0].messageKey ? message(issues[0].messageKey, issues[0].messageParams) : issues[0].message)
+    return
   }
+  store.updateNode(selected.value.id, { config })
   settingsOpen.value = false
 }
 
 function removeSelected() {
-  if (!selected.value || selected.value.type === 'audio_input' || registry.value?.kind(selected.value.type)?.removable === false) return
+  if (!selected.value || registry.value?.kind(selected.value.type)?.removable === false) return
   if (!window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(selected.value) }))) return
   store.removeNode(selected.value.id)
   settingsOpen.value = false
@@ -334,7 +312,7 @@ function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
     event.preventDefault()
     openNode(node)
   }
-  if (event.key === 'Delete' && node.type !== 'audio_input' && registry.value?.kind(node.type)?.removable !== false && !store.activeRun) {
+  if (event.key === 'Delete' && registry.value?.kind(node.type)?.removable !== false && !store.activeRun) {
     event.preventDefault()
     if (window.confirm(t('workflow.deleteShortConfirm', { name: nodeLabel(node) }))) store.removeNode(node.id)
   }
@@ -359,36 +337,28 @@ async function retryOutputChecks() {
 }
 
 function nodeKindLabel(node: WorkflowNode) {
-  const label = registry.value?.label(node.type) || node.type
-  if (node.type === 'audio_input') return label
-  if (node.type === 'preprocess' || node.type === 'asr') return `Mock ${label}`
-  if (node.type === 'text_output') return t('workflow.textKind', { format: readTextOutputConfig(node.config).format.toUpperCase() })
-  return label
+  return registry.value?.label(node.type) || node.type
 }
 
 function nodeKicker(node: WorkflowNode) {
-  const key = `workflow.kicker_${node.type}`
-  return hasMessage(key) ? t(key) : registry.value?.label(node.type) || node.type
+  return nodeKindLabel(node)
 }
 
 function nodeDescription(node: WorkflowNode) {
-  const key = `workflow.description_${node.type}`
-  return hasMessage(key) ? t(key) : t('workflow.genericDescription', { name: nodeLabel(node) })
+  const definition = registry.value?.kind(node.type)
+  if (definition?.isSource) return t('workflow.inputHelp', { name: props.audioName })
+  return t('workflow.genericDescription', { name: nodeLabel(node) })
 }
 
 function nodeSettingsKicker(node: WorkflowNode) {
-  const key = `workflow.settingsKicker_${node.type}`
-  return hasMessage(key) ? t(key) : nodeLabel(node)
+  return nodeLabel(node)
 }
 
 function nodeSettingsTitle(node: WorkflowNode) {
-  const key = `workflow.settings_${node.type}`
-  return hasMessage(key) ? t(key) : t('workflow.genericSettings', { name: nodeLabel(node) })
+  return nodeLabel(node)
 }
 
-function deleteLabel(node: WorkflowNode) {
-  return t(node.type === 'preprocess' ? 'workflow.deletePreprocess' : node.type === 'asr' ? 'workflow.deleteAsr' : node.type === 'audio_output' || node.type === 'text_output' ? 'workflow.deleteOutput' : 'workflow.deleteNode')
-}
+function deleteLabel() { return t('workflow.deleteNode') }
 
 function configFieldLabel(field: { type: string; options: readonly { value: string; label: string }[] }, value: unknown) {
   if (field.type === 'select') return field.options.find((option) => option.value === value)?.label || String(value)
@@ -397,23 +367,12 @@ function configFieldLabel(field: { type: string; options: readonly { value: stri
 }
 
 function nodeMeta(node: WorkflowNode) {
-  if (node.type === 'audio_input') return t('workflow.boundAudio')
-  if (node.type === 'preprocess' || node.type === 'asr') {
-    const fields = registry.value?.kind(node.type)?.fields || []
-    const values = fields
-      .map((field) => ({ field, value: node.config[field.key] === undefined ? field.default : node.config[field.key] }))
-      .filter((entry) => entry.value !== null && entry.value !== undefined && entry.value !== '')
-      .slice(0, 2)
-      .map((entry) => configFieldLabel(entry.field, entry.value))
-    const summary = values.join(' · ') || t('workflow.option_preprocess_provider_mock')
-    return node.type === 'preprocess' ? `${summary} · ${t('workflow.passthrough')}` : summary
-  }
-  if (node.type === 'text_output') {
-    const config = readTextOutputConfig(node.config)
-    return `${config.format.toUpperCase()} · ${config.filename_stem}`
-  }
-  if (node.type === 'audio_output') return `${t('workflow.filename')} · ${node.config.filename_stem || 'audio-copy'}`
-  return registry.value?.kind(node.type)?.fields.map((field) => `${field.label}: ${configFieldLabel(field, node.config[field.key] ?? field.default)}`).join(' · ') || nodeLabel(node)
+  const definition = registry.value?.kind(node.type)
+  if (definition?.isSource) return t('workflow.boundAudio')
+  return (definition?.fields || []).map((field) => {
+    const value = node.config[field.key] === undefined ? field.default : node.config[field.key]
+    return value === null || value === undefined || value === '' ? '' : `${field.label}: ${configFieldLabel(field, value)}`
+  }).filter(Boolean).slice(0, 2).join(' · ') || nodeLabel(node)
 }
 
 function runStatusLabel(status?: string) {
@@ -482,7 +441,7 @@ onUnmounted(() => {
     <template v-else>
       <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>{{ t('workflow.asrTextOutput') }}</strong><span>{{ t('workflow.boundAudioHelp', { name: props.audioName }) }}</span></div>
       <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
-        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || (kind.type === 'audio_input' && !!currentInput) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
+        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || (kind.isSource && !!currentInput) || store.draft.nodes.length >= (registry?.capabilities.constraints.maxNodes || 0) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
         <span class="toolbar-rule" aria-hidden="true"></span>
         <button class="secondary-button compact-button" type="button" :disabled="!connectionSource || !connectionTargets.length || !!store.activeRun" @click="connectionSource && startConnection(connectionSource)">{{ t('workflow.connectionMode') }}</button>
         <span v-if="connectFrom" class="connection-hint" role="status">{{ connectFromLabel() }}</span>
@@ -527,11 +486,8 @@ onUnmounted(() => {
             <p class="inspector-type">{{ nodeDescription(selected) }}</p>
             <div class="workflow-field"><span>{{ t('workflow.nodeId') }}</span><code>{{ selected.id }}</code></div>
             <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">{{ t('workflow.editSettings') }}</button>
-            <button v-if="selected.type !== 'audio_input'" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel(selected) }}</button>
-          <p v-if="selected.type === 'audio_input'" class="inspector-help">{{ t('workflow.inputHelp', { name: props.audioName }) }}</p>
-            <p v-else-if="selected.type === 'preprocess'" class="inspector-help">{{ t('workflow.preprocessHelp') }}</p>
-            <p v-else-if="selected.type === 'asr'" class="inspector-help">{{ t('workflow.asrHelp') }}</p>
-            <p v-else-if="selected.type === 'text_output'" class="inspector-help">{{ t('workflow.textHelp') }}</p>
+            <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
+            <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: props.audioName }) }}</p>
           </template>
           <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>{{ t('workflow.inspectorEmpty') }}</p></div>
           <dl class="workflow-inspector-meta"><div><dt>{{ t('workflow.workflowVersion') }}</dt><dd>{{ numberLabel(store.document?.workflow_revision) }}</dd></div><div><dt>{{ t('workflow.documentRevision') }}</dt><dd>{{ numberLabel(store.document?.revision) }}</dd></div><div><dt>{{ t('workflow.currentAudio') }}</dt><dd>{{ props.audioName }}</dd></div></dl>
@@ -552,7 +508,7 @@ onUnmounted(() => {
             <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>
             <p v-else-if="node.artifact">{{ t('workflow.snapshotArtifact', { port: node.artifact.port.toUpperCase(), type: node.artifact.media_type, size: sizeLabel(node.artifact.size_bytes) }) }}</p>
             <p v-else>{{ t('workflow.noNodeArtifact') }}</p>
-            <template v-if="node.node_type !== 'audio_input' && node.status === 'completed'">
+            <template v-if="node.artifact && node.status === 'completed'">
               <p class="workflow-output-state" :class="`is-${outputCheckState(node.node_id)}`">{{ outputCheckState(node.node_id) === 'checking' ? t('workflow.artifactChecking') : outputCheckState(node.node_id) === 'missing' ? t('workflow.artifactMissing') : outputCheckState(node.node_id) === 'failed' ? t('workflow.artifactCheckFailed') : t('workflow.artifactAvailable') }}</p>
               <button v-if="canDownloadOutput(node.node_id)" class="secondary-button compact-button" type="button" @click="download(node.node_id)">{{ t('workflow.download', { filename: node.artifact?.filename || '' }) }}</button>
               <button v-else-if="outputCheckState(node.node_id) === 'failed'" class="secondary-button compact-button" type="button" @click="retryOutputChecks">{{ t('workflow.retryChecks') }}</button>
@@ -567,18 +523,15 @@ onUnmounted(() => {
       <section class="config-modal workflow-settings-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-settings-title">
         <div class="config-modal-header"><div><span class="section-kicker">{{ nodeSettingsKicker(selected) }}</span><h3 id="workflow-settings-title">{{ nodeSettingsTitle(selected) }}</h3><p>{{ t('workflow.settingsSubtitle') }}</p></div><button class="modal-close" type="button" :aria-label="t('workflow.closeSettings')" @click="closeSettings">×</button></div>
         <form class="config-modal-form" @submit.prevent="commitSettings">
-          <label v-if="selected.type === 'audio_output' || selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-filename-stem"><span>{{ t('workflow.outputFilename') }}</span><input id="workflow-filename-stem" v-model="filenameDraft" type="text" maxlength="128" :disabled="controlsLocked" :placeholder="selected.type === 'text_output' ? 'transcript' : 'audio-copy'" /><small v-if="selected.type === 'text_output'">{{ t('workflow.textFilenameHelp', { format: textFormatDraft.toUpperCase() }) }}</small><small v-else>{{ t('workflow.audioFilenameHelp') }}</small></label>
-          <label v-if="selected.type === 'text_output'" class="config-field workflow-wide-field" for="workflow-text-format"><span>{{ t('workflow.textOutputFormat') }}</span><select id="workflow-text-format" v-model="textFormatDraft" :disabled="controlsLocked"><option value="txt">{{ t('workflow.format_txt') }}</option><option value="srt">{{ t('workflow.format_srt') }}</option><option value="vtt">{{ t('workflow.format_vtt') }}</option><option value="lrc">{{ t('workflow.format_lrc') }}</option></select><small>{{ t('workflow.textFormatHelp') }}</small></label>
-          <div v-if="selected.type === 'preprocess' || selected.type === 'asr'" class="workflow-preprocess-note"><strong>{{ t('workflow.mockExample') }}</strong><p>{{ selected.type === 'preprocess' ? t('workflow.mockPreprocess') : t('workflow.mockAsr') }}</p></div>
-          <p v-if="selected.type === 'audio_input'" class="inspector-help">{{ t('workflow.inputSettingsHelp', { name: props.audioName }) }}</p>
-            <div v-if="genericFields.length" class="modal-field-grid">
+          <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputSettingsHelp', { name: props.audioName }) }}</p>
+          <div v-if="genericFields.length" class="modal-field-grid">
             <label v-for="field in genericFields" :key="field.key" class="config-field" :class="{ 'modal-wide-field': field.type === 'json' }">
               <span>{{ field.label }}<template v-if="field.required"> *</template></span>
               <select v-if="field.type === 'boolean'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value === 'true')"><option value="true">{{ t('workflow.yes') }}</option><option value="false">{{ t('workflow.no') }}</option></select>
               <select v-else-if="field.type === 'select'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value)"><option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option></select>
               <textarea v-else-if="field.type === 'json'" :value="jsonFieldValue(field)" rows="4" :disabled="controlsLocked" @change="setJsonFieldValue(field, $event)"></textarea>
-              <input v-else :value="fieldValue(field)" :type="field.type === 'integer' || field.type === 'number' ? 'number' : 'text'" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :step="field.type === 'integer' ? 1 : 'any'" :disabled="controlsLocked" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)" />
-              <small>{{ t('workflow.serverField') }}</small>
+              <input v-else :value="fieldValue(field)" :type="field.type === 'integer' || field.type === 'number' ? 'number' : 'text'" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :minlength="field.minLength ?? undefined" :maxlength="field.maxLength ?? undefined" :pattern="field.pattern ?? undefined" :step="field.type === 'integer' ? 1 : 'any'" :disabled="controlsLocked" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)" />
+              <small v-if="field.description">{{ field.description }}</small>
             </label>
           </div>
           <p v-if="settingsError" class="settings-feedback settings-error" role="alert">{{ settingsError }}</p>

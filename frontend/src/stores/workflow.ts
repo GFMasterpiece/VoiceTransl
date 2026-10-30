@@ -15,32 +15,6 @@ export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'block
 export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_ROW_GAP = 28
-export const MAX_WORKFLOW_NODES = 64
-export const MAX_WORKFLOW_EDGES = 64
-
-export type TextOutputFormat = 'txt' | 'srt' | 'vtt' | 'lrc'
-
-export interface TextOutputNodeConfig {
-  filename_stem: string
-  format: TextOutputFormat
-}
-
-export const DEFAULT_TEXT_OUTPUT_CONFIG: Readonly<TextOutputNodeConfig> = Object.freeze({
-  filename_stem: 'transcript',
-  format: 'txt',
-})
-
-export function defaultTextOutputConfig(): TextOutputNodeConfig {
-  return { ...DEFAULT_TEXT_OUTPUT_CONFIG }
-}
-
-export function readTextOutputConfig(config: Record<string, unknown>): TextOutputNodeConfig {
-  return {
-    filename_stem: config.filename_stem === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.filename_stem : config.filename_stem as string,
-    format: config.format === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.format : config.format as TextOutputFormat,
-  }
-}
-
 export interface WorkflowNode {
   id: string
   type: NodeType
@@ -189,14 +163,6 @@ export function isTerminalNode(type: NodeType, registry: NodeRegistry): boolean 
   return registry.isTerminalNode(type)
 }
 
-export function isSafeFilenameStem(value: unknown): value is string {
-  if (typeof value !== 'string') return false
-  const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(value)
-  return !!value.trim() && value === value.trim() && value !== '.' && value !== '..' && !value.endsWith('.')
-    && !reserved && !value.includes(String.fromCharCode(92))
-    && !/[\/<>:"|?*\u0000-\u001f\u007f]/.test(value) && value.length <= 128
-}
-
 function stableObject(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableObject)
   if (!value || typeof value !== 'object') return value
@@ -255,7 +221,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
   if (value === null || value === undefined) return null
   const artifact = value as WorkflowArtifact
   if (!artifact || typeof artifact.artifact_id !== 'string'
-    || !['audio', 'transcript', 'text'].includes(artifact.port)
+    || typeof artifact.port !== 'string' || !artifact.port
     || typeof artifact.filename !== 'string' || typeof artifact.media_type !== 'string'
     || !Number.isInteger(artifact.size_bytes) || artifact.size_bytes < 0
     || typeof artifact.sha256 !== 'string'
@@ -293,165 +259,12 @@ function readRunSummary(value: unknown): WorkflowRunSummary {
   return run
 }
 
-export function createDefaultWorkflow(): WorkflowDocumentInput {
-  return {
-    nodes: [
-      { id: 'input', type: 'audio_input', config: {}, position: { x: 96, y: 176 } },
-      { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 500, y: 176 } },
-    ],
-    edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
-  }
+export function createDefaultWorkflow(registry: NodeRegistry): WorkflowDocumentInput {
+  return cloneDocument(registry.capabilities.defaultGraph)
 }
 
 export function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>, registry: NodeRegistry): WorkflowIssue[] {
-  const issues: WorkflowIssue[] = []
-  const keys = Object.keys(node.config || {})
-  if (node.type === 'audio_input') {
-    if (keys.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.inputNoConfig'), node_id: node.id })
-  } else if (node.type === 'audio_output') {
-    const unexpected = keys.filter((key) => key !== 'filename_stem')
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.audioUnknownFields', { p0: unexpected.join(', ') }), node_id: node.id })
-    const stem = node.config.filename_stem === undefined ? 'audio-copy' : node.config.filename_stem
-    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', ...issueText('workflow.audioSafeFilename'), node_id: node.id })
-  } else if (node.type === 'text_output') {
-    const allowed = new Set(['filename_stem', 'format'])
-    const unexpected = keys.filter((key) => !allowed.has(key))
-    if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.textUnknownFields', { p0: unexpected.join(', ') }), node_id: node.id })
-    const stem = node.config.filename_stem === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.filename_stem : node.config.filename_stem
-    if (!isSafeFilenameStem(stem)) issues.push({ code: 'INVALID_FILENAME_STEM', ...issueText('workflow.textSafeFilename'), node_id: node.id })
-    const format = node.config.format === undefined ? DEFAULT_TEXT_OUTPUT_CONFIG.format : node.config.format
-    if (typeof format !== 'string' || !['txt', 'srt', 'vtt', 'lrc'].includes(format)) {
-      issues.push({ code: 'INVALID_TEXT_FORMAT', ...issueText('workflow.textFormat'), node_id: node.id })
-    }
-  } else {
-    for (const issue of registry.validateConfig(node.type, node.config)) issues.push({ ...issue, node_id: node.id })
-  }
-  return issues
-}
-
-export function validateDraft(value: WorkflowDocumentInput, registry: NodeRegistry): WorkflowIssue[] {
-  const issues: WorkflowIssue[] = []
-  const inputKinds = new Set(registry.kinds.filter((kind) => kind.inputPorts.length === 0 && kind.outputPorts.length > 0).map((kind) => kind.type))
-  const inputs = value.nodes.filter((node) => inputKinds.has(node.type))
-  const outputs = value.nodes.filter((node) => isTerminalNode(node.type, registry))
-  if (inputs.length !== 1) issues.push({ code: 'INPUT_COUNT', ...issueText('workflow.inputCount', { p0: inputs.length }), node_id: null })
-  if (!outputs.length) issues.push({ code: 'OUTPUT_MISSING', ...issueText('workflow.outputMissing'), node_id: null })
-  if (value.nodes.length > MAX_WORKFLOW_NODES) issues.push({ code: 'TOO_MANY_NODES', ...issueText('workflow.nodeLimit', { p0: MAX_WORKFLOW_NODES }), node_id: null })
-  if (value.edges.length > MAX_WORKFLOW_EDGES) issues.push({ code: 'TOO_MANY_EDGES', ...issueText('workflow.edgeLimit', { p0: MAX_WORKFLOW_EDGES }), node_id: null })
-
-  const ids = new Set<string>()
-  const nodeTypes = new Map<string, NodeType>()
-  const supportedTypes = new Set<NodeType>(registry.kinds.map((kind) => kind.type))
-  for (const node of value.nodes) {
-    if (ids.has(node.id)) {
-      issues.push({ code: 'DUPLICATE_NODE', ...issueText('workflow.duplicateNode', { p0: node.id }), node_id: node.id })
-      continue
-    }
-    ids.add(node.id)
-    nodeTypes.set(node.id, node.type)
-    if (!supportedTypes.has(node.type)) {
-      issues.push({ code: 'UNKNOWN_NODE_TYPE', ...issueText('workflow.unknownNodeType', { p0: node.type }), node_id: node.id })
-    }
-  }
-
-  const edgeIds = new Set<string>()
-  const incoming = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
-  const outgoing = new Map(value.nodes.map((node) => [node.id, [] as typeof value.edges]))
-  for (const edge of value.edges) {
-    if (edgeIds.has(edge.id)) issues.push({ code: 'DUPLICATE_EDGE', ...issueText('workflow.duplicateEdge', { p0: edge.id }), edge_id: edge.id })
-    edgeIds.add(edge.id)
-    if (!ids.has(edge.source)) issues.push({ code: 'UNKNOWN_SOURCE', ...issueText('workflow.unknownSource', { p0: edge.source }), edge_id: edge.id })
-    if (!ids.has(edge.target)) issues.push({ code: 'UNKNOWN_TARGET', ...issueText('workflow.unknownTarget', { p0: edge.target }), edge_id: edge.id })
-    if (ids.has(edge.source)) outgoing.get(edge.source)!.push(edge)
-    if (ids.has(edge.target)) incoming.get(edge.target)!.push(edge)
-    const sourceType = nodeTypes.get(edge.source)
-    const targetType = nodeTypes.get(edge.target)
-    if (sourceType && targetType && (!outputPortForNode(sourceType, registry) || !inputPortForNode(targetType, registry))) {
-      issues.push({ code: 'INVALID_DIRECTION', ...issueText('workflow.invalidDirection'), edge_id: edge.id })
-    }
-    if (edge.source === edge.target) issues.push({ code: 'SELF_LOOP', ...issueText('workflow.selfLoop'), edge_id: edge.id })
-    const expectedSourcePort = sourceType ? outputPortForNode(sourceType, registry) : null
-    const expectedTargetPort = targetType ? inputPortForNode(targetType, registry) : null
-    if (expectedSourcePort && edge.source_port !== expectedSourcePort) {
-      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.sourcePort', { p0: expectedSourcePort }), edge_id: edge.id })
-    }
-    if (expectedTargetPort && edge.target_port !== expectedTargetPort) {
-      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.targetPort', { p0: expectedTargetPort }), edge_id: edge.id })
-    }
-    if (expectedSourcePort && expectedTargetPort && expectedSourcePort !== expectedTargetPort) {
-      issues.push({ code: 'INVALID_PORT', ...issueText('workflow.invalidPort', { p0: expectedSourcePort, p1: expectedTargetPort }), edge_id: edge.id })
-    }
-  }
-
-  for (const node of value.nodes) {
-    const inbound = incoming.get(node.id) || []
-    const outbound = outgoing.get(node.id) || []
-    const definition = registry.kind(node.type)
-    if (definition && definition.requiredInbound !== inbound.length && !definition.terminal) {
-      issues.push({ code: 'NODE_INPUT_COUNT', ...issueText('workflow.nodeInputCount', { p0: node.id, p1: definition.requiredInbound, p2: inbound.length }), node_id: node.id })
-    }
-    if (definition?.terminal && inbound.length !== definition.requiredInbound) {
-      issues.push({ code: 'NODE_INPUT_COUNT', ...issueText('workflow.nodeInputCount', { p0: node.id, p1: definition.requiredInbound, p2: inbound.length }), node_id: node.id })
-    }
-    if (definition && definition.inputPorts.length === 0 && inbound.length) {
-      issues.push({ code: 'NODE_SOURCE_REQUIRED', ...issueText('workflow.noInbound', { p0: node.id }), node_id: node.id })
-    }
-    if (isTerminalNode(node.type, registry) && outbound.length) {
-      issues.push({ code: 'OUTPUT_SINK_REQUIRED', ...issueText('workflow.outputNoOutbound'), node_id: node.id })
-    }
-    if (!inbound.length && !outbound.length) {
-      issues.push({ code: 'ISOLATED_NODE', ...issueText('workflow.isolatedNode', { p0: node.id }), node_id: node.id })
-    }
-  }
-
-  const outgoingTargets = new Map(value.nodes.map((node) => [node.id, outgoing.get(node.id)!.map((edge) => edge.target)]))
-  const visitFromInput = new Set<string>()
-  function visit(nodeId: string) {
-    if (visitFromInput.has(nodeId)) return
-    visitFromInput.add(nodeId)
-    for (const target of outgoingTargets.get(nodeId) || []) visit(target)
-  }
-  if (inputs.length === 1) {
-    visit(inputs[0].id)
-    for (const node of value.nodes) {
-      if (!visitFromInput.has(node.id)) issues.push({ code: 'UNREACHABLE_FROM_INPUT', ...issueText('workflow.unreachableInput', { p0: node.id }), node_id: node.id })
-    }
-  }
-
-  const reachesOutput = new Set(outputs.map((node) => node.id))
-  const reverseQueue = outputs.map((node) => node.id)
-  while (reverseQueue.length) {
-    const nodeId = reverseQueue.shift()!
-    for (const edge of incoming.get(nodeId) || []) {
-      if (reachesOutput.has(edge.source)) continue
-      reachesOutput.add(edge.source)
-      reverseQueue.push(edge.source)
-    }
-  }
-  for (const node of value.nodes) {
-    if (!isTerminalNode(node.type, registry) && !reachesOutput.has(node.id)) {
-      issues.push({ code: 'OUTPUT_UNREACHABLE', ...issueText('workflow.unreachableOutput', { p0: node.id }), node_id: node.id })
-    }
-  }
-
-  const indegree = new Map(value.nodes.map((node) => [node.id, incoming.get(node.id)!.length]))
-  const queue = value.nodes.filter((node) => indegree.get(node.id) === 0).map((node) => node.id)
-  let visited = 0
-  while (queue.length) {
-    const nodeId = queue.shift()!
-    visited += 1
-    for (const target of outgoingTargets.get(nodeId) || []) {
-      const degree = (indegree.get(target) || 0) - 1
-      indegree.set(target, degree)
-      if (degree === 0) queue.push(target)
-    }
-  }
-  if (value.nodes.length && visited !== value.nodes.length) {
-    issues.push({ code: 'CYCLE', ...issueText('workflow.cycle'), node_id: null })
-  }
-
-  for (const node of value.nodes) issues.push(...validateNodeConfig(node, registry))
-  return issues
+  return registry.validateConfig(node.type, node.config).map((issue) => ({ ...issue, node_id: node.id }))
 }
 
 export function nextNodeId(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry): string {
@@ -477,7 +290,7 @@ export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry
   const columnX = sameType[0]?.position.x ?? definition?.positionX ?? 500
   let candidateY = sameType.length
     ? Math.max(...sameType.map((node) => node.position.y)) + WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
-    : nodes.find((node) => node.type === 'audio_input')?.position.y ?? 176
+    : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176
   const overlaps = (y: number) => nodes.some((node) => (
     Math.abs(node.position.x - columnX) < WORKFLOW_NODE_WIDTH
     && Math.abs(node.position.y - y) < WORKFLOW_NODE_HEIGHT
@@ -514,7 +327,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const projectId = ref<string | null>(null)
   const audioId = ref<string | null>(null)
   const document = ref<WorkflowDocument | null>(null)
-  const draft = ref<WorkflowDocumentInput>(createDefaultWorkflow())
+  const draft = ref<WorkflowDocumentInput>({ nodes: [], edges: [] })
   const savedSignature = ref('')
   const loading = ref(false)
   const saving = ref(false)
@@ -695,6 +508,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
+      draft.value = createDefaultWorkflow(registry.value)
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
       const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
@@ -891,9 +705,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const sequence = ++outputSequence
     const current = run.value
     if (!current || current.id !== runId) return
-    const completed = current.nodes.filter((node) => (
-      ['preprocess', 'asr', 'audio_output', 'text_output'].includes(node.node_type) && node.status === 'completed'
-    ))
+    const completed = current.nodes.filter((node) => node.artifact && node.status === 'completed')
     outputs.value = {}
     outputChecks.value = {}
     for (const node of completed) outputChecks.value[node.node_id] = { state: 'checking' }
@@ -961,7 +773,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function downloadArtifact(nodeId: string) {
     const record = run.value?.nodes.find((node) => node.node_id === nodeId)
-    if (!record || record.status !== 'completed' || !record.artifact || record.node_type === 'audio_input') {
+    if (!record || record.status !== 'completed' || !record.artifact) {
       errorState.set(record?.status === 'completed' ? message('workflow.noArtifact') : message('workflow.nodeIncomplete'))
       return
     }
@@ -992,10 +804,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function addNode(type: NodeType) {
-    if (stopped || loading.value || activeRun.value || !registry.value || draft.value.nodes.length >= MAX_WORKFLOW_NODES) return
+    if (stopped || loading.value || activeRun.value || !registry.value) return
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
+    if (nodes.length >= registry.value.capabilities.constraints.maxNodes) { errorState.set(message('workflow.nodeLimit', { p0: registry.value.capabilities.constraints.maxNodes })); return }
+    if (definition.isSource && nodes.filter((node) => registry.value!.kind(node.type)?.isSource).length >= registry.value.capabilities.constraints.maxSources) {
+      errorState.set(message('workflow.inputCount', { p0: registry.value.capabilities.constraints.maxSources })); return
+    }
     if (definition.maxInstances !== null && nodes.filter((node) => node.type === type).length >= definition.maxInstances) {
       errorState.set(definition.maxInstances === 1 ? message('workflow.maxOne', { p0: type }) : message('workflow.maxMany', { p0: type, p1: definition.maxInstances }))
       return
@@ -1016,7 +832,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function removeNode(id: string) {
     if (stopped || activeRun.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
-    if (!node || node.type === 'audio_input') {
+    if (!node || registry.value?.kind(node.type)?.removable === false) {
       errorState.set(message('workflow.keepInput'))
       return
     }
@@ -1057,8 +873,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const exists = draft.value.edges.some((edge) => edge.source === source && edge.target === target)
     if (exists) return false
     if (!registry.value) { errorState.set(message('workflow.capConnect')); return false }
-    if (draft.value.edges.length >= MAX_WORKFLOW_EDGES) {
-      errorState.set(message('workflow.connectLimit', { p0: MAX_WORKFLOW_EDGES }))
+    if (draft.value.edges.length >= registry.value.capabilities.constraints.maxEdges) {
+      errorState.set(message('workflow.connectLimit', { p0: registry.value.capabilities.constraints.maxEdges }))
       return false
     }
     const outgoing = new Map(draft.value.nodes.map((node) => [node.id, [] as string[]]))

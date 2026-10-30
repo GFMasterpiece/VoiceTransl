@@ -6,16 +6,24 @@ import { setLocale } from '../i18n'
 const livePayload = {
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.0',
+    schema_version: '1.1',
     ports: ['audio', 'transcript', 'text'],
     nodes: [
-      { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
+      { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
       { type: 'asr', label: '语音识别', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
         { key: 'provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
         { key: 'language', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, options: [] },
       ] } },
       { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
     ],
+    constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
+    default_graph: {
+      nodes: [
+        { id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } },
+        { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } },
+      ],
+      edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
+    },
   },
   asr: { providers: [{ id: 'mock', label: 'Mock' }], status: 'available', message: null, truncated: false, warnings: [] },
   export: { formats: [{ id: 'srt', label: 'SRT' }], naming_modes: [{ id: 'language', label: '按语言命名' }] },
@@ -25,7 +33,7 @@ describe('capabilities parser', () => {
   it('accepts the live response shape and derives an editable registry', () => {
     const caps = readCapabilities(livePayload)
     const registry = createNodeRegistry(caps)
-    expect(caps.schemaVersion).toBe('1.0')
+    expect(caps.schemaVersion).toBe('1.1')
     expect(caps.nodeTypes).toEqual(['audio_input', 'asr', 'audio_output'])
     expect(caps.asr.providers.map((provider) => provider.value)).toEqual(['mock'])
     expect(registry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
@@ -49,10 +57,14 @@ describe('capabilities parser', () => {
     expect(() => readCapabilities({ ...livePayload, schema_version: '2.0' })).toThrow('schema_version')
   })
 
-  it('rejects an explicit unsupported workflow schema while accepting a missing legacy field', () => {
+  it('requires the current workflow capability schema and rejects legacy versions', () => {
     const missingWorkflowSchema = structuredClone(livePayload) as any
     delete missingWorkflowSchema.workflow.schema_version
-    expect(() => readCapabilities(missingWorkflowSchema)).not.toThrow()
+    expect(() => readCapabilities(missingWorkflowSchema)).toThrow('workflow.schema_version')
+
+    const legacyWorkflowSchema = structuredClone(livePayload) as any
+    legacyWorkflowSchema.workflow.schema_version = '1.0'
+    expect(() => readCapabilities(legacyWorkflowSchema)).toThrow('workflow.schema_version')
 
     const unsupportedWorkflowSchema = structuredClone(livePayload) as any
     unsupportedWorkflowSchema.workflow.schema_version = '2.0'
@@ -70,6 +82,19 @@ describe('capabilities parser', () => {
     const badField = structuredClone(livePayload) as any
     badField.workflow.nodes[1].config.fields[0].type = 'unsafe'
     expect(() => readCapabilities(badField)).toThrow('字段类型')
+  })
+
+  it('keeps config option values independent from node and port identifier syntax', () => {
+    const withLanguageOption = structuredClone(livePayload) as any
+    withLanguageOption.workflow.nodes[1].config.fields[1].options = [{ value: 'zh-CN', label: 'Chinese (Simplified)' }]
+    expect(readCapabilities(withLanguageOption).nodes[1].fields[1].options).toEqual([{ value: 'zh-CN', label: 'Chinese (Simplified)' }])
+  })
+
+  it('rejects internally inconsistent graph constraints', () => {
+    const invalid = structuredClone(livePayload)
+    invalid.workflow.constraints.min_sources = 3
+    invalid.workflow.constraints.max_sources = 2
+    expect(() => readCapabilities(invalid)).toThrow('工作流图约束')
   })
 
   it('accepts a catalog-added node without changing generic parser or registry code', () => {

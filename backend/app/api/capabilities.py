@@ -12,15 +12,38 @@ from ..domain.node_registry import (
     workflow_ports,
 )
 from ..domain.schema import SCHEMA_VERSION
+from ..domain.workflow import (
+    WORKFLOW_GRAPH_CONSTRAINTS,
+    WorkflowEdge,
+    WorkflowNode,
+    default_workflow,
+)
 
 router = APIRouter(prefix="/api/v1")
 
 
+class WorkflowGraphConstraints(BaseModel):
+    model_config = {"extra": "forbid"}
+    max_nodes: int
+    max_edges: int
+    min_sources: int
+    max_sources: int
+    min_terminals: int
+
+
+class WorkflowDefaultGraph(BaseModel):
+    model_config = {"extra": "forbid"}
+    nodes: list[WorkflowNode]
+    edges: list[WorkflowEdge]
+
+
 class CapabilitiesWorkflow(BaseModel):
     model_config = {"extra": "forbid"}
-    schema_version: str = SCHEMA_VERSION
+    schema_version: str = "1.1"
     ports: list[str]
     nodes: list[dict[str, object]]
+    constraints: WorkflowGraphConstraints
+    default_graph: WorkflowDefaultGraph
 
 
 class ASRCapabilities(BaseModel):
@@ -66,12 +89,18 @@ def _text_output_formats(nodes: list[dict[str, object]]) -> list[dict[str, str]]
 @router.get("/capabilities", response_model=CapabilitiesResponse)
 async def capabilities():
     nodes = node_catalog()
+    default_graph = default_workflow("capabilities-default")
     return {
         "schema_version": SCHEMA_VERSION,
         "workflow": {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "ports": list(workflow_ports()),
             "nodes": nodes,
+            "constraints": WORKFLOW_GRAPH_CONSTRAINTS,
+            "default_graph": {
+                "nodes": default_graph.nodes,
+                "edges": default_graph.edges,
+            },
         },
         "asr": {"providers": asr_provider_catalog()},
         "export": {

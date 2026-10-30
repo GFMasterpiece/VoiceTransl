@@ -1,5 +1,6 @@
 import pytest
 from app.domain.node_registry import NODE_DEFINITIONS
+from app.domain.workflow import WORKFLOW_GRAPH_CONSTRAINTS, default_workflow
 from app.main import create_app
 from httpx import ASGITransport, AsyncClient
 
@@ -13,10 +14,20 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
+    assert body["workflow"]["schema_version"] == "1.1"
     assert body["workflow"]["ports"] == ["audio", "transcript", "text"]
     nodes = {node["type"]: node for node in body["workflow"]["nodes"]}
     assert set(nodes) == set(NODE_DEFINITIONS)
     assert set(nodes) == {"audio_input", "preprocess", "asr", "text_output", "audio_output"}
+    assert body["workflow"]["constraints"] == WORKFLOW_GRAPH_CONSTRAINTS
+    assert {node_type: node["is_source"] for node_type, node in nodes.items()} == {
+        node_type: definition.is_source for node_type, definition in NODE_DEFINITIONS.items()
+    }
+    expected_graph = default_workflow("capabilities-default")
+    assert body["workflow"]["default_graph"] == {
+        "nodes": [node.model_dump(mode="json") for node in expected_graph.nodes],
+        "edges": [edge.model_dump(mode="json") for edge in expected_graph.edges],
+    }
     assert body["asr"] == {"providers": [{"id": "mock", "label": "Mock"}]}
     for node_type in ("preprocess", "asr"):
         provider = next(
@@ -37,6 +48,22 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     }
     assert body["export"]["formats"] == expected_formats
     assert body["export"]["naming_modes"] == []
+    asr_language = next(
+        field for field in nodes["asr"]["config"]["fields"] if field["key"] == "language"
+    )
+    assert asr_language["min_length"] == 1
+    assert asr_language["max_length"] == 32
+    output_stem = next(
+        field
+        for field in nodes["text_output"]["config"]["fields"]
+        if field["key"] == "filename_stem"
+    )
+    assert output_stem["min_length"] == 1
+    assert output_stem["max_length"] == 128
+    assert output_stem["validator"] == "safe_filename_stem"
+    assert all(
+        node["is_source"] is (node_type == "audio_input") for node_type, node in nodes.items()
+    )
     lowered = response.text.lower()
     assert "crispasr" not in lowered and "ffmpeg" not in lowered
 

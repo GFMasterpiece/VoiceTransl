@@ -12,8 +12,13 @@ export interface CapabilityField {
   default: CapabilityValue
   minimum: number | null
   maximum: number | null
+  minLength: number | null
+  maxLength: number | null
+  pattern: string | null
+  validator: string | null
   options: readonly CapabilityOption[]
   label: string
+  description: string
 }
 export interface CapabilityNode {
   type: string
@@ -23,6 +28,7 @@ export interface CapabilityNode {
   inputPorts: readonly CapabilityPort[]
   outputPorts: readonly CapabilityPort[]
   terminal: boolean
+  isSource: boolean
   maxInstances: number | null
   requiredInbound: number
   removable: boolean
@@ -42,11 +48,20 @@ export interface Capabilities {
   nodeTypes: readonly string[]
   nodes: readonly CapabilityNode[]
   ports: readonly CapabilityPort[]
+  constraints: {
+    maxNodes: number
+    maxEdges: number
+    minSources: number
+    maxSources: number
+    minTerminals: number
+  }
+  defaultGraph: { nodes: Array<{ id: string; type: string; config: Record<string, unknown>; position: { x: number; y: number } }>; edges: Array<{ id: string; source: string; source_port: string; target: string; target_port: string }> }
   asr: CapabilityAsr
   export: CapabilityExport
 }
 
-const safeId = (value: unknown): value is string => typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(value)
+const safeNodeType = (value: unknown): value is string => typeof value === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value)
+const safeIdentifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)
 const safePort = (value: unknown): value is string => typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(value)
 const text = (value: unknown, fallback = ''): string => typeof value === 'string' ? value : fallback
 
@@ -65,7 +80,7 @@ function options(value: unknown, message: string): CapabilityOption[] {
     const item = object(entry, message)
     if (typeof item.id !== 'string' && typeof item.value !== 'string') fail(message)
     const id = String(item.id ?? item.value)
-    if (!safeId(id)) fail(message)
+    if (!id.trim() || id.length > 256) fail(message)
     return { value: id, label: typeof item.label === 'string' && item.label.trim() ? item.label : id }
   })
 }
@@ -77,7 +92,14 @@ function field(value: unknown): CapabilityField {
   const defaultValue = item.default === undefined ? null : item.default as CapabilityValue
   const minimum = optionalNumber(item.minimum)
   const maximum = optionalNumber(item.maximum)
+  const minLength = optionalNumber(item.min_length)
+  const maxLength = optionalNumber(item.max_length)
   if (minimum !== null && maximum !== null && minimum > maximum) fail('workflow.capFieldRange')
+  if (minLength !== null && maxLength !== null && minLength > maxLength) fail('workflow.capFieldRange')
+  const pattern = item.pattern === undefined || item.pattern === null ? null : text(item.pattern)
+  if (pattern) {
+    try { new RegExp(pattern) } catch { fail('workflow.capFieldPattern') }
+  }
   return {
     key: item.key,
     type: type as CapabilityField['type'],
@@ -85,18 +107,28 @@ function field(value: unknown): CapabilityField {
     default: defaultValue,
     minimum,
     maximum,
+    minLength,
+    maxLength,
+    pattern,
+    validator: typeof item.validator === 'string' ? item.validator : null,
     options: item.options === undefined ? [] : options(item.options, 'workflow.capFieldOptions'),
     label: typeof item.label === 'string' && item.label.trim() ? item.label : item.key,
+    description: text(item.description),
   }
 }
 function node(value: unknown): CapabilityNode {
   const item = object(value, 'workflow.capNode')
-  if (!safeId(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
+  if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
   const inputPorts = item.input_ports === undefined ? [] : item.input_ports
   const outputPorts = item.output_ports === undefined ? [] : item.output_ports
   if (!Array.isArray(inputPorts) || !inputPorts.every(safePort) || !Array.isArray(outputPorts) || !outputPorts.every(safePort)) fail('workflow.capNodePorts')
+  // The current canvas renders one input and one output handle per node. The
+  // backend registry enforces the same contract; relax this only with a
+  // corresponding multi-handle canvas implementation.
   if (inputPorts.length > 1 || outputPorts.length > 1) fail('workflow.capPortLimit')
   const requiredInbound = item.required_inbound === undefined ? (inputPorts.length ? 1 : 0) : item.required_inbound
+  // required_inbound is currently limited by the same single-input canvas
+  // contract, not a second domain rule owned by the frontend.
   if (typeof requiredInbound !== 'number' || !Number.isInteger(requiredInbound) || requiredInbound < 0 || requiredInbound > 1) fail('workflow.capInbound')
   const maxInstances = item.max_instances === null || item.max_instances === undefined ? null : item.max_instances
   if (maxInstances !== null && (typeof maxInstances !== 'number' || !Number.isInteger(maxInstances) || maxInstances < 1)) fail('workflow.capInstances')
@@ -113,6 +145,7 @@ function node(value: unknown): CapabilityNode {
     inputPorts,
     outputPorts,
     terminal: item.terminal === true,
+    isSource: item.is_source === true,
     maxInstances,
     requiredInbound,
     removable: item.removable !== false,
@@ -132,7 +165,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== undefined && workflow.schema_version !== '1.0') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.1') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map(node)
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
@@ -143,12 +176,41 @@ export function readCapabilities(value: unknown): Capabilities {
   for (const entry of nodes) {
     for (const port of [...entry.inputPorts, ...entry.outputPorts]) if (!ports.includes(port)) fail('workflow.capUndeclaredPort')
   }
+  const rawConstraints = object(workflow.constraints, 'workflow.capConstraints')
+  const constraints = {
+    maxNodes: optionalNumber(rawConstraints.max_nodes),
+    maxEdges: optionalNumber(rawConstraints.max_edges),
+    minSources: optionalNumber(rawConstraints.min_sources),
+    maxSources: optionalNumber(rawConstraints.max_sources),
+    minTerminals: optionalNumber(rawConstraints.min_terminals),
+  }
+  if (Object.values(constraints).some((value) => value === null || !Number.isInteger(value) || value < 0)) fail('workflow.capConstraints')
+  if (constraints.minSources !== null && constraints.maxSources !== null
+    && constraints.minSources > constraints.maxSources) fail('workflow.capConstraints')
+  const rawDefaultGraph = object(workflow.default_graph, 'workflow.capDefaultGraph')
+  if (!Array.isArray(rawDefaultGraph.nodes) || !Array.isArray(rawDefaultGraph.edges)) fail('workflow.capDefaultGraph')
+  const defaultGraph = {
+    nodes: rawDefaultGraph.nodes.map((value) => {
+      const item = object(value, 'workflow.capDefaultGraph')
+      const position = object(item.position, 'workflow.capDefaultGraph')
+      const config = object(item.config, 'workflow.capDefaultGraph')
+      if (!safeIdentifier(item.id) || !safeNodeType(item.type) || typeof position.x !== 'number' || !Number.isFinite(position.x) || typeof position.y !== 'number' || !Number.isFinite(position.y)) fail('workflow.capDefaultGraph')
+      return { id: item.id, type: item.type, config, position: { x: position.x, y: position.y } }
+    }),
+    edges: rawDefaultGraph.edges.map((value) => {
+      const item = object(value, 'workflow.capDefaultGraph')
+      if (!safeIdentifier(item.id) || !safeIdentifier(item.source) || !safePort(item.source_port) || !safeIdentifier(item.target) || !safePort(item.target_port)) fail('workflow.capDefaultGraph')
+      return { id: item.id, source: item.source, source_port: item.source_port, target: item.target, target_port: item.target_port }
+    }),
+  }
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
-    schemaVersion: '1.0',
+    schemaVersion: '1.1',
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,
+    constraints: constraints as Capabilities['constraints'],
+    defaultGraph,
     asr: asr(root.asr),
     export: {
       formats: exported.formats === undefined ? [] : options(exported.formats, 'workflow.capFormats'),

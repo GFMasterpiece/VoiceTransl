@@ -37,6 +37,11 @@ class CapabilityField(BaseModel):
     default: object = None
     minimum: float | int | None = None
     maximum: float | int | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    pattern: str | None = None
+    description: str | None = None
+    validator: str | None = None
     options: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -115,16 +120,9 @@ def validate_text_output_node_config(config: dict[str, object]) -> dict[str, obj
 
 
 def normalize_audio_output_config(config: dict[str, object]) -> dict[str, object]:
-    from .workflow import _valid_filename_stem
+    from .workflow import AudioOutputConfig
 
-    if not set(config).issubset({"filename_stem"}):
-        raise ValueError("audio_output 只支持 filename_stem")
-    result = dict(config)
-    result.setdefault("filename_stem", DEFAULT_FILENAME_STEM)
-    valid, message = _valid_filename_stem(result["filename_stem"])
-    if not valid:
-        raise ValueError(message or "filename_stem 无效")
-    return result
+    return AudioOutputConfig.model_validate(config, strict=True).model_dump(mode="json")
 
 
 def validate_audio_output_config(config: dict[str, object]) -> dict[str, object]:
@@ -215,6 +213,9 @@ def _fields_from_model(
             "string": "string",
         }.get(spec.get("type"), "string")
         field_type, options = overrides.get(key, (type_name, None))
+        if options is None and isinstance(spec.get("enum"), list):
+            options = [{"value": value, "label": str(value).upper()} for value in spec["enum"]]
+            field_type = "select"
         fields.append(
             CapabilityField(
                 key=key,
@@ -223,6 +224,11 @@ def _fields_from_model(
                 default=spec.get("default"),
                 minimum=spec.get("minimum"),
                 maximum=spec.get("maximum"),
+                min_length=spec.get("minLength"),
+                max_length=spec.get("maxLength"),
+                pattern=spec.get("pattern"),
+                description=spec.get("description"),
+                validator="safe_filename_stem" if key == "filename_stem" else None,
                 options=options or [],
             )
         )
@@ -466,21 +472,16 @@ def asr_provider_catalog() -> list[dict[str, str]]:
 def _capability_fields(definition: NodeDefinition) -> tuple[CapabilityField, ...]:
     if definition.fields:
         return definition.fields
-    if definition.config_kind == "text_output":
-        return (
-            CapabilityField(key="filename_stem", type="string", default=DEFAULT_TEXT_FILENAME_STEM),
-            CapabilityField(
-                key="format",
-                type="select",
-                default=DEFAULT_TEXT_FORMAT,
-                options=[
-                    {"value": value, "label": value.upper()}
-                    for value in ("txt", "srt", "vtt", "lrc")
-                ],
-            ),
+    if definition.config_kind in {"audio_output", "text_output"}:
+        from .workflow import AudioOutputConfig, TextOutputConfig
+
+        model = TextOutputConfig if definition.config_kind == "text_output" else AudioOutputConfig
+        return _fields_from_model(
+            model,
+            widgets={"format": ("select", None)}
+            if definition.config_kind == "text_output"
+            else None,
         )
-    if definition.config_kind == "audio_output":
-        return (CapabilityField(key="filename_stem", type="string", default=DEFAULT_FILENAME_STEM),)
     return ()
 
 
@@ -492,6 +493,7 @@ def node_catalog() -> list[dict[str, object]]:
             "input_ports": list(item.input_ports),
             "output_ports": list(item.output_ports),
             "terminal": item.terminal,
+            "is_source": item.is_source,
             "max_instances": item.max_instances,
             "required_inbound": item.required_inbound,
             "removable": item.removable,

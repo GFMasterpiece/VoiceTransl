@@ -96,6 +96,11 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
         if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
           issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
         }
+        if (typeof value === 'string') {
+          if (field.minLength !== null && value.length < field.minLength) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinLength', { p0: field.key }) })
+          if (field.maxLength !== null && value.length > field.maxLength) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaxLength', { p0: field.key }) })
+          if (field.pattern && !(new RegExp(field.pattern).test(value))) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldPattern', { p0: field.key }) })
+        }
       }
       return issues
     },
