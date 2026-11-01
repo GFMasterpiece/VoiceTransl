@@ -5,6 +5,7 @@ export type PortName = string
 export type NodeType = string
 
 export interface NodeRegistryIssue {
+  field?: string
   code: string
   message: string
   messageKey?: string
@@ -40,7 +41,7 @@ function valueMatchesType(item: CapabilityNode['fields'][number], value: unknown
   if (item.type === 'integer') return typeof value === 'number' && Number.isInteger(value)
   if (item.type === 'number') return typeof value === 'number' && Number.isFinite(value)
   if (item.type === 'string' || item.type === 'select') return typeof value === 'string'
-  if (item.type === 'json') return typeof value === 'object'
+  if (item.type === 'json') return typeof value === 'object' && !Array.isArray(value)
   return false
 }
 
@@ -106,24 +107,24 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
       for (const field of definition.fields) {
         const value = config?.[field.key]
         if (value === undefined) {
-          if (field.required) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
+          if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue
         }
         if (!valueMatchesType(field, value)) {
-          issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: field.key }) })
+          issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: field.key }) })
           continue
         }
         if ((field.type === 'integer' || field.type === 'number') && typeof value === 'number') {
-          if (field.minimum !== null && value < field.minimum) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
-          if (field.maximum !== null && value > field.maximum) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
+          if (field.minimum !== null && value < field.minimum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
+          if (field.maximum !== null && value > field.maximum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
         }
         if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
-          issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
+          issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
         }
         if (typeof value === 'string') {
-          if (field.minLength !== null && value.length < field.minLength) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinLength', { p0: field.key }) })
-          if (field.maxLength !== null && value.length > field.maxLength) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaxLength', { p0: field.key }) })
-          if (field.pattern && !(new RegExp(field.pattern).test(value))) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldPattern', { p0: field.key }) })
+          if (field.minLength !== null && value.length < field.minLength) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinLength', { p0: field.key }) })
+          if (field.maxLength !== null && value.length > field.maxLength) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaxLength', { p0: field.key }) })
+          if (field.pattern && !(new RegExp(field.pattern).test(value))) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldPattern', { p0: field.key }) })
         }
       }
       return issues

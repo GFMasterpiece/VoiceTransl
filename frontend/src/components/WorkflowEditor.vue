@@ -1,20 +1,20 @@
 <script setup lang="ts">
-import { t, locale, message, messageRef, hasMessage } from '../i18n'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, useId } from 'vue'
+import { t, locale, message, hasMessage } from '../i18n'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import {
   workflowErrorLabel, workflowIssueLabel,
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_FIELD_HEIGHT, workflowNodeHeight,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, workflowNodeHeight,
   WORKFLOW_NODE_WIDTH,
   executionSignature,
   inputPortForNode as registeredInputPortForNode,
   isTerminalNode,
   nodeLabel as registeredNodeLabel,
   outputPortForNode as registeredOutputPortForNode,
-  issueText,
   useWorkflowStore,
-  validateNodeConfig as registeredValidateNodeConfig,
   type WorkflowNode,
 } from '../stores/workflow'
+
+import NodeConfigFields from './NodeConfigFields.vue'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string; audioName: string }>()
@@ -24,40 +24,17 @@ const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
 const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
 const connectFrom = ref<string | null>(null)
-const settingsOpen = ref(false)
 const historyOpen = ref(false)
 const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
-const genericDraft = ref<Record<string, unknown>>({})
-const settingsErrorState = messageRef()
-const settingsError = settingsErrorState.text
 const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
-const genericFields = computed(() => selectedKind.value?.fields || [])
-function fieldValue(field: { key: string; default: unknown }) {
-  const value = genericDraft.value[field.key]
-  return value === undefined ? (field.default ?? '') : value
-}
-function setFieldValue(field: { key: string; type: string }, value: unknown) {
-  genericDraft.value = { ...genericDraft.value, [field.key]: field.type === 'integer' || field.type === 'number' ? Number(value) : value }
-}
-function jsonFieldValue(field: { key: string }) {
-  const value = genericDraft.value[field.key]
-  return value === undefined ? '{}' : JSON.stringify(value, null, 2)
-}
-function setJsonFieldValue(field: { key: string }, event: Event) {
-  try {
-    const value = JSON.parse((event.target as HTMLTextAreaElement).value) as unknown
-    if (!value || typeof value !== 'object' || Array.isArray(value)) { settingsErrorState.set(message('workflow.jsonObject')); return }
-    genericDraft.value = { ...genericDraft.value, [field.key]: value }
-    settingsErrorState.set('')
-  } catch { settingsErrorState.set(message('workflow.jsonInvalid')) }
-}
 const selected = computed(() => store.selectedNode)
 const currentInput = computed(() => store.draft.nodes.find((node) => registry.value?.kind(node.type)?.isSource))
 const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun)
 const canValidateAndSave = computed(() => store.dirty && !store.saving && !store.loading && !store.validating && !store.activeRun)
 const canRun = computed(() => !store.dirty && !store.saving && !!store.document && !store.activeRun && !store.actionLoading)
 
+const minZoom = .01
 const nodeWidth = WORKFLOW_NODE_WIDTH
 function nodeHeight(node: WorkflowNode) { return registry.value ? workflowNodeHeight(node.type, registry.value) : WORKFLOW_NODE_HEIGHT }
 const portY = WORKFLOW_NODE_PORT_Y
@@ -69,7 +46,6 @@ function outputPortForNode(type: string) { return registry.value ? registeredOut
 function inputPortForNode(type: string) { return registry.value ? registeredInputPortForNode(type, registry.value) : null }
 function portLabel(id: string | null) { return id ? registry.value?.port(id)?.label || id : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
-function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>) { return registry.value ? registeredValidateNodeConfig(node, registry.value) : [{ code: 'CAPABILITIES_UNAVAILABLE', ...issueText('workflow.capUnavailable') }] }
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
 
 function nodeStatus(node: WorkflowNode) {
@@ -119,47 +95,28 @@ function canvasPoint(event: PointerEvent) {
   return { x: (event.clientX - bounds.left - store.pan.x) / store.zoom, y: (event.clientY - bounds.top - store.pan.y) / store.zoom }
 }
 
-function openNode(node: WorkflowNode) {
-  if (controlsLocked.value) return
+function focusNode(node: WorkflowNode) {
   store.selectNode(node.id)
-  const defaults = registry.value?.createDefaultConfig(node.type) || {}
-  genericDraft.value = { ...defaults, ...node.config }
-  settingsErrorState.set('')
-  settingsOpen.value = true
   void nextTick(() => {
-    const focusTarget = document.querySelector<HTMLElement>('.workflow-settings-modal select, .workflow-settings-modal input, .workflow-settings-modal textarea, .workflow-settings-modal button')
-    focusTarget?.focus()
+    const group = [...(stage.value?.querySelectorAll<SVGGElement>('.workflow-node') || [])].find((element) => element.dataset.nodeId === node.id)
+    group?.querySelector<HTMLElement>('input, select, textarea')?.focus()
   })
 }
-
-function closeSettings() {
-  if (store.saving) return
-  settingsOpen.value = false
-}
-
-function commitSettings() {
-  if (!selected.value || store.saving || store.activeRun) return
-  const config = { ...genericDraft.value }
-  const issues = validateNodeConfig({ id: selected.value.id, type: selected.value.type, config })
-  if (issues.length) {
-    settingsErrorState.set(issues[0].messageKey ? message(issues[0].messageKey, issues[0].messageParams) : issues[0].message)
-    return
-  }
-  store.updateNode(selected.value.id, { config })
-  settingsOpen.value = false
+function editNode(node: WorkflowNode, config: Record<string, unknown>) {
+  if (controlsLocked.value) return
+  store.updateNode(node.id, { config })
 }
 
 function removeSelected() {
-  if (!selected.value || registry.value?.kind(selected.value.type)?.removable === false) return
+  if (controlsLocked.value || !selected.value || registry.value?.kind(selected.value.type)?.removable === false) return
   if (!window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(selected.value) }))) return
   store.removeNode(selected.value.id)
-  settingsOpen.value = false
 }
 
 function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
-  if (store.activeRun) return
+  if (controlsLocked.value) return
   const target = event.target as Element
-  if (target.closest('button') || target.closest('.node-port')) return
+  if (target.closest('button, input, select, textarea, foreignObject') || target.closest('.node-port')) return
   event.preventDefault()
   const point = canvasPoint(event)
   drag.value = { nodeId: node.id, startX: point.x, startY: point.y, x: node.position.x, y: node.position.y }
@@ -168,7 +125,7 @@ function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
 }
 
 function onPointerMove(event: PointerEvent) {
-  if (store.activeRun) return
+  if (controlsLocked.value) return
   if (connectFrom.value) {
     if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
     connectPointer.value = canvasPoint(event)
@@ -214,7 +171,7 @@ function onWheel(event: WheelEvent) {
 }
 
 function setZoom(value: number) {
-  store.zoom = Math.min(1.8, Math.max(.5, Math.round(value * 10) / 10))
+  store.zoom = Math.min(1.8, Math.max(minZoom, Math.round(value * 10) / 10))
 }
 
 function fitCanvas() {
@@ -229,7 +186,7 @@ function fitCanvas() {
   const bounds = canvas.value?.getBoundingClientRect()
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) return
   const candidate = Math.min(1.2, (bounds.width - 48) / width, (bounds.height - 72) / height)
-  store.zoom = Math.max(.5, Math.floor(candidate * 100) / 100)
+  store.zoom = Math.max(minZoom, Math.floor(candidate * 100) / 100)
   store.pan = {
     x: (bounds.width - width * store.zoom) / 2 - minX * store.zoom,
     y: (bounds.height - height * store.zoom) / 2 - minY * store.zoom,
@@ -268,7 +225,6 @@ function removeEdge(edgeId: string) {
 }
 
 async function validateAndSave() {
-  settingsOpen.value = false
   const signature = executionSignature(store.draft, registry.value || undefined)
   try {
     const issues = await store.validate()
@@ -305,13 +261,6 @@ function selectHistory(runId: string) {
   void store.loadRun(runId)
 }
 
-watch(() => controlsLocked.value, (locked) => {
-  if (locked && settingsOpen.value) {
-    settingsOpen.value = false
-    settingsErrorState.set('')
-  }
-})
-
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
   if (store.activeRun) {
@@ -341,11 +290,12 @@ function discardAndClose() {
 }
 
 function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
+  if ((event.target as Element).closest('input, select, textarea, foreignObject')) return
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
-    openNode(node)
+    focusNode(node)
   }
-  if (event.key === 'Delete' && registry.value?.kind(node.type)?.removable !== false && !store.activeRun) {
+  if (event.key === 'Delete' && registry.value?.kind(node.type)?.removable !== false && !controlsLocked.value) {
     event.preventDefault()
     if (window.confirm(t('workflow.deleteShortConfirm', { name: nodeLabel(node) }))) store.removeNode(node.id)
   }
@@ -383,26 +333,12 @@ function nodeDescription(node: WorkflowNode) {
   return t('workflow.genericDescription', { name: nodeLabel(node) })
 }
 
-function nodeSettingsKicker(node: WorkflowNode) {
-  return nodeLabel(node)
-}
-
-function nodeSettingsTitle(node: WorkflowNode) {
-  return nodeLabel(node)
-}
-
 function deleteLabel() { return t('workflow.deleteNode') }
 
 function onWindowPointerUp(event: PointerEvent) {
   if (!connectFrom.value) return
   if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
   cancelConnection()
-}
-
-function configFieldLabel(field: { type: string; options: readonly { value: string; label: string }[] }, value: unknown) {
-  if (field.type === 'select') return field.options.find((option) => option.value === value)?.label || String(value)
-  if (field.type === 'boolean' && typeof value === 'boolean') return t(value ? 'workflow.yes' : 'workflow.no')
-  return String(value)
 }
 
 function truncate(text: string, budget: number) {
@@ -415,15 +351,6 @@ function truncate(text: string, budget: number) {
   }
   return result
 }
-function nodeRows(node: WorkflowNode) {
-  return (registry.value?.kind(node.type)?.fields || []).map((field) => {
-    const value = node.config[field.key] === undefined ? field.default : node.config[field.key]
-    const text = value === null || value === undefined || value === '' ? '—'
-      : field.type === 'json' ? JSON.stringify(value) : configFieldLabel(field, value)
-    return { key: field.key, label: field.label, value: text }
-  })
-}
-
 function runStatusLabel(status?: string) {
   const key = `workflow.runStatus_${status}`
   return status ? (hasMessage(key) ? t(key) : status) : t('workflow.notRun')
@@ -494,7 +421,7 @@ onUnmounted(() => {
         <span class="toolbar-rule" aria-hidden="true"></span>
         <span class="toolbar-spacer"></span>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
-        <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= .5" @click="setZoom(store.zoom - .1)">−</button>
+        <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= minZoom" @click="setZoom(store.zoom - .1)">−</button>
         <span class="zoom-value" aria-live="polite">{{ percentLabel(store.zoom) }}</span>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomIn')" :disabled="store.zoom >= 1.8" @click="setZoom(store.zoom + .1)">+</button>
         <button class="secondary-button compact-button" type="button" @click="fitCanvas">{{ t('workflow.fit') }}</button>
@@ -506,24 +433,21 @@ onUnmounted(() => {
           <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
           <div class="workflow-stage" :style="{ transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})` }">
             <svg ref="stage" class="workflow-svg" :viewBox="'0 0 900 480'" width="900" height="480" role="group" :aria-label="t('workflow.canvasAria')" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
-              <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern><clipPath :id="`${clipId}-title`"><rect x="22" y="0" width="139" height="30" /></clipPath><clipPath :id="`${clipId}-label`"><rect x="8" y="0" width="64" height="22" /></clipPath><clipPath :id="`${clipId}-value`"><rect x="80" y="0" width="84" height="22" /></clipPath><clipPath :id="`${clipId}-port-in`"><rect x="10" y="32" width="80" height="26" /></clipPath><clipPath :id="`${clipId}-port-out`"><rect x="98" y="32" width="80" height="26" /></clipPath></defs>
+              <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern><clipPath :id="`${clipId}-title`"><rect x="22" y="0" width="139" height="30" /></clipPath><clipPath :id="`${clipId}-port-in`"><rect x="10" y="32" width="80" height="26" /></clipPath><clipPath :id="`${clipId}-port-out`"><rect x="98" y="32" width="80" height="26" /></clipPath></defs>
               <rect width="900" height="480" fill="url(#workflow-grid)" />
               <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
               <path v-for="edge in store.draft.edges" :key="`${edge.id}-line`" class="workflow-edge" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :d="edgePath(edge)" aria-hidden="true" />
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
-              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="button" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" :aria-pressed="store.selectedNodeId === node.id ? 'true' : 'false'" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="openNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
+              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
                 <rect class="node-card" :width="nodeWidth" :height="nodeHeight(node)" rx="14" />
                 <path class="node-header" d="M 14 0 H 174 Q 188 0 188 14 V 30 H 0 V 14 Q 0 0 14 0 Z" />
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ truncate(nodeLabel(node), 23) }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
-                <g v-for="(row, index) in nodeRows(node)" :key="row.key" class="node-config-row" :transform="`translate(8 ${WORKFLOW_NODE_FIELDS_Y + index * WORKFLOW_NODE_FIELD_HEIGHT})`">
-                  <title>{{ row.label }}: {{ row.value }}</title>
-                  <rect :width="nodeWidth - 16" height="22" rx="11" />
-                  <text class="node-config-label" :clip-path="`url(#${clipId}-label)`" x="8" y="15"><title>{{ row.label }}</title>{{ truncate(row.label, 12) }}</text>
-                  <text class="node-config-value" :clip-path="`url(#${clipId}-value)`" :x="nodeWidth - 24" y="15"><title>{{ row.value }}</title>{{ truncate(row.value, 14) }}</text>
-                </g>
-                <text v-if="!nodeRows(node).length" class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? props.audioName : nodeLabel(node) }}</title>{{ truncate(registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node), 28) }}</text>
+                <foreignObject @focusin="store.selectNode(node.id)" v-if="registry && registry.kind(node.type)?.fields.length" x="8" :y="WORKFLOW_NODE_FIELDS_Y" :width="nodeWidth - 16" :height="nodeHeight(node) - WORKFLOW_NODE_FIELDS_Y - 8">
+                  <NodeConfigFields :node="node" :registry="registry" :locked="controlsLocked" @update="editNode(node, $event)" />
+                </foreignObject>
+                <text v-else class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? props.audioName : nodeLabel(node) }}</title>{{ truncate(registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node), 28) }}</text>
                 <rect class="node-outline" :width="nodeWidth" :height="nodeHeight(node)" rx="14" />
                 <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ truncate(portLabel(inputPortForNode(node.type)), 13) }}</text>
                 <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-port-out)`" :x="nodeWidth - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ truncate(portLabel(outputPortForNode(node.type)), 13) }}</text>
@@ -544,8 +468,8 @@ onUnmounted(() => {
           <template v-if="selected">
             <p class="inspector-type">{{ nodeDescription(selected) }}</p>
             <div class="workflow-field"><span>{{ t('workflow.nodeId') }}</span><code>{{ selected.id }}</code></div>
+            <p class="inspector-help">{{ t('workflow.inlineEditHelp') }}</p>
             <div class="inspector-actions">
-              <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">{{ t('workflow.editSettings') }}</button>
               <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
             </div>
             <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: props.audioName }) }}</p>
@@ -555,7 +479,7 @@ onUnmounted(() => {
         </aside>
       </div>
 
-      <ul v-if="store.validationIssues.length" class="workflow-issues" aria-live="polite"><li v-for="(issue, index) in store.validationIssues" :key="`${issue.code}-${index}`"><button type="button" :disabled="!issue.node_id" @click="issue.node_id && (store.selectNode(issue.node_id), openNode(store.draft.nodes.find((node) => node.id === issue.node_id)!))">{{ issue.node_id ? t('workflow.nodeReference', { id: issue.node_id }) : t('workflow.workflow') }}</button><span>{{ workflowIssueLabel(issue) }}</span></li></ul>
+      <ul v-if="store.validationIssues.length" class="workflow-issues" aria-live="polite"><li v-for="(issue, index) in store.validationIssues" :key="`${issue.code}-${index}`"><button type="button" :disabled="!issue.node_id" @click="issue.node_id && (store.selectNode(issue.node_id), focusNode(store.draft.nodes.find((node) => node.id === issue.node_id)!))">{{ issue.node_id ? t('workflow.nodeReference', { id: issue.node_id }) : t('workflow.workflow') }}</button><span>{{ workflowIssueLabel(issue) }}</span></li></ul>
 
       <section class="workflow-run-panel" aria-labelledby="workflow-run-title">
         <div class="workflow-run-heading"><div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3 id="workflow-run-title">{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div><div class="workflow-run-actions"><button v-if="store.activeRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelWorkflow">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button><button v-else class="primary-button" type="button" :disabled="!canRun" @click="runWorkflow">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button></div></div>
@@ -580,25 +504,5 @@ onUnmounted(() => {
       </section>
     </template>
 
-    <div v-if="settingsOpen && selected" class="modal-backdrop" role="presentation" @click.self="closeSettings">
-      <section class="config-modal workflow-settings-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-settings-title">
-        <div class="config-modal-header"><div><span class="section-kicker">{{ nodeSettingsKicker(selected) }}</span><h3 id="workflow-settings-title">{{ nodeSettingsTitle(selected) }}</h3><p>{{ t('workflow.settingsSubtitle') }}</p></div><button class="modal-close" type="button" :aria-label="t('workflow.closeSettings')" @click="closeSettings">×</button></div>
-        <form class="config-modal-form" @submit.prevent="commitSettings">
-          <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputSettingsHelp', { name: props.audioName }) }}</p>
-          <div v-if="genericFields.length" class="modal-field-grid">
-            <label v-for="field in genericFields" :key="field.key" class="config-field" :class="{ 'modal-wide-field': field.type === 'json' }">
-              <span>{{ field.label }}<template v-if="field.required"> *</template></span>
-              <select v-if="field.type === 'boolean'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value === 'true')"><option value="true">{{ t('workflow.yes') }}</option><option value="false">{{ t('workflow.no') }}</option></select>
-              <select v-else-if="field.type === 'select'" :value="String(fieldValue(field))" :disabled="controlsLocked" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value)"><option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option></select>
-              <textarea v-else-if="field.type === 'json'" :value="jsonFieldValue(field)" rows="4" :disabled="controlsLocked" @change="setJsonFieldValue(field, $event)"></textarea>
-              <input v-else :value="fieldValue(field)" :type="field.type === 'integer' || field.type === 'number' ? 'number' : 'text'" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :minlength="field.minLength ?? undefined" :maxlength="field.maxLength ?? undefined" :pattern="field.pattern ?? undefined" :step="field.type === 'integer' ? 1 : 'any'" :disabled="controlsLocked" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)" />
-              <small v-if="field.description">{{ field.description }}</small>
-            </label>
-          </div>
-          <p v-if="settingsError" class="settings-feedback settings-error" role="alert">{{ settingsError }}</p>
-          <div class="config-modal-footer"><span>{{ store.dirty ? t('workflow.hasUnsaved') : t('workflow.nodeSynced') }}</span><div><button class="secondary-button" type="button" @click="closeSettings">{{ t('workflow.cancel') }}</button><button class="primary-button" type="submit" :disabled="controlsLocked">{{ t('workflow.applySettings') }}</button></div></div>
-        </form>
-      </section>
-    </div>
   </section>
 </template>

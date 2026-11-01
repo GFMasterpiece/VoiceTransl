@@ -183,14 +183,15 @@ describe('workflow localization', () => {
     expect(root!.textContent).toContain('用户录音.wav')
     node('audio_output').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
-    expect(root!.querySelector('#workflow-settings-title')?.textContent).toBe('Audio output')
-    expect(root!.querySelector('[aria-label="Close node settings"]')).toBeTruthy()
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Filename')
-    expect((root!.querySelector('.workflow-settings-modal input[type="text"]') as HTMLInputElement).value).toBe('audio-copy')
+    expect(root!.querySelector('.workflow-settings-modal')).toBeNull()
+    expect(document.activeElement).toBe(node('audio_output').querySelector('input'))
+    expect(button('Edit node settings')).toBeUndefined()
+    expect(node('audio_output')?.textContent).toContain('Filename')
+    expect((node('audio_output').querySelector('input[data-field="filename_stem"]') as HTMLInputElement).value).toBe('audio-copy')
     expect(root!.textContent).not.toMatch(/[节点工作流设置]/)
   })
 
-  it('keeps an open settings draft intact and live while translating it', async () => {
+  it('keeps inline invalid drafts and errors intact while translating them', async () => {
     setup()
     await settle()
     const store = useWorkflowStore()
@@ -199,25 +200,25 @@ describe('workflow localization', () => {
     const calls = fetchMock.mock.calls.length
     node('audio_output').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
-    const filename = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="text"]')!
+    const filename = node('audio_output').querySelector<HTMLInputElement>('input[data-field="filename_stem"]')!
     filename.value = ''
     filename.dispatchEvent(new Event('input', { bubbles: true }))
-    root!.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await settle()
-    expect(root!.querySelector('.settings-error')?.textContent).toContain('长度小于最小长度')
-    expect(store.draft.nodes.find((item) => item.id === 'output')?.config.filename_stem).toBe('audio-copy')
-    expect(store.dirty).toBe(false)
+    expect(root!.querySelector('.node-field-error')?.textContent).toContain('长度小于最小长度')
+    expect(store.draft.nodes.find((item) => item.id === 'output')?.config.filename_stem).toBe('')
+    expect(store.dirty).toBe(true)
     setLocale('en')
     await settle()
-    expect(root!.querySelector('#workflow-settings-title')?.textContent).toBe('Audio output')
+    expect(root!.querySelector('.workflow-settings-modal')).toBeNull()
+    expect(document.activeElement).toBe(node('audio_output').querySelector('input'))
     expect(filename.value).toBe('')
-    expect(JSON.stringify(store.draft)).toBe(graph)
-    expect(executionSignature(store.draft, store.registry!)).toBe(signature)
-    expect(store.dirty).toBe(false)
+    expect(JSON.stringify(store.draft)).not.toBe(graph)
+    expect(executionSignature(store.draft, store.registry!)).not.toBe(signature)
+    expect(store.dirty).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(calls)
     setLocale('zh-CN')
     await settle()
-    expect(root!.querySelector('.settings-error')?.textContent).toContain('长度小于最小长度')
+    expect(root!.querySelector('.node-field-error')?.textContent).toContain('长度小于最小长度')
   })
 
   it('switches node field labels and dirty presentation without changing any execution data or run snapshot', async () => {
@@ -247,11 +248,11 @@ describe('workflow localization', () => {
     const newNode = root!.querySelector<SVGGElement>('.workflow-node.is-asr')!
     newNode.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Language')
+    expect(node('asr')?.textContent).toContain('Language')
     expect(store.draft.nodes.find((item) => item.type === 'asr')?.config).toEqual({ provider: 'mock', language: 'ja' })
     setLocale('zh-CN')
     await settle()
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('语言')
+    expect(node('asr')?.textContent).toContain('语言')
     expect(store.dirty).toBe(true)
     expect(store.runMatchesDraft).toBe(false)
     expect(JSON.stringify(store.draft)).toBe(dirtyDraft)
@@ -374,15 +375,13 @@ describe('workflow localization', () => {
     expect(root!.querySelector('.inspector-type')?.textContent).toBe('插件处理节点 · configuration defined by the server capability catalog')
     card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
-    const modal = root!.querySelector('.workflow-settings-modal')!
-    expect(modal.textContent).toContain('Changes apply to this node')
-    expect(modal.textContent).toContain('插件模式')
-    expect(modal.textContent).toContain('扩展选项')
-    expect(modal.textContent).not.toContain('copies bytes and media type')
-    const input = modal.querySelector<HTMLInputElement>('input[type=text]')!
+    const fieldGroup = card
+    expect(fieldGroup.textContent).toContain('插件模式')
+    expect(fieldGroup.textContent).toContain('扩展选项')
+    expect(fieldGroup.textContent).not.toContain('copies bytes and media type')
+    const input = fieldGroup.querySelector<HTMLInputElement>('input[type=text]')!
     input.value = '用户新配置'
     input.dispatchEvent(new Event('input', { bubbles: true }))
-    modal.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await settle()
     expect(store.draft.nodes.find((item) => item.id === extension.id)?.config).toEqual({ mode: 'future', custom: '用户新配置' })
     const draft = JSON.stringify(store.draft)
@@ -473,10 +472,10 @@ describe('workflow validation and helpers', () => {
 
   it('places every new node without overlapping any existing node rectangle', () => {
     const firstPre = nextNodePosition('preprocess', [input, output], testRegistry)
-    expect(firstPre).toEqual({ x: 286, y: 246 })
+    expect(firstPre).toEqual({ x: 286, y: 264 })
     const secondPre = nextNodePosition('preprocess', [input, output, { ...preprocess, position: firstPre }], testRegistry)
-    expect(secondPre).toEqual({ x: 286, y: 372 })
-    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 372 })
+    expect(secondPre).toEqual({ x: 286, y: 408 })
+    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 408 })
     expect(nextNodePosition('audio_output', [{ ...input, position: { x: 80, y: 120 } }], testRegistry)).toEqual({ x: 500, y: 120 })
     const all = [input, output, { ...preprocess, position: firstPre }, { ...preprocess, id: 'preprocess-2', position: secondPre }]
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
@@ -573,9 +572,9 @@ describe('capability catalog and node registry', () => {
     expect(store.draft.nodes.find((item) => item.type === 'denoise')?.config).toEqual({ strength: 2 })
     const denoiseNode = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node')).find((item) => item.getAttribute('class')?.includes('is-denoise'))!
     denoiseNode.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    const strength = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="number"]')!
+    const strength = denoiseNode.querySelector<HTMLInputElement>('input[data-field="strength"]')!
     strength.value = '4'; strength.dispatchEvent(new Event('input', { bubbles: true }))
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await settle()
     expect(store.draft.nodes.find((item) => item.type === 'denoise')?.config).toEqual({ strength: 4 })
   })
 
@@ -586,9 +585,9 @@ describe('capability catalog and node registry', () => {
     button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
     store.selectNode(pre.id); await settle()
-    button('编辑节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(root!.querySelectorAll('.workflow-settings-modal .config-field').length).toBe(1)
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('Provider')
+    node('preprocess').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(node('preprocess').querySelectorAll('.node-config-row').length).toBe(1)
+    expect(node('preprocess')?.textContent).toContain('Provider')
   })
 
   it('renders and resaves a legacy graph through the live capability registry', async () => {
@@ -677,6 +676,137 @@ describe('capability catalog and node registry', () => {
   })
 })
 
+describe('inline catalog field editing', () => {
+  async function mountFields() {
+    const catalog = structuredClone(testCapabilities)
+    catalog.workflow.nodes.find((entry: any) => entry.type === 'audio_output').config.fields.push(
+      { key: 'count', label: 'Count', type: 'integer', default: 2, minimum: 1, maximum: 4 },
+      { key: 'ratio', label: 'Ratio', type: 'number', default: 0.5, minimum: 0, maximum: 1 },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', default: true },
+      { key: 'mode', label: 'Mode', type: 'select', default: 'a', options: [{ value: 'a', label: 'Choice A' }, { value: 'b', label: 'Choice B' }] },
+      { key: 'details', label: 'Details', type: 'json', default: {} },
+    )
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
+    await settle()
+    return useWorkflowStore()
+  }
+  function control(key: string) { return node('audio_output').querySelector<HTMLInputElement>(`[data-field="${key}"]`)! }
+  async function edit(key: string, value: string, event = 'input') {
+    control(key).value = value
+    control(key).dispatchEvent(new Event(event, { bubbles: true }))
+    await settle()
+  }
+  function config() { return useWorkflowStore().draft.nodes.find((entry) => entry.type === 'audio_output')!.config }
+
+  it('preserves empty and incomplete numbers, checks catalog bounds and integer type before any HTTP', async () => {
+    const store = await mountFields()
+    for (const [text, expected] of [['', '类型无效'], ['-', '类型无效'], ['1.5', '类型无效'], ['0', '小于最小值'], ['5', '大于最大值']]) {
+      await edit('count', text)
+      expect(control('count').value).toBe(text)
+      expect(control('count').getAttribute('aria-invalid')).toBe('true')
+      expect(node('audio_output').querySelector('.node-field-error')?.textContent).toContain(expected)
+      expect(store.dirty).toBe(true)
+      const calls = fetchMock.mock.calls.length
+      await store.validate(); await store.save()
+      expect(fetchMock.mock.calls.length).toBe(calls)
+    }
+    expect(config().count).toBe(5)
+    await edit('count', '3')
+    await edit('ratio', '0.75')
+    expect(config()).toMatchObject({ count: 3, ratio: 0.75 })
+    expect(control('count').getAttribute('aria-invalid')).toBe('false')
+    await store.save()
+    expect(JSON.parse(String((putCalls()[0][1] as RequestInit).body)).nodes.find((entry: WorkflowNode) => entry.type === 'audio_output').config).toMatchObject({ count: 3, ratio: 0.75 })
+  })
+
+  it('keeps partial JSON across selection and locale changes, blocks save/run, then saves a repaired object', async () => {
+    const store = await mountFields()
+    expect(store.dirty).toBe(false)
+    await edit('details', '{ "incomplete":')
+    expect(config().details).toBe('{ "incomplete":')
+    expect(store.dirty).toBe(true)
+    const leave = vi.fn()
+    expect(app!._instance!.exposed!.requestClose(leave)).toBe('pending')
+    expect(leave).not.toHaveBeenCalled()
+    await settle()
+    expect(root!.querySelector('.workflow-discard')).not.toBeNull()
+    store.selectNode('input')
+    setLocale('en'); await settle()
+    expect(control('details').value).toBe('{ "incomplete":')
+    expect(node('audio_output').querySelector('.node-field-error')?.textContent).toContain('JSON')
+    expect(button('Save before running') || button('Save to run')).toBeTruthy()
+    const calls = fetchMock.mock.calls.length
+    await store.validate(); await store.save(); await store.startRun()
+    expect(fetchMock.mock.calls.length).toBe(calls)
+    for (const value of ['[]', '42', 'null', '"text"']) {
+      await edit('details', value)
+      expect(config().details).toBe(value)
+      expect(control('details').getAttribute('aria-invalid')).toBe('true')
+    }
+    const formatted = '{\n  "done": true\n}'
+    await edit('details', formatted)
+    expect(config().details).toEqual({ done: true })
+    expect(control('details').value).toBe(formatted)
+    setLocale('zh-CN'); await settle()
+    expect(control('details').value).toBe(formatted)
+    await store.validate(); await store.save()
+    expect(JSON.parse(String((putCalls()[0][1] as RequestInit).body)).nodes.find((entry: WorkflowNode) => entry.type === 'audio_output').config.details).toEqual({ done: true })
+  })
+
+  it('edits catalog booleans/options and contains pointer, keyboard and wheel events inside controls', async () => {
+    const store = await mountFields()
+    await edit('enabled', 'false', 'change'); await edit('mode', 'b', 'change')
+    expect(config()).toMatchObject({ enabled: false, mode: 'b' })
+    const target = control('filename_stem')
+    target.focus(); await settle()
+    expect(store.selectedNodeId).toBe('output')
+    const original = { ...store.draft.nodes.find((entry) => entry.id === 'output')!.position }
+    const confirm = vi.spyOn(window, 'confirm')
+    for (const key of ['Delete', ' ', 'Enter', 'ArrowLeft', 'ArrowDown']) target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20 }))
+    root!.querySelector('.workflow-svg')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 90, clientY: 90 }))
+    control('details').dispatchEvent(new WheelEvent('wheel', { bubbles: true, ctrlKey: true, deltaY: 100 }))
+    await settle()
+    expect(store.zoom).toBe(1)
+    expect(store.draft.nodes.find((entry) => entry.id === 'output')!.position).toEqual(original)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(root!.querySelector('.workflow-settings-modal')).toBeNull()
+    node('audio_output').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
+    expect(root!.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('cancels port drags released on inputs or JSON editors without changing edges', async () => {
+    const store = await mountFields()
+    const edges = JSON.stringify(store.draft.edges)
+    for (const key of ['filename_stem', 'details']) {
+      node('audio_input').querySelector('.node-port-out')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
+      root!.querySelector('.workflow-svg')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 300, clientY: 160 }))
+      await settle()
+      expect(root!.querySelector('.workflow-edge-preview')).not.toBeNull()
+      control(key).dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+      await settle()
+      expect(root!.querySelector('.workflow-edge-preview')).toBeNull()
+      expect(JSON.stringify(store.draft.edges)).toBe(edges)
+    }
+  })
+
+  it('disables controls and rejects synthetic edits while saving, validating or running', async () => {
+    const store = await mountFields()
+    for (const state of ['saving', 'validating', 'running']) {
+      store.saving = state === 'saving'
+      store.validating = state === 'validating'
+      store.run = state === 'running' ? runBody({ status: 'running' }) : null
+      await settle()
+      expect(control('filename_stem').disabled).toBe(true)
+      await edit('filename_stem', 'blocked')
+      expect(config().filename_stem).toBe('audio-copy')
+      store.updateNode('output', { config: { filename_stem: 'also-blocked' } })
+      expect(config().filename_stem).toBe('audio-copy')
+    }
+    store.run = null; store.saving = false; store.validating = false
+  })
+})
+
 describe('workflow editor interactions', () => {
   it('renders compact typed nodes with colored headers and side sockets', async () => {
     setup()
@@ -702,8 +832,9 @@ describe('workflow editor interactions', () => {
     await settle()
     const outputNode = node('audio_output')!
     expect(outputNode.querySelectorAll('.node-config-row')).toHaveLength(4)
-    const values = [...outputNode.querySelectorAll('.node-config-value title')].map((entry) => entry.textContent)
-    expect(values).toEqual(['audio-copy', '是', 'Friendly mode', '{"nested":true}'])
+    const values = [...outputNode.querySelectorAll<HTMLInputElement>('input, select, textarea')].map((entry) => entry.value)
+    expect(values).toEqual(['audio-copy', 'true', 'custom', '{\n  "nested": true\n}'])
+    expect(outputNode.textContent).toContain('Friendly mode')
     const height = workflowNodeHeight('audio_output', store.registry!)
     expect(height).toBeGreaterThan(WORKFLOW_NODE_HEIGHT)
     expect(outputNode.querySelector('.node-card')?.getAttribute('height')).toBe(String(height))
@@ -734,10 +865,10 @@ describe('workflow editor interactions', () => {
     expect(root!.querySelectorAll('.workflow-node')).toHaveLength(3)
     node('audio_output', 0)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
-    const filename = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="text"]')!
+    const filename = node('audio_output').querySelector<HTMLInputElement>('input[data-field="filename_stem"]')!
     filename.value = 'chapter-1'
     filename.dispatchEvent(new Event('input', { bubbles: true }))
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await settle()
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/workflow/validate'))).toBe(true)
     const [path, init] = putCalls()[0]
@@ -755,11 +886,11 @@ describe('workflow editor interactions', () => {
     await settle()
     button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     node('audio_output', 0)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    const filename = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="text"]')!
+    const filename = node('audio_output').querySelector<HTMLInputElement>('input[data-field="filename_stem"]')!
     filename.value = 'bad' + String.fromCharCode(92) + 'name'
     filename.dispatchEvent(new Event('input', { bubbles: true }))
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    expect(root!.querySelector('.settings-error')).toBeNull()
+    await settle()
+    expect(root!.querySelector('.node-field-error')).toBeNull()
     expect(useWorkflowStore().draft.nodes.find((item) => item.id === 'output')!.config.filename_stem).toBe('bad' + String.fromCharCode(92) + 'name')
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/workflow/validate'))).toBe(true)
@@ -777,11 +908,11 @@ describe('workflow editor interactions', () => {
     expect(store.draft.edges).toEqual(beforeEdges)
     expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock' })
     node('preprocess')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('只修改此节点的下次保存内容')
+    expect(root!.querySelector('.workflow-settings-modal')).toBeNull()
     expect(root!.querySelector('#workflow-sample-rate')).toBeNull()
     expect(root!.querySelector('#workflow-channels')).toBeNull()
-    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(1)
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(node('preprocess').querySelectorAll('.node-config-row')).toHaveLength(1)
+    await settle()
     expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock' })
     expect(store.draft.edges).toEqual(beforeEdges)
   })
@@ -881,7 +1012,7 @@ describe('workflow editor interactions', () => {
     button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const transforms = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node.is-audio_output'))
       .map((item) => item.getAttribute('transform'))
-    expect(transforms).toEqual(['translate(420 120)', 'translate(420 246)', 'translate(420 372)'])
+    expect(transforms).toEqual(['translate(420 120)', 'translate(420 264)', 'translate(420 408)'])
   })
 
   it('fits all nodes inside a narrow canvas using both dimensions', async () => {
@@ -889,7 +1020,7 @@ describe('workflow editor interactions', () => {
     await settle()
     const store = useWorkflowStore()
     const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
-    kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => ({ ...kind.fields[0]!, key: `extension_${index}` }))]
+    kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => ({ ...kind.fields[0]!, key: `extension_${index}`, type: index < 3 ? 'json' as const : 'string' as const, default: index < 3 ? {} : 'text' }))]
     button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
@@ -905,12 +1036,17 @@ describe('workflow editor interactions', () => {
     const right = maxX * store.zoom + store.pan.x
     const top = minY * store.zoom + store.pan.y
     const bottom = maxY * store.zoom + store.pan.y
-    expect(store.zoom).toBeGreaterThanOrEqual(.5)
+    expect(store.zoom).toBeGreaterThan(0)
     expect(store.zoom).toBeLessThan(.6)
     expect(left).toBeGreaterThanOrEqual(0)
     expect(right).toBeLessThanOrEqual(343)
     expect(top).toBeGreaterThanOrEqual(0)
     expect(bottom).toBeLessThanOrEqual(390)
+    const fitZoom = store.zoom
+    root!.querySelector<HTMLButtonElement>('[aria-label="缩小画布"]')!.click(); await settle()
+    expect(store.zoom).toBeLessThan(fitZoom)
+    root!.querySelector<HTMLButtonElement>('[aria-label="放大画布"]')!.click(); await settle()
+    expect(store.zoom).toBeGreaterThan(0.01)
   })
 
   it('does not save after validation fails and keeps a locatable draft issue', async () => {
@@ -988,22 +1124,22 @@ describe('workflow editor interactions', () => {
     expect(asrNode.config).toEqual({ provider: 'mock', language: 'ja' })
     expect(store.draft.edges.some((item) => item.source === 'input' && item.target === asrNode.id)).toBe(false)
     node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    expect(root!.querySelector('.workflow-settings-modal')?.textContent).toContain('语言')
-    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(2)
+    expect(node('asr')?.textContent).toContain('语言')
+    expect(node('asr').querySelectorAll('.node-config-row')).toHaveLength(2)
     expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/settings/local-asr'))).toBe(false)
-    const language = root!.querySelectorAll<HTMLInputElement>('.workflow-settings-modal input[type="text"]')[0]
+    const language = node('asr').querySelector<HTMLInputElement>('input[data-field="language"]')!
     language.value = 'en'; language.dispatchEvent(new Event('input', { bubbles: true })); await settle()
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await settle()
     const applied = store.draft.nodes.find((item) => item.id === asrNode.id)!
     expect(applied.config).toEqual({ provider: 'mock', language: 'en' })
     button('＋ 文本输出')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const textNode = store.draft.nodes.find((item) => item.type === 'text_output')!
     node('text_output')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    const format = root!.querySelectorAll<HTMLSelectElement>('.workflow-settings-modal select')[0]
+    const format = node('text_output').querySelector<HTMLSelectElement>('select[data-field="format"]')!
     format.value = 'srt'; format.dispatchEvent(new Event('change', { bubbles: true }))
-    const stem = root!.querySelector<HTMLInputElement>('.workflow-settings-modal input[type="text"]')!
+    const stem = node('text_output').querySelector<HTMLInputElement>('input[data-field="filename_stem"]')!
     stem.value = 'subtitles'; stem.dispatchEvent(new Event('input', { bubbles: true })); await settle()
-    button('应用节点设置')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await settle()
     expect(store.draft.nodes.find((item) => item.id === textNode.id)?.config).toEqual({ filename_stem: 'subtitles', format: 'srt' })
   })
 
@@ -1017,8 +1153,8 @@ describe('workflow editor interactions', () => {
     const issues = validateNodeConfig(store.draft.nodes.find((item) => item.id === asrId)!, testRegistry)
     expect(issues.map((issue) => issue.code)).toContain('INVALID_NODE_CONFIG')
     node('asr')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
-    expect(root!.querySelectorAll('.workflow-settings-modal .config-field')).toHaveLength(2)
-    expect(root!.querySelector('.workflow-settings-modal select')).toBeTruthy()
+    expect(node('asr').querySelectorAll('.node-config-row')).toHaveLength(2)
+    expect(node('asr').querySelector('select')).toBeTruthy()
   })
 
   it('displays and downloads transcript and text artifacts with distinct ports', async () => {

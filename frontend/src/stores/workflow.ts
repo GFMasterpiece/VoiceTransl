@@ -16,10 +16,11 @@ export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_PORT_Y = 45
 export const WORKFLOW_NODE_FIELDS_Y = 62
-export const WORKFLOW_NODE_FIELD_HEIGHT = 26
+export const WORKFLOW_NODE_FIELD_HEIGHT = 44
+export function workflowFieldHeight(field: { type: string }): number { return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT }
 
 export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): number {
-  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + (registry.kind(type)?.fields.length || 0) * WORKFLOW_NODE_FIELD_HEIGHT + 10)
+  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + (registry.kind(type)?.fields || []).reduce((height, field) => height + workflowFieldHeight(field), 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNode {
@@ -443,9 +444,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
     savedSignature.value = executionSignature(value, registry.value || undefined)
   }
 
+  function localConfigIssues(): WorkflowIssue[] {
+    if (!registry.value) return []
+    const issues = draft.value.nodes.flatMap((node) => validateNodeConfig(node, registry.value!))
+    validationIssues.value = issues
+    if (issues.length) errorState.set(message('workflow.validationFailed'))
+    return issues
+  }
+
   async function validate(): Promise<WorkflowIssue[]> {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || validating.value || activeRun.value) return []
+    if (!id || !aid || stopped || saving.value || validating.value || activeRun.value) return []
+    const localIssues = localConfigIssues()
+    if (localIssues.length) return localIssues
     const token = sessionGeneration
     const sequence = ++validateSequence
     validating.value = true
@@ -541,6 +552,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const { id, audioId: aid } = currentKey()
     if (!id || !aid || stopped || saving.value || loading.value || validating.value || activeRun.value) return null
     const token = sessionGeneration
+    if (localConfigIssues().length) return null
     const sequence = ++saveSequence
     const draftSnapshot = cloneDocument(draft.value)
     if (!registry.value) { errorState.set(message('workflow.capSave')); return null }
@@ -853,7 +865,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function updateNode(id: string, patch: Partial<Pick<WorkflowNode, 'config' | 'position'>>) {
-    if (stopped || activeRun.value) return
+    if (stopped || saving.value || validating.value || activeRun.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node) return
     if (patch.config !== undefined) node.config = patch.config
