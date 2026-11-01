@@ -1,5 +1,9 @@
 export const workflowMessages = {
   "zh-CN": {
+    "resizeNode": "调整{name}的大小",
+    "resizeWidth": "调整{name}的宽度",
+    "resizeHeight": "调整{name}的高度",
+    "resizeHelp": "拖动调整大小；方向键微调，Shift 加速，Home 恢复内容最小尺寸。",
     "invalidPreview": "运行记录中的预览元数据无效。",
     "capPresentation": "能力目录中的节点展示元数据无效",
     "node_audio_preview_label": "音频预览",
@@ -318,6 +322,10 @@ export const workflowMessages = {
     "error_INVALID_TEXT_FORMAT": "文本输出格式无效，请选择可用格式。"
   },
   "en": {
+    "resizeNode": "Resize {name}",
+    "resizeWidth": "Resize {name} width",
+    "resizeHeight": "Resize {name} height",
+    "resizeHelp": "Drag to resize; use arrow keys to adjust, Shift for larger steps, Home to reset to content size.",
     "invalidPreview": "The run contains invalid preview metadata.",
     "capPresentation": "The capability catalog contains invalid node presentation metadata.",
     "node_audio_preview_label": "Audio preview",

@@ -62,6 +62,8 @@ data/projects/<project-id>/
 
 `audio_input.config.audio_id` 显式绑定项目内资源，校验及保存拒绝外部或不存在的资源（`INPUT_AUDIO_NOT_FOUND`）。启动路由的 `{aid}` 必须与该绑定一致，否则 `422 INPUT_AUDIO_MISMATCH`。旧 `{}` 输入仍使用该次运行的音频上下文。绑定修改生成新执行版本，不修改旧运行快照。
 
+工作流节点可带可选布局字段 `size: {width, height}`；缺失或 `null` 使用内容默认值，宽高为有限正数且不超过 1,000,000。保存与快照保留此字段；仅修改尺寸影响文档 `revision`，不提升执行 `workflow_revision`。显示时仍由前端按当前内容的最小尺寸约束，不能据此缩小到遮挡控件。
+
 产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，即使同名也不覆盖历史或源文件。
 
 ## 旧数据兼容边界

@@ -76,6 +76,13 @@ class WorkflowPosition(BaseModel):
     y: float = Field(default=0, ge=-1_000_000, le=1_000_000)
 
 
+class WorkflowSize(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width: float = Field(gt=0, le=1_000_000, allow_inf_nan=False, strict=True)
+    height: float = Field(gt=0, le=1_000_000, allow_inf_nan=False, strict=True)
+
+
 class WorkflowNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -83,6 +90,7 @@ class WorkflowNode(BaseModel):
     type: str = Field(max_length=64)
     config: dict[str, object] = Field(default_factory=dict)
     position: WorkflowPosition = Field(default_factory=WorkflowPosition)
+    size: WorkflowSize | None = None
 
 
 class WorkflowEdge(BaseModel):

@@ -31,11 +31,27 @@ export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): numb
     + (kind?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
+export interface WorkflowNodeSize {
+  width: number
+  height: number
+}
 export interface WorkflowNode {
   id: string
   type: NodeType
   config: Record<string, unknown>
   position: { x: number; y: number }
+  size?: WorkflowNodeSize | null
+}
+
+/** Layout dimensions never change the node's configuration or execution identity. */
+export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'>, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize): WorkflowNodeSize {
+  const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+  return {
+    width: Math.max(registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
+      dimension(node.size?.width), dimension(measuredMin?.width)),
+    height: Math.max(registry ? workflowNodeHeight(node.type, registry) : WORKFLOW_NODE_HEIGHT,
+      dimension(node.size?.height), dimension(measuredMin?.height)),
+  }
 }
 
 export interface WorkflowEdge {
@@ -204,6 +220,15 @@ export function executionSignature(value: WorkflowDocumentInput, registry?: Node
   })
 }
 
+function layoutSignature(value: WorkflowDocumentInput): string {
+  return JSON.stringify(value.nodes.map((node) => ({
+    id: node.id,
+    position: { x: node.position.x, y: node.position.y },
+    size: node.size ? { width: node.size.width, height: node.size.height } : null,
+  }))
+    .sort((left, right) => left.id.localeCompare(right.id)))
+}
+
 export function resolveArtifactUrl(
   downloadUrl: string,
   apiBase = API_BASE_URL,
@@ -302,20 +327,26 @@ export function nodeLabel(node: WorkflowNode, registry: NodeRegistry): string {
   return registry.label(node.type)
 }
 
-export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry): WorkflowNode['position'] {
+export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry, measurements: Record<string, WorkflowNodeSize> = {}): WorkflowNode['position'] {
   const sameType = nodes.filter((node) => node.type === type)
   const definition = registry.kind(type)
   const columnX = sameType[0]?.position.x ?? definition?.positionX ?? 500
-  const height = workflowNodeHeight(type, registry)
+  const minimum = sameType.reduce((size, node) => ({
+    width: Math.max(size.width, measurements[node.id]?.width || 0),
+    height: Math.max(size.height, measurements[node.id]?.height || 0),
+  }), { width: 0, height: 0 })
+  const { width, height } = workflowNodeSize({ type }, registry, minimum)
+  const nodeSize = (node: WorkflowNode) => workflowNodeSize(node, registry, measurements[node.id])
   let candidateY = sameType.length
-    ? Math.max(...sameType.map((node) => node.position.y + workflowNodeHeight(node.type, registry))) + WORKFLOW_NODE_ROW_GAP
+    ? Math.max(...sameType.map((node) => node.position.y + nodeSize(node).height)) + WORKFLOW_NODE_ROW_GAP
     : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176
   while (true) {
-    const collisions = nodes.filter((node) => Math.abs(node.position.x - columnX) < WORKFLOW_NODE_WIDTH
-      && candidateY < node.position.y + workflowNodeHeight(node.type, registry) + WORKFLOW_NODE_ROW_GAP
+    const collisions = nodes.filter((node) => columnX < node.position.x + nodeSize(node).width
+      && columnX + width > node.position.x
+      && candidateY < node.position.y + nodeSize(node).height + WORKFLOW_NODE_ROW_GAP
       && candidateY + height + WORKFLOW_NODE_ROW_GAP > node.position.y)
     if (!collisions.length) break
-    candidateY = Math.max(...collisions.map((node) => node.position.y + workflowNodeHeight(node.type, registry))) + WORKFLOW_NODE_ROW_GAP
+    candidateY = Math.max(...collisions.map((node) => node.position.y + nodeSize(node).height)) + WORKFLOW_NODE_ROW_GAP
   }
   return { x: columnX, y: candidateY }
 }
@@ -350,6 +381,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const document = ref<WorkflowDocument | null>(null)
   const draft = ref<WorkflowDocumentInput>({ nodes: [], edges: [] })
   const savedSignature = ref('')
+  const savedLayoutSignature = ref('')
+  const nodeMinimums = ref<Record<string, WorkflowNodeSize>>({})
   const loading = ref(false)
   const saving = ref(false)
   const resourceUploading = ref(false)
@@ -388,7 +421,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   let stopped = true
 
   const dirty = computed(() => savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
-    || (document.value?.nodes || []).some((node) => JSON.stringify(node.position) !== JSON.stringify(draft.value.nodes.find((item) => item.id === node.id)?.position)))
+    || savedLayoutSignature.value !== layoutSignature(draft.value))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
   const currentOutputNode = computed(() => selectedNode.value && registry.value && isTerminalNode(selectedNode.value.type, registry.value) ? selectedNode.value : null)
@@ -443,6 +476,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (selectedNodeId.value && !draft.value.nodes.some((node) => node.id === selectedNodeId.value)) selectedNodeId.value = draft.value.nodes[0]?.id || null
   }
 
+  function setNodeMinimum(id: string, size: WorkflowNodeSize) {
+    if (!draft.value.nodes.some((node) => node.id === id)
+      || !Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) return
+    const previous = nodeMinimums.value[id]
+    if (previous?.width === size.width && previous.height === size.height) return
+    nodeMinimums.value = { ...nodeMinimums.value, [id]: { width: size.width, height: size.height } }
+  }
+
+  function getNodeSize(node: WorkflowNode): WorkflowNodeSize {
+    return workflowNodeSize(node, registry.value, nodeMinimums.value[node.id])
+  }
+
   function markDirty() {
     validateSequence += 1
     validating.value = false
@@ -453,6 +498,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function setCleanBaseline(value: WorkflowDocumentInput) {
     setDraft(value)
     savedSignature.value = executionSignature(value, registry.value || undefined)
+    savedLayoutSignature.value = layoutSignature(value)
   }
 
   function localConfigIssues(): WorkflowIssue[] {
@@ -533,6 +579,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     document.value = null
     draft.value = { nodes: [], edges: [] }
     savedSignature.value = ''
+    savedLayoutSignature.value = ''
+    nodeMinimums.value = {}
     selectedNodeId.value = null
     clearHistoryState()
     runErrorState.set('')
@@ -548,6 +596,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       document.value = value
       setDraft(value)
       savedSignature.value = executionSignature(value, registry.value || undefined)
+      savedLayoutSignature.value = layoutSignature(value)
       selectedNodeId.value = draft.value.nodes[0]?.id || null
       zoom.value = 1
       pan.value = { x: 0, y: 0 }
@@ -590,6 +639,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       document.value = value
       setDraft(value)
       savedSignature.value = executionSignature(value, registry.value || undefined)
+      savedLayoutSignature.value = layoutSignature(value)
       validationIssues.value = []
       noticeState.set(message('workflow.saved'))
       return value
@@ -880,7 +930,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       id,
       type,
       config: registry.value.createDefaultConfig(type),
-      position: nextNodePosition(type, nodes, registry.value),
+      position: nextNodePosition(type, nodes, registry.value, nodeMinimums.value),
     }
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
@@ -896,17 +946,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
       return
     }
     draft.value.nodes = draft.value.nodes.filter((item) => item.id !== id)
+    delete nodeMinimums.value[id]
     draft.value.edges = draft.value.edges.filter((edge) => edge.source !== id && edge.target !== id)
     if (selectedNodeId.value === id) selectedNodeId.value = draft.value.nodes[0]?.id || null
     markDirty()
   }
 
-  function updateNode(id: string, patch: Partial<Pick<WorkflowNode, 'config' | 'position'>>) {
-    if (stopped || saving.value || validating.value || activeRun.value) return
+  function updateNode(id: string, patch: Partial<Pick<WorkflowNode, 'config' | 'position' | 'size'>>) {
+    if (stopped || saving.value || validating.value || activeRun.value || resourceUploading.value || actionLoading.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node) return
     if (patch.config !== undefined) node.config = patch.config
     if (patch.position !== undefined) node.position = patch.position
+    if (patch.size !== undefined) node.size = patch.size === null ? null : { ...patch.size }
     markDirty()
   }
 
@@ -987,6 +1039,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (document.value) {
       setDraft(document.value)
       savedSignature.value = executionSignature(document.value, registry.value || undefined)
+      savedLayoutSignature.value = layoutSignature(document.value)
     }
     discardSelection()
     validationIssues.value = []
@@ -1003,7 +1056,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, resourceUploading, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNode, currentOutputNode, activeRunId, run, activeRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, setAudioContext,
-    runMatchesDraft,
+    runMatchesDraft, nodeMinimums, setNodeMinimum, getNodeSize,
     setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
     updateNode, connect, disconnect, selectNode, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
     discardDraft,

@@ -1048,6 +1048,112 @@ describe('workflow viewport coordinates and gestures', () => {
   })
 })
 
+describe('node resize gestures and measured minima', () => {
+  function pointer(target: EventTarget, type: string, x: number, y: number) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+    Object.defineProperty(event, 'pointerId', { value: 9 })
+    target.dispatchEvent(event)
+  }
+  function handle(type = 'audio_input', axis = 'corner') { return node(type).querySelector<SVGRectElement>(`[data-resize="${axis}"]`)! }
+  async function frames() { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); await settle() }
+
+  it('resizes once in world coordinates with nonzero pan/zoom and keeps movement, sockets and preview endpoints aligned', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 60, width: 1000, height: 500, right: 1100, bottom: 560, x: 100, y: 60, toJSON: () => ({}) })
+    store.pan = { x: 150, y: -30 }; store.zoom = .5
+    const original = { ...store.draft.nodes[0]!.position }
+    pointer(handle(), 'pointerdown', 400, 200)
+    pointer(window, 'pointermove', 450, 230)
+    pointer(window, 'pointerup', 1200, 700)
+    await settle()
+    expect(store.draft.nodes[0]!.size).toEqual({ width: WORKFLOW_NODE_WIDTH + 100, height: WORKFLOW_NODE_HEIGHT + 60 })
+    expect(store.draft.nodes[0]!.position).toEqual(original)
+    expect(node('audio_input').querySelector('.node-port-out')?.getAttribute('cx')).toBe('288')
+    expect(root!.querySelector('.workflow-edge')?.getAttribute('d')).toMatch(/^M 368 165 /)
+    const size = { ...store.draft.nodes[0]!.size! }
+    pointer(window, 'pointermove', 1300, 800); await settle()
+    expect(store.draft.nodes[0]!.size).toEqual(size)
+    pointer(node('audio_input').querySelector('.node-port-out')!, 'pointerdown', 400, 200)
+    pointer(svg, 'pointermove', 500, 180); await settle()
+    expect(root!.querySelector('.workflow-edge-preview')?.getAttribute('d')).toMatch(/^M 368 165 /)
+    pointer(window, 'pointerup', 1300, 800)
+  })
+
+  it('provides keyboard resize/reset, clamps measured content, and leaves execution results current', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    store.run = runBody({ status: 'completed' })
+    store.setNodeMinimum('input', { width: 260, height: 180 })
+    handle().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await settle()
+    expect(store.draft.nodes[0]!.size).toEqual({ width: 270, height: 180 })
+    handle('audio_input', 'bottom').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }))
+    await settle()
+    expect(store.draft.nodes[0]!.size).toEqual({ width: 270, height: 230 })
+    expect(store.runMatchesDraft).toBe(true)
+    handle().dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    await settle()
+    expect(store.draft.nodes[0]!.size).toBeNull()
+    expect(node('audio_input').querySelector('.node-card')?.getAttribute('width')).toBe('260')
+    expect(store.runMatchesDraft).toBe(true)
+  })
+
+  it('fits persisted custom dimensions and clamps undersized requests without moving existing nodes', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    const original = { ...store.draft.nodes[0]!.position }
+    store.updateNode('input', { size: { width: 600, height: 500 } })
+    const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 343, bottom: 390, width: 343, height: 390, toJSON: () => ({}) })
+    button('适配')!.click(); await settle()
+    const size = store.getNodeSize(store.draft.nodes[0]!)
+    expect((original.x + size.width) * store.zoom + store.pan.x).toBeLessThanOrEqual(343)
+    expect((original.y + size.height) * store.zoom + store.pan.y).toBeLessThanOrEqual(390)
+    store.setNodeMinimum('input', { width: 280, height: 160 })
+    pointer(handle(), 'pointerdown', 300, 200)
+    pointer(window, 'pointermove', -1000, -1000)
+    pointer(window, 'pointerup', -1000, -1000)
+    expect(store.draft.nodes[0]!.size).toEqual({ width: 280, height: 160 })
+    expect(store.draft.nodes[0]!.position).toEqual(original)
+  })
+
+  it('ignores locked handles and clears active resizing on blur or a newly active lock', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    pointer(handle(), 'pointerdown', 200, 200)
+    window.dispatchEvent(new Event('blur'))
+    pointer(window, 'pointermove', 400, 400)
+    expect(store.draft.nodes[0]!.size).toBeUndefined()
+    pointer(handle(), 'pointerdown', 200, 200)
+    store.saving = true; await settle()
+    pointer(window, 'pointermove', 400, 400)
+    handle().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    expect(store.draft.nodes[0]!.size).toBeUndefined()
+    expect(handle().getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('updates title minima for locale changes without measuring user dimensions into the minimum or rewriting old sizes', async () => {
+    const metric = vi.fn(function(this: SVGTextElement) { return this.classList.contains('node-name') ? (this.textContent?.includes('Audio') ? 390 : 180) : 30 })
+    Object.defineProperty(SVGElement.prototype, 'getComputedTextLength', { configurable: true, value: metric })
+    try {
+      setup(); await settle(); await frames()
+      const store = useWorkflowStore()
+      store.updateNode('input', { size: { width: 190, height: 100 } })
+      setLocale('en'); await settle(); await frames()
+      expect(store.getNodeSize(store.draft.nodes[0]!).width).toBe(454)
+      expect(store.draft.nodes[0]!.size).toEqual({ width: 190, height: 100 })
+      store.updateNode('input', { size: { width: 900, height: 600 } }); await settle(); await frames()
+      expect(store.nodeMinimums.input!.width).toBe(454)
+      setLocale('zh-CN'); await settle(); await frames()
+      expect(store.nodeMinimums.input!.width).toBe(244)
+      handle().dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); await settle()
+      expect(store.getNodeSize(store.draft.nodes[0]!).width).toBe(244)
+    } finally { delete (SVGElement.prototype as any).getComputedTextLength }
+  })
+})
+
 describe('workflow editor interactions', () => {
   it('renders compact typed nodes with colored headers and side sockets', async () => {
     setup()

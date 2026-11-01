@@ -44,7 +44,7 @@ function error(field: Field) {
 
 <template>
   <div class="node-config-fields" @pointerdown.stop @click.stop @dblclick.stop @keydown.stop @keyup.stop @wheel.stop>
-    <label v-for="field in fields" :key="field.key" class="node-config-row" :class="{ 'is-json': field.type === 'json', 'has-error': !!error(field) }" :style="{ height: `${workflowFieldHeight(field)}px` }" :title="field.description || field.label">
+    <label v-for="field in fields" :key="field.key" class="node-config-row" :class="{ 'is-json': field.type === 'json', 'has-error': !!error(field) }" :style="{ minHeight: `${workflowFieldHeight(field)}px` }" :title="field.description || field.label">
       <span class="node-config-label" :title="field.label">{{ field.label }}</span>
       <select v-if="field.type === 'select' || field.type === 'boolean'" :data-field="field.key" :value="text(field)" :disabled="locked" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" @change="edit(field, $event)">
         <template v-if="field.type === 'boolean'"><option value="true">{{ t('workflow.yes') }}</option><option value="false">{{ t('workflow.no') }}</option></template>
