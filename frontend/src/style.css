@@ -297,7 +297,7 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .node-resize-handle { fill: transparent; stroke: none; touch-action: none; }
 .node-resize-handle.is-right { cursor: ew-resize; }
 .node-resize-handle.is-bottom { cursor: ns-resize; }
-.node-resize-handle.is-corner { cursor: nwse-resize; fill: var(--paper); }
+.node-resize-handle.is-corner { cursor: nwse-resize; }
 .node-resize-handle:focus-visible { outline: none; stroke: var(--teal); stroke-width: 2; }
 .node-resize-handle[aria-disabled="true"] { cursor: not-allowed; }
 .node-resize-mark { fill: none; stroke: var(--quiet); stroke-width: 1.25; pointer-events: none; }
