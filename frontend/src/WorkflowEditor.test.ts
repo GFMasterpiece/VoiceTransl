@@ -807,6 +807,89 @@ describe('inline catalog field editing', () => {
   })
 })
 
+describe('workflow viewport coordinates and gestures', () => {
+  function pointer(target: EventTarget, type: string, x: number, y: number, id = 7) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+    Object.defineProperty(event, 'pointerId', { value: id })
+    target.dispatchEvent(event)
+  }
+  async function viewport() {
+    setup(); await settle()
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x: 100, y: 60, left: 100, top: 60, right: 1500, bottom: 960, width: 1400, height: 900, toJSON: () => ({}) })
+    return svg
+  }
+
+  it('pans in newly exposed viewport space and keeps the world grid aligned at very low zoom', async () => {
+    const svg = await viewport()
+    const store = useWorkflowStore()
+    store.pan = { x: -1000, y: -600 }; store.zoom = .5
+    const capture = vi.fn(); const release = vi.fn()
+    Object.defineProperties(svg, { setPointerCapture: { value: capture }, hasPointerCapture: { value: () => true }, releasePointerCapture: { value: release } })
+    pointer(svg, 'pointerdown', 1400, 900)
+    pointer(window, 'pointermove', 1470, 930)
+    await settle()
+    expect(store.pan).toEqual({ x: -930, y: -570 })
+    expect(capture).toHaveBeenCalledWith(7)
+    pointer(window, 'pointerup', 1700, 1050)
+    pointer(window, 'pointermove', 1800, 1200)
+    expect(store.pan).toEqual({ x: -930, y: -570 })
+    expect(release).toHaveBeenCalledWith(7)
+    store.zoom = .01; await settle()
+    const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
+    const spacing = Number.parseFloat(canvas.style.backgroundSize)
+    expect(spacing).toBeGreaterThanOrEqual(8)
+    expect(spacing).toBeLessThan(16)
+    expect(spacing / (24 * store.zoom)).toBe(64)
+    expect(canvas.style.backgroundPosition).toBe('-930px -570px')
+    expect(root!.querySelector('.workflow-content')?.getAttribute('transform')).toBe('translate(-930 -570) scale(0.01)')
+    expect(store.dirty).toBe(false)
+  })
+
+  it('converts node drag and connection preview coordinates once against the stable viewport', async () => {
+    const svg = await viewport()
+    const store = useWorkflowStore()
+    store.pan = { x: 150, y: -30 }; store.zoom = .5
+    // Pointer starts at world (100, 140), then moves 40x30 CSS pixels.
+    pointer(node('audio_input'), 'pointerdown', 300, 100)
+    pointer(svg, 'pointermove', 340, 130)
+    pointer(window, 'pointerup', 340, 130)
+    await settle()
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.position).toEqual({ x: 160, y: 180 })
+    const source = node('audio_input').querySelector('.node-port-out')!
+    pointer(source, 'pointerdown', 424, 142.5)
+    // Stable viewport (100,60), pan (150,-30), zoom .5 -> world (500,300).
+    pointer(svg, 'pointermove', 500, 180)
+    await settle()
+    const path = root!.querySelector('.workflow-edge-preview')!.getAttribute('d')!
+    expect(path).toMatch(/^M 348 225 /)
+    expect(path).toMatch(/, 500 300$/)
+    const edges = JSON.stringify(store.draft.edges)
+    pointer(window, 'pointerup', 1600, 1000)
+    await settle()
+    expect(root!.querySelector('.workflow-edge-preview')).toBeNull()
+    expect(JSON.stringify(store.draft.edges)).toBe(edges)
+  })
+
+  it('ignores other pointers, clears on blur, and keeps running canvases locked', async () => {
+    const svg = await viewport()
+    const store = useWorkflowStore()
+    pointer(svg, 'pointerdown', 1200, 700)
+    pointer(window, 'pointermove', 1300, 800, 8)
+    expect(store.pan).toEqual({ x: 0, y: 0 })
+    window.dispatchEvent(new Event('blur'))
+    pointer(window, 'pointermove', 1300, 800)
+    expect(store.pan).toEqual({ x: 0, y: 0 })
+    store.run = runBody({ status: 'running' }); await settle()
+    pointer(svg, 'pointerdown', 1200, 700)
+    pointer(svg, 'pointermove', 1400, 900)
+    pointer(node('audio_input'), 'pointerdown', 200, 200)
+    pointer(svg, 'pointermove', 400, 400)
+    expect(store.pan).toEqual({ x: 0, y: 0 })
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.position).toEqual(input.position)
+  })
+})
+
 describe('workflow editor interactions', () => {
   it('renders compact typed nodes with colored headers and side sockets', async () => {
     setup()

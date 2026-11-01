@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t, locale, message, hasMessage } from '../i18n'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import {
   workflowErrorLabel, workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, workflowNodeHeight,
@@ -24,6 +24,7 @@ const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
 const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
 const connectFrom = ref<string | null>(null)
+const gesturePointerId = ref<number | null>(null)
 const historyOpen = ref(false)
 const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
@@ -89,6 +90,27 @@ const previewPath = computed(() => {
   )
 })
 
+// Thin out world-grid lines at low zoom while keeping the same world origin.
+const gridStyle = computed(() => {
+  const step = 24 * store.zoom
+  const spacing = step * 2 ** Math.max(0, Math.ceil(Math.log2(8 / step)))
+  return { backgroundSize: `${spacing}px ${spacing}px`, backgroundPosition: `${store.pan.x}px ${store.pan.y}px` }
+})
+
+function beginPointer(event: PointerEvent, capture: boolean) {
+  gesturePointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
+  if (capture && gesturePointerId.value !== null) stage.value?.setPointerCapture?.(event.pointerId)
+}
+function clearGestures() {
+  const pointerId = gesturePointerId.value
+  gesturePointerId.value = null
+  drag.value = null
+  panning.value = null
+  cancelConnection()
+  if (pointerId !== null && stage.value?.hasPointerCapture?.(pointerId)) stage.value.releasePointerCapture(pointerId)
+}
+watch(controlsLocked, (locked) => { if (locked) clearGestures() })
+
 function canvasPoint(event: PointerEvent) {
   const bounds = stage.value?.getBoundingClientRect()
   if (!bounds) return { x: 0, y: 0 }
@@ -114,18 +136,18 @@ function removeSelected() {
 }
 
 function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
-  if (controlsLocked.value) return
+  if (controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
   const target = event.target as Element
   if (target.closest('button, input, select, textarea, foreignObject') || target.closest('.node-port')) return
   event.preventDefault()
   const point = canvasPoint(event)
   drag.value = { nodeId: node.id, startX: point.x, startY: point.y, x: node.position.x, y: node.position.y }
   store.selectNode(node.id)
-  ;(event.currentTarget as SVGGElement).setPointerCapture?.(event.pointerId)
+  beginPointer(event, true)
 }
 
 function onPointerMove(event: PointerEvent) {
-  if (controlsLocked.value) return
+  if (controlsLocked.value || (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId)) return
   if (connectFrom.value) {
     if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
     connectPointer.value = canvasPoint(event)
@@ -149,18 +171,15 @@ function onPointerMove(event: PointerEvent) {
 }
 
 function onPointerUp(event: PointerEvent) {
-  const target = event.target as Element | null
-  if (connectFrom.value && (event.type === 'pointercancel' || !target?.closest('.node-port-in'))) {
-    cancelConnection()
-  }
-  drag.value = null
-  panning.value = null
-  if (stage.value?.hasPointerCapture?.(event.pointerId)) stage.value.releasePointerCapture(event.pointerId)
+  if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
+  clearGestures()
 }
 
 function startPan(event: PointerEvent) {
-  if ((event.target as Element).closest('.workflow-node') || event.button !== 0 || store.activeRun) return
+  if ((event.target as Element).closest('.workflow-node') || event.button !== 0 || controlsLocked.value || event.isPrimary === false) return
+  event.preventDefault()
   panning.value = { startX: event.clientX, startY: event.clientY, x: store.pan.x, y: store.pan.y }
+  beginPointer(event, true)
 }
 
 function onWheel(event: WheelEvent) {
@@ -194,8 +213,9 @@ function fitCanvas() {
 }
 
 function startConnection(node: WorkflowNode, event: PointerEvent) {
-  if (!outputPortForNode(node.type) || store.activeRun || event.button !== 0 || event.isPrimary === false) return
+  if (!outputPortForNode(node.type) || controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
   event.preventDefault()
+  beginPointer(event, false)
   connectFrom.value = node.id
   connectPointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   connectPointer.value = canvasPoint(event)
@@ -203,6 +223,7 @@ function startConnection(node: WorkflowNode, event: PointerEvent) {
 }
 
 function cancelConnection() {
+  gesturePointerId.value = null
   connectFrom.value = null
   connectPointer.value = null
   connectPointerId.value = null
@@ -335,11 +356,11 @@ function nodeDescription(node: WorkflowNode) {
 
 function deleteLabel() { return t('workflow.deleteNode') }
 
-function onWindowPointerUp(event: PointerEvent) {
-  if (!connectFrom.value) return
-  if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
-  cancelConnection()
+function onWindowPointerMove(event: PointerEvent) {
+  if (event.target instanceof Node && stage.value?.contains(event.target)) return
+  onPointerMove(event)
 }
+function onWindowPointerUp(event: PointerEvent) { onPointerUp(event) }
 
 function truncate(text: string, budget: number) {
   let size = 0
@@ -385,12 +406,17 @@ defineExpose({ requestClose })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
+  window.addEventListener('pointermove', onWindowPointerMove)
+  window.addEventListener('blur', clearGestures)
   window.addEventListener('pointerup', onWindowPointerUp)
   window.addEventListener('pointercancel', onWindowPointerUp)
 })
 onUnmounted(() => {
   store.stop()
   pendingClose = null
+  clearGestures()
+  window.removeEventListener('pointermove', onWindowPointerMove)
+  window.removeEventListener('blur', clearGestures)
   window.removeEventListener('pointerup', onWindowPointerUp)
   window.removeEventListener('pointercancel', onWindowPointerUp)
 })
@@ -429,12 +455,11 @@ onUnmounted(() => {
       </div>
 
       <div class="workflow-main">
-        <div ref="canvas" class="workflow-canvas" @wheel="onWheel">
+        <div ref="canvas" class="workflow-canvas" :style="gridStyle" @wheel="onWheel">
           <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
-          <div class="workflow-stage" :style="{ transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})` }">
-            <svg ref="stage" class="workflow-svg" :viewBox="'0 0 900 480'" width="900" height="480" role="group" :aria-label="t('workflow.canvasAria')" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
-              <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern><clipPath :id="`${clipId}-title`"><rect x="22" y="0" width="139" height="30" /></clipPath><clipPath :id="`${clipId}-port-in`"><rect x="10" y="32" width="80" height="26" /></clipPath><clipPath :id="`${clipId}-port-out`"><rect x="98" y="32" width="80" height="26" /></clipPath></defs>
-              <rect width="900" height="480" fill="url(#workflow-grid)" />
+            <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" :aria-label="t('workflow.canvasAria')" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
+              <defs><clipPath :id="`${clipId}-title`"><rect x="22" y="0" width="139" height="30" /></clipPath><clipPath :id="`${clipId}-port-in`"><rect x="10" y="32" width="80" height="26" /></clipPath><clipPath :id="`${clipId}-port-out`"><rect x="98" y="32" width="80" height="26" /></clipPath></defs>
+              <g class="workflow-content" :transform="`translate(${store.pan.x} ${store.pan.y}) scale(${store.zoom})`">
               <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
               <path v-for="edge in store.draft.edges" :key="`${edge.id}-line`" class="workflow-edge" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :d="edgePath(edge)" aria-hidden="true" />
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
@@ -453,8 +478,8 @@ onUnmounted(() => {
                 <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-port-out)`" :x="nodeWidth - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ truncate(portLabel(outputPortForNode(node.type)), 13) }}</text>
                 <text v-if="nodeIssue(node)" class="node-error-mark" x="161" y="20" aria-hidden="true">!</text>
               </g>
+              </g>
             </svg>
-          </div>
           <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong><span>{{ t('workflow.emptyCanvasHelp') }}</span></div>
         </div>
 
