@@ -32,7 +32,8 @@ const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
 const resizing = ref<{ nodeId: string; axis: 'right' | 'bottom' | 'corner'; startX: number; startY: number; width: number; height: number } | null>(null)
 const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
-const connectFrom = ref<string | null>(null)
+type PortDirection = 'input' | 'output'
+const connectionStart = ref<{ nodeId: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
 const historyOpen = ref(false)
 const discardPrompt = ref(false)
@@ -40,7 +41,7 @@ let pendingClose: (() => void) | null = null
 const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
 const selected = computed(() => store.selectedNode)
 const currentInput = computed(() => store.draft.nodes.find((node) => registry.value?.kind(node.type)?.isSource))
-const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || resourceBusy.value)
+const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
 const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading)
 const canRun = computed(() => !store.dirty && !controlsLocked.value && !!store.document && !!(store.boundAudioId || store.audioId))
 
@@ -116,15 +117,14 @@ function connectionPath(sx: number, sy: number, tx: number, ty: number) {
 }
 
 const previewPath = computed(() => {
-  if (!connectFrom.value || !connectPointer.value) return null
-  const source = store.draft.nodes.find((node) => node.id === connectFrom.value)
-  if (!source) return null
-  return connectionPath(
-    source.position.x + nodeWidth(source),
-    source.position.y + portY,
-    connectPointer.value.x,
-    connectPointer.value.y,
-  )
+  const start = connectionStart.value
+  const pointer = connectPointer.value
+  if (!start || !pointer) return null
+  const node = store.draft.nodes.find((item) => item.id === start.nodeId)
+  if (!node) return null
+  return start.direction === 'output'
+    ? connectionPath(node.position.x + nodeWidth(node), node.position.y + portY, pointer.x, pointer.y)
+    : connectionPath(pointer.x, pointer.y, node.position.x, node.position.y + portY)
 })
 
 // Thin out world-grid lines at low zoom while keeping the same world origin.
@@ -299,7 +299,7 @@ function onPointerMove(event: PointerEvent) {
     if (node) setNodeSize(node, resize.width + (resize.axis !== 'bottom' ? point.x - resize.startX : 0), resize.height + (resize.axis !== 'right' ? point.y - resize.startY : 0))
     return
   }
-  if (connectFrom.value) {
+  if (connectionStart.value) {
     if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
     connectPointer.value = canvasPoint(event)
     return
@@ -323,7 +323,8 @@ function onPointerMove(event: PointerEvent) {
 
 function onPointerUp(event: PointerEvent) {
   if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
-  clearGestures()
+  if (connectionStart.value && event.type === 'pointerup') finishConnection(event)
+  else clearGestures()
 }
 
 function startPan(event: PointerEvent) {
@@ -363,11 +364,14 @@ function fitCanvas() {
   }
 }
 
-function startConnection(node: WorkflowNode, event: PointerEvent) {
-  if (!outputPortForNode(node.type) || controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
+function startConnection(node: WorkflowNode, direction: PortDirection, event: PointerEvent) {
+  const port = direction === 'output' ? outputPortForNode(node.type) : inputPortForNode(node.type)
+  if (!port || controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
+  if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
   event.preventDefault()
+  clearGestures()
   beginPointer(event, false)
-  connectFrom.value = node.id
+  connectionStart.value = { nodeId: node.id, direction }
   connectPointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   connectPointer.value = canvasPoint(event)
   store.setError('')
@@ -375,20 +379,35 @@ function startConnection(node: WorkflowNode, event: PointerEvent) {
 
 function cancelConnection() {
   gesturePointerId.value = null
-  connectFrom.value = null
+  connectionStart.value = null
   connectPointer.value = null
   connectPointerId.value = null
 }
 
-function finishConnection(node: WorkflowNode, event: PointerEvent) {
+function destinationPort(event: PointerEvent): { nodeId: string; direction: PortDirection } | null {
+  // Touch and pen implicitly capture pointer events on the starting socket.
+  // Hit-test viewport coordinates so releasing over the opposite socket still
+  // resolves the actual destination rather than the captured event target.
+  const hit = typeof document.elementFromPoint === 'function'
+    ? document.elementFromPoint(event.clientX, event.clientY)
+    : event.target instanceof Element ? event.target : null
+  const socket = hit?.closest('.node-port')
+  if (!socket || !stage.value?.contains(socket)) return null
+  const nodeId = (socket.closest('.workflow-node') as SVGGElement | null)?.dataset.nodeId
+  const direction = (socket as SVGElement).dataset.portDirection
+  if (!nodeId || (direction !== 'input' && direction !== 'output')) return null
+  return { nodeId, direction }
+}
+
+function finishConnection(event: PointerEvent) {
   if (connectPointerId.value !== null && event.pointerId !== connectPointerId.value) return
-  const source = connectFrom.value
-  if (!source || !inputPortForNode(node.type)) {
-    cancelConnection()
-    return
-  }
-  cancelConnection()
-  if (source !== node.id) store.connect(source, node.id)
+  const start = connectionStart.value
+  const destination = destinationPort(event)
+  clearGestures()
+  if (!start || !destination || controlsLocked.value || start.direction === destination.direction) return
+  const source = start.direction === 'output' ? start.nodeId : destination.nodeId
+  const target = start.direction === 'input' ? start.nodeId : destination.nodeId
+  store.connect(source, target)
 }
 
 function removeEdge(edgeId: string) {
@@ -635,8 +654,8 @@ onUnmounted(() => {
                 </foreignObject>
                 <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
-                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ portLabel(inputPortForNode(node.type)) }}</text>
-                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth(node)" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ portLabel(outputPortForNode(node.type)) }}</text>
+                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" data-port-direction="input" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop="startConnection(node, 'input', $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ portLabel(inputPortForNode(node.type)) }}</text>
+                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" data-port-direction="output" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth(node)" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="startConnection(node, 'output', $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ portLabel(outputPortForNode(node.type)) }}</text>
                 <text v-if="nodeIssue(node)" class="node-error-mark" :x="nodeWidth(node) - 28" y="20" aria-hidden="true">!</text>
                 <rect class="node-resize-handle is-right" data-resize="right" :x="nodeWidth(node) - 4" y="58" width="8" :height="Math.max(0, nodeHeight(node) - 70)" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeWidth', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'right')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'right')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
                 <rect class="node-resize-handle is-bottom" data-resize="bottom" x="8" :y="nodeHeight(node) - 4" :width="nodeWidth(node) - 20" height="8" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeHeight', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'bottom')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'bottom')"><title>{{ t('workflow.resizeHelp') }}</title></rect>

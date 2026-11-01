@@ -1048,6 +1048,144 @@ describe('workflow viewport coordinates and gestures', () => {
   })
 })
 
+describe('bidirectional socket drags', () => {
+  function socket(type: string, direction: 'input' | 'output', index = 0) { return node(type, index).querySelector<SVGCircleElement>(`[data-port-direction="${direction}"]`)! }
+  function pointer(target: EventTarget, type: string, x = 0, y = 0, id = 7, pointerType = 'mouse') {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y })
+    Object.defineProperties(event, { pointerId: { value: id }, pointerType: { value: pointerType } })
+    target.dispatchEvent(event)
+  }
+  async function nodes() {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    store.addNode('preprocess'); store.addNode('preprocess'); store.addNode('asr'); store.addNode('text_output')
+    await settle()
+    return store
+  }
+
+  it('normalizes forward and reverse drags through the same connect rules and preserves click semantics', async () => {
+    const store = await nodes()
+    const connect = vi.spyOn(store, 'connect')
+    const [first, second] = store.draft.nodes.filter((entry) => entry.type === 'preprocess')
+    const positions = store.draft.nodes.map((entry) => ({ ...entry.position }))
+    pointer(socket('preprocess', 'input', 1), 'pointerdown')
+    pointer(socket('preprocess', 'output', 0), 'pointerup')
+    expect(connect).toHaveBeenLastCalledWith(first.id, second.id)
+    pointer(socket('audio_input', 'output'), 'pointerdown')
+    pointer(socket('preprocess', 'input', 0), 'pointerup')
+    expect(connect).toHaveBeenLastCalledWith('input', first.id)
+    const calls = connect.mock.calls.length
+    pointer(socket('preprocess', 'input', 0), 'pointerdown')
+    pointer(socket('preprocess', 'input', 0), 'pointerup')
+    expect(connect).toHaveBeenCalledTimes(calls)
+    expect(store.draft.nodes.map((entry) => entry.position)).toEqual(positions)
+  })
+
+  it('reverses the preview source/target in world coordinates with nonzero pan/zoom and custom widths', async () => {
+    const store = await nodes()
+    store.updateNode('input', { size: { width: 420, height: 150 } })
+    store.updateNode('output', { size: { width: 500, height: 180 } })
+    store.pan = { x: 150, y: -30 }; store.zoom = .5
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 60, right: 1100, bottom: 560, width: 1000, height: 500, x: 100, y: 60, toJSON: () => ({}) })
+    pointer(socket('audio_output', 'input'), 'pointerdown', 460, 112.5)
+    pointer(svg, 'pointermove', 500, 112.5); await settle()
+    expect(root!.querySelector('.workflow-edge-preview')?.getAttribute('d')).toBe('M 500 165 C 548 165, 372 165, 420 165')
+    pointer(window, 'pointerup', 1300, 900); await settle()
+    expect(root!.querySelector('.workflow-edge-preview')).toBeNull()
+  })
+
+  it('keeps existing inputs on cancel, rejects same-direction/mismatched/self/cyclic drags and replaces only after success', async () => {
+    const store = await nodes()
+    const original = JSON.stringify(store.draft.edges)
+    pointer(socket('audio_output', 'input'), 'pointerdown')
+    pointer(root!.querySelector('.workflow-svg')!, 'pointerup')
+    expect(JSON.stringify(store.draft.edges)).toBe(original)
+    pointer(socket('audio_output', 'input'), 'pointerdown')
+    pointer(socket('preprocess', 'input'), 'pointerup')
+    expect(JSON.stringify(store.draft.edges)).toBe(original)
+    pointer(socket('text_output', 'input'), 'pointerdown')
+    pointer(socket('audio_input', 'output'), 'pointerup')
+    expect(store.error).toContain('端口类型不匹配')
+    expect(JSON.stringify(store.draft.edges)).toBe(original)
+    pointer(socket('text_output', 'input'), 'pointerdown')
+    pointer(socket('asr', 'output'), 'pointerup')
+    expect(store.draft.edges.some((entry) => entry.source === store.draft.nodes.find((entry) => entry.type === 'asr')!.id && entry.target === store.draft.nodes.find((entry) => entry.type === 'text_output')!.id)).toBe(true)
+    pointer(socket('preprocess', 'input'), 'pointerdown'); pointer(socket('preprocess', 'output'), 'pointerup')
+    expect(store.error).toContain('自身')
+    const [first, second] = store.draft.nodes.filter((entry) => entry.type === 'preprocess')
+    store.connect(first.id, second.id)
+    const edges = JSON.stringify(store.draft.edges)
+    pointer(socket('preprocess', 'input', 0), 'pointerdown'); pointer(socket('preprocess', 'output', 1), 'pointerup')
+    expect(store.error).toContain('循环')
+    expect(JSON.stringify(store.draft.edges)).toBe(edges)
+    pointer(socket('audio_output', 'input'), 'pointerdown'); pointer(socket('preprocess', 'output', 1), 'pointerup')
+    expect(store.draft.edges.filter((entry) => entry.target === 'output')).toEqual([expect.objectContaining({ source: second.id, target: 'output' })])
+  })
+
+  it('filters other pointers and cancels on locks, pointercancel and blur', async () => {
+    const store = await nodes()
+    const edges = JSON.stringify(store.draft.edges)
+    pointer(socket('audio_output', 'input'), 'pointerdown')
+    pointer(socket('preprocess', 'output'), 'pointerdown', 10, 10, 8)
+    pointer(socket('preprocess', 'output'), 'pointerup', 10, 10, 8)
+    await settle()
+    expect(root!.querySelector('.workflow-edge-preview')).not.toBeNull()
+    pointer(window, 'pointercancel')
+    await settle()
+    expect(root!.querySelector('.workflow-edge-preview')).toBeNull()
+    pointer(socket('audio_output', 'input'), 'pointerdown'); window.dispatchEvent(new Event('blur'))
+    pointer(socket('preprocess', 'output'), 'pointerup')
+    expect(JSON.stringify(store.draft.edges)).toBe(edges)
+    for (const lock of ['saving', 'validating', 'resourceUploading'] as const) {
+      store[lock] = true
+      pointer(socket('audio_output', 'input'), 'pointerdown')
+      pointer(socket('preprocess', 'output'), 'pointerup')
+      expect(JSON.stringify(store.draft.edges)).toBe(edges)
+      store[lock] = false
+    }
+    pointer(socket('audio_output', 'input'), 'pointerdown')
+    store.saving = true
+    pointer(socket('preprocess', 'output'), 'pointerup')
+    expect(JSON.stringify(store.draft.edges)).toBe(edges)
+  })
+
+  it('resolves touch/pen implicit capture by final coordinates and reads direction from data rather than port ID classes', async () => {
+    const store = await nodes()
+    const descriptor = Object.getOwnPropertyDescriptor(document, 'elementFromPoint')
+    const destination = socket('preprocess', 'output')
+    const hit = vi.fn().mockReturnValue(destination)
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: hit })
+    try {
+      const start = socket('audio_output', 'input')
+      start.classList.add('node-port-out') // A valid extension port ID may itself be "out".
+      const connect = vi.spyOn(store, 'connect')
+      for (const type of ['touch', 'pen']) {
+        pointer(start, 'pointerdown', 100, 100, 7, type)
+        pointer(start, 'pointerup', 600, 200, 7, type)
+        expect(hit).toHaveBeenLastCalledWith(600, 200)
+        expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output')
+      }
+      // Forward completion must also treat an input with the CSS class
+      // node-port-out as an input; only its explicit direction is authoritative.
+      const calls = connect.mock.calls.length
+      hit.mockReturnValue(start)
+      pointer(destination, 'pointerdown', 600, 200, 7, 'touch')
+      pointer(destination, 'pointerup', 100, 100, 7, 'touch')
+      expect(connect).toHaveBeenCalledTimes(calls + 1)
+      expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output')
+      hit.mockReturnValue(null)
+      const edges = JSON.stringify(store.draft.edges)
+      pointer(start, 'pointerdown', 100, 100, 7, 'touch')
+      pointer(start, 'pointerup', 1600, 900, 7, 'touch')
+      expect(JSON.stringify(store.draft.edges)).toBe(edges)
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'elementFromPoint', descriptor)
+      else delete (document as any).elementFromPoint
+    }
+  })
+})
+
 describe('node resize gestures and measured minima', () => {
   function pointer(target: EventTarget, type: string, x: number, y: number) {
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
