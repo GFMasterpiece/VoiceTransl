@@ -40,6 +40,8 @@ On Windows PowerShell, use `npm.cmd` for these npm commands if script execution 
 
 ## Start
 
+On Windows, double-click `start-dev.cmd` in the repository root to start the backend and frontend in separate windows and open the local UI. The script uses the `asmr` Conda environment by default. Set `VOICETRANSL_CONDA_ENV` for another environment, or set `VOICETRANSL_CONDA_COMMAND` to the path of `conda.bat` or `conda.exe` when Conda is not on `PATH`.
+
 Use two terminals. Start the backend from `backend/`, keeping a single process and worker:
 
 ```text

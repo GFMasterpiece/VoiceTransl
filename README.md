@@ -40,6 +40,8 @@ Windows PowerShell 下如 `npm` 被脚本执行策略阻止，使用 `npm.cmd` �
 
 ## 启动
 
+Windows 本机可以直接双击仓库根目录的 `start-dev.cmd` 一键启动后端、前端并打开页面。脚本默认使用名为 `asmr` 的 Conda 环境；如果环境名不同，可在命令提示符中先设置 `VOICETRANSL_CONDA_ENV`。如果 Conda 不在 PATH 中，可设置 `VOICETRANSL_CONDA_COMMAND` 指向 `conda.bat` 或 `conda.exe`。
+
 在两个独立终端启动服务。后端命令从 `backend/` 执行，保持单进程、单 worker：
 
 ```text
