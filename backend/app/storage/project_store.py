@@ -568,7 +568,10 @@ class FileSystemProjectStore:
             raise ValueError("config must not be a symlink")
         if not path.exists():
             project = self.load_project(project_id)
-            return default_legacy_pipeline_config(project.source.language)
+            return default_legacy_pipeline_config(
+                project.source.language if project.source else project.source_language or "ja",
+                target_language=project.target_language or "zh",
+            )
         return LegacyPipelineConfig.model_validate(self._load_json(path, "pipeline config"))
 
     def save_pipeline_config(self, project_id: str, value: LegacyPipelineConfig) -> None:

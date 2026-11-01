@@ -18,23 +18,27 @@
 
 | 节点 | 输入 → 输出 | 配置与行为 |
 | --- | --- | --- |
-| `audio_input` | 无 → `audio` | 配置 `{}`，绑定当前音频，不能填写本机路径 |
+| `audio_input` | 无 → `audio` | 可选 `audio_id` 绑定项目内资源；节点内上传或选择音频，不能填写本机路径；旧 `{}` 使用运行音频上下文 |
 | `preprocess` | `audio` → `audio` | 仅 `provider=mock`，复制直接上游原字节，不转换采样率/声道 |
 | `asr` | `audio` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
 | `audio_output` | `audio` → 终端 | 安全的 `filename_stem`（默认 `audio-copy`），复制直接上游字节 |
 | `text_output` | `transcript` → 终端 | 安全的 `filename_stem`（默认 `transcript`）和 `format`（TXT/SRT/VTT/LRC），导出 Mock 文本 |
+| `audio_preview` | `audio` → 终端 | 无配置，保存该次输入的预览副本，供节点内播放器读取 |
+| `text_preview` | `transcript` → 终端 | 无配置，保存转写文本表示，供节点内纯文本展示 |
 
 Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示例文本。真实模型、后端、VAD、分段、Provider Profile、采样率、声道及“删除源文件”均不属于当前节点配置。未知字段和非 Mock Provider 明确拒绝，不能静默回退。
 
-图要求一个输入、至少一个终端输出；除源节点外恰好一条类型兼容入边，终端无出边。允许分支和串联，拒绝环、孤岛、无效端口、未知节点及危险配置；节点与边各最多 64 个。输入直连输出合法，不要求存在处理节点。
+图要求一个输入、至少一个终端节点（预览或导出）；除源节点外恰好一条类型兼容入边，终端无出边。允许分支和串联，拒绝环、孤岛、无效端口、未知节点及危险配置；节点与边各最多 64 个。输入直连输出或预览均合法，不要求存在处理节点或文件导出节点。
 
 ## 3. 保存、运行与产物
 
 - 每项目一份 `workflow.json`，不可变文档修订位于 `workflow-revisions/{revision:08d}.json`。`revision` 用于保存乐观锁；`workflow_revision` 表示执行语义。纯布局、数组排序及边 ID 变化不提升执行版本。
 - 没有已保存图时返回版本 0 的默认直通图，不因此落盘或改写旧 Job。首次保存建立版本 1。
 - 运行绑定一个音频、图版本及不可变节点配置快照。后来编辑图不能修改已提交或排队的运行。
+- 输入显式指定 `audio_id` 时，校验及保存检查项目资源归属，启动时检查其与运行路由音频一致；不一致返回 `INPUT_AUDIO_MISMATCH`。旧 `{}` 输入继续使用该次运行的音频，不在读取旧图时补写绑定。
 - 主音频的运行存于项目根 `workflow-runs/{rid}/`，其他音频存于 `audios/{aid}/workflow-runs/{rid}/`。包含 `run.json` 与 `nodes/{node_id}/{filename}`。
 - 成功节点立即保存状态和独立产物。artifact 包含 `artifact_id`、`port`、`filename`、`media_type`、`size_bytes`、`sha256`、`download_url`，不暴露本机绝对路径。
+- 预览节点另保存可空 `preview={renderer,content_url,media_type}`，旧节点记录缺失该字段时为无预览。音频、文本预览缓存按运行和节点隔离，通过安全的 inline 内容接口读取；浏览器加载失败不更改后端运行状态。前端依据渲染器注册表显示组件，并标明结果所属运行及历史状态。
 - 节点读取直接上游结果；失败只阻塞依赖下游，独立分支继续。全部终端成功为 `completed`，部分成功为 `partial`，无成功终端为 `failed`。
 - 运行状态还包括 `pending/running/cancelling/cancelled/interrupted`；节点状态还包括 `pending/running/failed/blocked/cancelled/interrupted`。
 - TXT 可导出无时间戳片段；SRT/VTT/LRC 要求有效时间范围。缺失时间戳只使相应文本输出失败，不影响独立音频分支。
@@ -59,7 +63,7 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.2`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。此能力目录变化不改变工作流文档或运行快照格式；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.3`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。节点的可空 `presentation` 通过 `resource_input={resource_type,config_key}` 和 `preview={renderer}` 声明资源选择及预览展示入口，前端不按节点类型名称特判。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。持久化 schema 仍为 `1.0`，新字段可选，旧数据不自动改写；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
 
 节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。新增已有数据类型的节点应通过独立执行器与注册接入，而不是修改通用调度器。不能让客户端提交任意导入路径或代码。
 

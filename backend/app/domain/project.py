@@ -54,7 +54,9 @@ class Project(BaseModel):
     name: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    source: SourceAsset
+    source: SourceAsset | None = None
+    source_language: str | None = None
+    target_language: str | None = None
     preset: str = "mock"
     metadata: dict[str, object] = Field(default_factory=dict)
     audios: list[AudioAsset] = Field(default_factory=list)
@@ -67,6 +69,10 @@ class Project(BaseModel):
     @model_validator(mode="after")
     def normalize_audios(self):
         # Old project files gain a virtual primary resource without moving files.
+        if self.source is None:
+            if len({audio.id for audio in self.audios}) != len(self.audios):
+                raise ValueError("duplicate audio id")
+            return self
         primary = AudioAsset(id=PRIMARY_AUDIO_ID, source=self.source)
         extras = [audio for audio in self.audios if audio.id != PRIMARY_AUDIO_ID]
         if len({audio.id for audio in extras}) != len(extras):

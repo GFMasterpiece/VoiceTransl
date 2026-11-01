@@ -12,7 +12,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
   } as Response
 }
 
-const project: Project = {
+const project = {
   id: 'project-1',
   name: 'Demo project',
   created_at: '2026-01-01T00:00:00Z',
@@ -23,7 +23,7 @@ const project: Project = {
     size_bytes: 123,
     media_type: 'audio/wav',
   },
-}
+} satisfies Project
 
 function makeJob(overrides: AudioJobSummary = {}): AudioJobSummary {
   return { id: 'job-1', status: 'running', ...overrides }
@@ -39,6 +39,46 @@ afterEach(() => {
 })
 
 describe('projects store', () => {
+  it('creates an empty project through JSON and refreshes the authoritative project page', async () => {
+    setActivePinia(createPinia())
+    const empty = { ...project, source: null, audios: [], source_language: 'xx-CUSTOM', target_language: 'zh-CN' }
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(jsonResponse(init?.method === 'POST'
+      ? { project: empty, job: null }
+      : { items: [empty], total: 1, limit: 20, offset: 0 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectsStore()
+    await expect(store.createEmptyProject('  Empty canvas  ', 'xx-CUSTOM', 'zh-CN')).resolves.toEqual(empty)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/projects/empty')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Empty canvas', source_language: 'xx-CUSTOM', target_language: 'zh-CN' })
+    expect(store.projects).toEqual([empty])
+    expect(store.total).toBe(1)
+    expect(store.creating).toBe(false)
+  })
+
+  it('keeps backend empty-project validation errors visible and leaves existing data intact', async () => {
+    setActivePinia(createPinia())
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { message: '语言配置无效' } }, 422)))
+    const store = useProjectsStore()
+    store.projects = [project]
+    await expect(store.createEmptyProject('Empty', 'ja', 'ja')).rejects.toThrow('语言配置无效')
+    expect(store.error).toBe('语言配置无效')
+    expect(store.projects).toEqual([project])
+    expect(store.creating).toBe(false)
+  })
+
+  it('adds the first audio to an empty project without synthesizing a legacy primary audio', async () => {
+    setActivePinia(createPinia())
+    const audio = { id: 'aud_new', source: project.source }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ audio })))
+    const store = useProjectsStore()
+    store.projects = [{ ...project, source: null }]
+    await store.addAudio(project.id, new File(['audio'], 'demo.wav'), 'en')
+    expect(store.projects[0]!.audios).toEqual([audio])
+  })
+
   it('retranslates existing errors while keeping the loaded page intact', async () => {
     setActivePinia(createPinia())
     const store = useProjectsStore()
@@ -260,6 +300,30 @@ describe('projects store', () => {
 })
 
 describe('project detail store', () => {
+  it('loads a source-null project with no audio selection and accepts its first node upload', async () => {
+    setActivePinia(createPinia())
+    const empty = { ...project, source: null, audios: [], source_language: 'en', target_language: 'zh-CN' }
+    const fetchMock = vi.fn((input: RequestInfo | URL) => Promise.resolve(jsonResponse(String(input).endsWith('/audios') ? { items: [] } : empty)))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useProjectDetailStore()
+    detailStores.push(store)
+    await store.load(project.id)
+    expect(store.project).toEqual(empty)
+    expect(store.activeAudioId).toBeNull()
+    expect(store.activeAudio).toBeNull()
+    expect(store.error).toBe('')
+    fetchMock.mockClear()
+    const audio = { id: 'aud_uploaded', source: project.source }
+    store.registerAudio(audio)
+    store.registerAudio(audio)
+    expect(store.audios).toEqual([audio])
+    expect(store.project?.audios).toEqual([audio])
+    expect(store.activeAudioId).toBe(audio.id)
+    expect(store.project?.source).toBeNull()
+    expect(store.project?.source_language).toBe('en')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('retranslates an existing detail error without another request or changing project data', async () => {
     setActivePinia(createPinia())
     const fetchMock = vi.fn((input: RequestInfo | URL) => Promise.resolve(jsonResponse(String(input).endsWith('/audios') ? { items: null } : project)))

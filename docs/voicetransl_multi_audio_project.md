@@ -4,8 +4,8 @@
 
 ## 资源与目录
 
-- 一个项目包含一个或多个音频；每个音频有独立输入、工作流运行及产物，不共享时间轴。
-- `Project.source` 是主音频兼容字段，`Project.audios` 包含 `{id, source, name}`。主音频 ID 为 `aud_primary`；旧项目缺少成员列表时构造虚拟主音频，不搬迁文件。
+- 一个项目包含零个或多个音频；空项目可以先保存图，每个实际音频有独立输入、工作流运行及产物，不共享时间轴。
+- `Project.source` 是可空的主音频兼容字段，`Project.audios` 包含 `{id, source, name}`。旧项目存在 `source` 时继续构造虚拟 `aud_primary`，不搬迁文件；空项目 `source=null`、`audios=[]`，随后上传只追加真实资源，不捏造主音频。新项目另保存显式 `source_language/target_language`；旧项目缺少这两个可选字段不影响读取。
 - 新增音频 ID 由服务端生成，不用用户文件名作路径。不同同名文件可以独立保存。
 - 项目级 `workflow.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
 
@@ -37,9 +37,11 @@ data/projects/<project-id>/
 | --- | --- |
 | `GET /projects` | `limit` 默认 20、最大 100，`offset` 默认 0；按更新时间/ID 倒序稳定分页，返回 `{items,total,limit,offset}` |
 | `POST /projects` | multipart 必填 `file/source_language/target_language`，可选 `name`；201 返回 `{project,job}`，只上传不运行 |
+| `POST /projects/empty` | JSON 必填非空白 `name/source_language/target_language`；201 返回 `{project,job:null}`，进入可编辑的零音频项目 |
 | `GET /projects/{pid}` | 项目与音频成员元数据 |
 | `POST /projects/{pid}/audios` | multipart 必填 `file/source_language`，可选 `name`；201 返回 `{audio,job}`，只追加不运行 |
 | `GET /projects/{pid}/audios` | `{items:[{id,source,name,job}]}`，Job 是旧格式只读摘要，不是当前节点运行状态 |
+| `GET /projects/{pid}/audios/{aid}/source` | 按项目资源归属安全读取原音频，inline 响应支持 Range，使用可信 MIME 和 `nosniff` |
 | `DELETE /projects/{pid}` | 删除整个项目，任一音频运行/排队时返回 `409 PROJECT_BUSY` |
 | `GET /projects/{pid}/workflow` | 项目工作流，无已保存图时返回默认音频直通图 |
 | `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges}`，保存有效图并返回新修订 |
@@ -50,12 +52,15 @@ data/projects/<project-id>/
 | `POST /projects/{pid}/audios/{aid}/workflow-runs/{rid}/cancel` | 提交活动运行取消；终态幂等返回已有记录 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}` | 校验文件存在后返回结构化 artifact |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/download` | 下载该节点的独立文件 |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/content` | 校验归属与文件存在后 inline 读取该节点缓存，供文本或音频预览，支持 Range 和 `nosniff` |
 
 创建时语言不能为空、有首尾空白或控制字符，长度最多 32；源/目标大小写不敏感不能相同。区域语言代码可用，不猜测默认语言。`preset` 不再是创建参数或执行选择。
 
 上传规则来自 `GET /upload-policy`。文件先进入临时目录，文件与元数据完整后发布；追加失败不删除成功音频或父项目。追加和删除在项目锁下串行化。
 
 图校验业务错误由 validate 返回 200/`valid=false`；无效请求或保存图返回 422，版本冲突返回 `409 WORKFLOW_REVISION_CONFLICT`，音频重复运行返回 `409 AUDIO_BUSY`。统一错误结构为 `{error:{code,message,details?}}`。
+
+`audio_input.config.audio_id` 显式绑定项目内资源，校验及保存拒绝外部或不存在的资源（`INPUT_AUDIO_NOT_FOUND`）。启动路由的 `{aid}` 必须与该绑定一致，否则 `422 INPUT_AUDIO_MISMATCH`。旧 `{}` 输入仍使用该次运行的音频上下文。绑定修改生成新执行版本，不修改旧运行快照。
 
 产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，即使同名也不覆盖历史或源文件。
 
@@ -64,6 +69,7 @@ data/projects/<project-id>/
 - `GET /projects/{pid}/config` 读取旧公共配置；逐音频 `/config` 读取对应旧覆盖。主音频优先 `primary-config.json`，再根 `config.json`，缺失时使用兼容默认值；其他音频优先自身配置，再适配语言的公共默认。
 - 旧 `/config` 的 PUT 已退役，只返回 `LEGACY_CONFIG_READ_ONLY`，不保存请求内容。节点图不读取这些配置。
 - `GET /projects/{pid}/job` 及逐音频 `/job` 保留旧 Job 摘要读取。创建仍保存初始兼容 Job/语言配置，但不再通过固定阶段执行，也不将旧 Job 当作节点运行。
+- 空项目没有主音频或旧 Job，主 `/job` 返回 404；缺省 `/config` 可按项目显式语言生成只读兼容值，不因此写文件。节点上传的实际音频仍拥有各自初始兼容 Job。
 - 旧 `run/cancel/stages/transcript/outputs` 和 `audios/run` 入口已删除。旧 WebSocket 保留 Job snapshot 兼容协议，不发送节点运行进度；新前端使用 REST。
 - 旧配置、Job 和图运行快照不批量改写；旧非 Mock Provider/参数不再可执行，用户需显式编辑当前图后重新运行，不自动转成 Mock。
 - 所有持久文档显式要求当前 `schema_version=1.0`，含嵌套快照；缺失或不同版本拒绝读取且不改写原文件。不实现跨版本迁移。

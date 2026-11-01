@@ -8,7 +8,7 @@ const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: 
 const emit = defineEmits<{ update: [config: Record<string, unknown>] }>()
 const id = useId()
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
-const fields = computed(() => props.registry.kind(props.node.type)?.fields || [])
+const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey))
 type Field = (typeof fields.value)[number]
 function value(field: Field) { return props.node.config[field.key] === undefined ? field.default : props.node.config[field.key] }
 function text(field: Field): string {

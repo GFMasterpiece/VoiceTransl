@@ -10,11 +10,11 @@ import { locale, LOCALE_STORAGE_KEY } from './i18n'
 
 let app: VueApp | undefined
 let root: HTMLDivElement | undefined
-const project: Project = { id: 'created-project', name: 'Voice', created_at: '2026-01-01', updated_at: '2026-01-01', source: { original_name: 'voice.wav', language: 'ja', size_bytes: 5 } }
+const project = { id: 'created-project', name: 'Voice', created_at: '2026-01-01', updated_at: '2026-01-01', source: { original_name: 'voice.wav', language: 'ja', size_bytes: 5 } } satisfies Project
 const response = (payload: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload }) as Response
 async function settle() { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() }
 
-async function mount(policyAvailable = true) {
+async function mount(policyAvailable = true, batchImport = true) {
   const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [
     { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
     { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
@@ -43,6 +43,7 @@ async function mount(policyAvailable = true) {
   const button = root.querySelector<HTMLButtonElement>('.page-heading button')!
   button.click()
   await nextTick()
+  if (batchImport) { root.querySelector<HTMLButtonElement>('[data-test=batch-import]')!.click(); await nextTick() }
   return { store: useProjectsStore(pinia), detail: useProjectDetailStore(pinia) }
 }
 async function chooseLanguages(source = 'ja', target = 'zh-CN') {
@@ -56,6 +57,8 @@ async function chooseLanguages(source = 'ja', target = 'zh-CN') {
 }
 
 async function select(files: File[]) {
+  const batchImport = root!.querySelector<HTMLButtonElement>('[data-test=batch-import]')
+  if (batchImport) { batchImport.click(); await nextTick() }
   const picker = root!.querySelector<HTMLInputElement>('input[type=file]')!
   Object.defineProperty(picker, 'files', { configurable: true, value: files })
   picker.dispatchEvent(new Event('change', { bubbles: true }))
@@ -76,6 +79,99 @@ afterEach(() => {
   root = undefined
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe('empty project canvas entry', () => {
+  const emptyProject: Project = { ...project, source: null, audios: [], source_language: 'xx-CUSTOM', target_language: 'zh-CN' }
+
+  it('creates an empty project without uploading files or requiring upload policy, then mounts its canvas', async () => {
+    const { store, detail } = await mount(false, false)
+    const create = vi.spyOn(store, 'createEmptyProject').mockResolvedValue(emptyProject)
+    const upload = vi.spyOn(store, 'createProject')
+    vi.spyOn(detail, 'load').mockImplementation(async () => { detail.project = emptyProject; detail.audios = []; detail.activeAudioId = null })
+    expect(root!.querySelector('.upload-zone')).toBeNull()
+    expect(root!.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false)
+    await chooseLanguages('xx-CUSTOM', 'zh-CN')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await nextTick()
+    expect(root!.textContent).toContain('请输入项目名称')
+    const name = root!.querySelector<HTMLInputElement>('#project-name')!
+    name.value = 'Empty canvas'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await settle()
+    expect(create).toHaveBeenCalledWith('Empty canvas', 'xx-CUSTOM', 'zh-CN')
+    expect(upload).not.toHaveBeenCalled()
+    expect(detail.load).toHaveBeenCalledWith(project.id, undefined)
+    expect(root!.querySelector('.node-workflow')).not.toBeNull()
+    expect(root!.querySelector('.workflow-empty.workspace-empty')).toBeNull()
+    expect(root!.querySelector('.workflow-audio-picker')).toBeNull()
+  })
+
+  it('waits for the audio list before mounting the editor and automatically loads its initial history context', async () => {
+    const { detail } = await mount()
+    const workflow = useWorkflowStore()
+    vi.mocked(workflow.load).mockRestore()
+    const originalFetch = fetch
+    let resolveAudios!: (response: Response) => void
+    const audioResponse = new Promise<Response>((resolve) => { resolveAudios = resolve })
+    const fetcher = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url)
+      if (path.endsWith(`/projects/${project.id}`)) return Promise.resolve(response(project))
+      if (path.endsWith(`/projects/${project.id}/audios`)) return audioResponse
+      if (path.endsWith('/workflow-runs?limit=30&offset=0')) return Promise.resolve(response({ items: [{ id: 'older-run', workflow_revision: 1, status: 'completed', created_at: '2026-01-01', finished_at: '2026-01-01', error: null }], total: 1, limit: 30, offset: 0 }))
+      return originalFetch(url, init)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const opening = app!._instance!.exposed!.openProject(project.id)
+    await settle()
+    expect(detail.project?.id).toBe(project.id)
+    expect(detail.loading).toBe(true)
+    expect(detail.activeAudioId).toBeNull()
+    expect(root!.querySelector('.node-workflow')).toBeNull()
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
+    resolveAudios(response({ items: [{ id: 'initial-audio', source: project.source }] }))
+    await opening; await settle(); await settle(); await settle()
+    expect(root!.querySelector('.node-workflow')).not.toBeNull()
+    expect(workflow.audioId).toBe('initial-audio')
+    expect(detail.activeAudioId).toBe('initial-audio')
+    expect(workflow.history.map((run) => run.id)).toEqual(['older-run'])
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes('/audios/initial-audio/workflow-runs?'))).toBe(true)
+  })
+
+  it('keeps the empty-project form and language validation when changing interface language', async () => {
+    const { store } = await mount(true, false)
+    const create = vi.spyOn(store, 'createEmptyProject')
+    await chooseLanguages('ja', 'JA')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await nextTick()
+    expect(root!.textContent).toContain('源语言与目标语言不能相同')
+    await switchInterface('en')
+    expect(root!.textContent).toContain('Source and target languages must differ.')
+    expect(root!.querySelector('button[type=submit]')?.textContent).toBe('Create project and open canvas')
+    expect(root!.querySelector<HTMLInputElement>('#source-language')!.value).toBe('ja')
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('renders empty projects with zero audio resources while retaining legacy source metadata', async () => {
+    const { store } = await mount(true, false)
+    vi.spyOn(store, 'fetchProjects').mockResolvedValue(undefined)
+    store.projects = [emptyProject, project, { ...emptyProject, id: 'uploaded-empty', audios: [{ id: 'aud_new', source: { ...project.source, original_name: 'new-resource.wav' } }] }]
+    ;(app!._instance!.exposed as { showList: () => void }).showList()
+    await nextTick()
+    const cards = root!.querySelectorAll('.project-card')
+    expect(cards[0]!.textContent).toContain('0 条音频 · 0 KB')
+    expect(cards[0]!.textContent).toContain('尚无音频资源')
+    expect(cards[0]!.textContent).toContain('XX-CUSTOM')
+    expect(cards[1]!.textContent).toContain('voice.wav')
+    expect(cards[1]!.textContent).toContain('1 条音频')
+    expect(cards[2]!.textContent).toContain('new-resource.wav')
+    expect(cards[2]!.textContent).toContain('1 条音频')
+    await switchInterface('en')
+    expect(cards[0]!.textContent).toContain('0 audio files · 0 KB')
+    expect(cards[0]!.textContent).toContain('No audio resources yet')
+  })
 })
 
 describe('upload view integration', () => {
@@ -225,7 +321,8 @@ describe('upload view integration', () => {
   })
 
   it('requires explicit source and target languages before creating a project, while accepting custom codes', async () => {
-    const { store } = await mount()
+    const { store, detail } = await mount()
+    vi.spyOn(detail, 'load').mockResolvedValue(undefined)
     const create = vi.spyOn(store, 'createProject').mockResolvedValue(project)
     await select([new File(['x'], 'voice.wav')])
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
@@ -319,34 +416,6 @@ describe('upload view integration', () => {
     await nextTick()
     expect(root!.querySelector('.upload-queue')).toBeNull()
     expect(root!.textContent).not.toContain('pending.wav')
-  })
-
-  it('adds audio from a project workspace to the same project and resets the target for a new project', async () => {
-    const { store, detail } = await mount()
-    const create = vi.spyOn(store, 'createProject').mockResolvedValue(project)
-    const append = vi.spyOn(store, 'addAudio').mockResolvedValue({ id: 'aud_extra', source: project.source })
-    vi.spyOn(detail, 'load').mockImplementation(async () => { detail.project = project })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    await select([new File(['x'], 'voice.wav')])
-    await chooseLanguages()
-    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
-    await settle()
-    Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '添加音频')!.click()
-    await nextTick()
-    expect(root!.textContent).toContain('添加音频 · Voice')
-    expect(root!.querySelector('#target-language')).toBeNull()
-    expect(root!.querySelector('#source-language')).not.toBeNull()
-    await select([new File(['y'], 'more.wav')])
-    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
-    await settle()
-    expect(create).toHaveBeenCalledTimes(1)
-    expect(append.mock.calls[0][0]).toBe(project.id)
-    root!.querySelector<HTMLButtonElement>('button[aria-label="返回上传队列"]')!.click()
-    await nextTick()
-    Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '清空队列')!.click()
-    await nextTick()
-    expect(root!.textContent).not.toContain('添加音频 · Voice')
-    expect(root!.querySelector<HTMLInputElement>('#project-name')!.disabled).toBe(false)
   })
 
   it('retains partial batch results and retries a failure without creating the successful project again', async () => {
@@ -476,6 +545,22 @@ describe('workflow navigation guards', () => {
     return { ...state, workflow }
   }
 
+  it('locks history selection during save, validation, upload and active runs without diverging detail context', async () => {
+    const { pinia, detail } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    for (const lock of ['saving', 'validating', 'resourceUploading'] as const) {
+      workflow[lock] = true
+      await settle()
+      const select = root!.querySelector<HTMLSelectElement>('.workflow-audio-picker select')!
+      expect(select.disabled).toBe(true)
+      select.value = 'aud_second'; select.dispatchEvent(new Event('change', { bubbles: true }))
+      await settle()
+      expect(detail.activeAudioId).toBe('aud_primary')
+      expect(select.value).toBe('aud_primary')
+      workflow[lock] = false
+    }
+  })
+
   it('does not expose a legacy pipeline switch and keeps the node canvas as the only workspace', async () => {
     await mountWorkflow()
     expect(root!.querySelector('.workspace-mode-switch')).toBeNull()
@@ -499,7 +584,7 @@ describe('workflow navigation guards', () => {
     expect(root!.querySelector('.workspace')).toBe(workspace)
     expect(root!.querySelector('.node-workflow')).toBe(canvas)
     expect(root!.querySelector('.back-button')?.textContent).toBe('← Back to projects')
-    expect(root!.querySelector('select[aria-label="Switch node workflow audio"]')).not.toBeNull()
+    expect(root!.querySelector('select[aria-label="Choose audio to view its history"]')).not.toBeNull()
     expect(root!.querySelector('h1')?.textContent).toBe('Voice')
     expect(detail.activeAudioId).toBe('aud_primary')
     expect(detail.project).toEqual(project)
@@ -518,14 +603,47 @@ describe('workflow navigation guards', () => {
     expect(Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).some((item) => item.textContent?.trim() === '返回项目工作区')).toBe(false)
   })
 
-  it('selects the requested audio through the node workspace audio picker', async () => {
+  it('changes audio history context without leaving, discarding, or remounting the project canvas', async () => {
     const state = await mountWorkflow()
-    const picker = root!.querySelector<HTMLSelectElement>('select[aria-label="切换节点工作流音频"]')!
+    const workflow = useWorkflowStore(state.pinia)
+    workflow.draft.nodes[0]!.position.x += 24
+    workflow.markDirty()
+    const draft = workflow.draft
+    const canvas = root!.querySelector('.node-workflow')
+    const leave = vi.spyOn(workflow, 'leaveEditor')
+    const discard = vi.spyOn(workflow, 'discardDraft')
+    const loadCalls = vi.mocked(workflow.load).mock.calls.length
+    const picker = root!.querySelector<HTMLSelectElement>('select[aria-label="选择要查看历史的音频"]')!
     picker.value = 'aud_second'
     picker.dispatchEvent(new Event('change', { bubbles: true }))
     await settle()
     expect(state.detail.activeAudioId).toBe('aud_second')
-    expect(root!.querySelector('.node-workflow')).not.toBeNull()
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    expect(workflow.draft).toBe(draft)
+    expect(workflow.dirty).toBe(true)
+    expect(leave).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+    expect(workflow.load).toHaveBeenCalledTimes(loadCalls)
+  })
+
+  it('registers node uploads and audio selections in project detail without replacing the canvas', async () => {
+    const { detail, pinia } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    workflow.draft.nodes[0]!.position.x += 24
+    workflow.markDirty()
+    const canvas = root!.querySelector('.node-workflow') as HTMLElement & { __vueParentComponent: { emit: (event: string, value: unknown) => void } }
+    const audio = { id: 'aud_uploaded', source: { ...project.source, original_name: 'new.wav' } }
+    canvas.__vueParentComponent.emit('uploaded', audio)
+    await settle()
+    expect(detail.audios.find((item) => item.id === audio.id)).toEqual(audio)
+    expect(detail.project?.audios?.find((item) => item.id === audio.id)).toEqual(audio)
+    expect(detail.activeAudioId).toBe(audio.id)
+    expect(workflow.dirty).toBe(true)
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    canvas.__vueParentComponent.emit('selectAudio', 'aud_second')
+    await settle()
+    expect(detail.activeAudioId).toBe('aud_second')
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
   })
 
   it('reopens the same project from the upload queue without re-entering the navigation guard', async () => {
@@ -573,30 +691,9 @@ describe('workflow navigation guards', () => {
     expect(root!.querySelector('.node-workflow')).not.toBeNull()
   })
 
-  it('opens the add-audio view once with a single confirmation and target setup', async () => {
-    await mountWorkflow()
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const exposed = app!._instance!.exposed as { addProjectAudio: () => void }
-    exposed.addProjectAudio()
-    await nextTick()
-    expect(root!.querySelector<HTMLInputElement>('#project-name')!.value).toBe('Voice')
-    await select([new File(['x'], 'pending.wav')])
-    expect(root!.textContent).toContain('pending.wav')
-    findButton('打开项目')!.click()
-    await settle()
-    expect(root!.querySelector('.node-workflow')).not.toBeNull()
-    exposed.addProjectAudio()
-    await settle()
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(root!.querySelector('.upload-queue')).toBeNull()
-    expect(root!.querySelector('h1')?.textContent).toBe('添加音频 · Voice')
-    expect(root!.querySelector<HTMLInputElement>('#project-name')!.value).toBe('Voice')
-    expect(root!.querySelector('#target-language')).toBeNull()
-  })
-
   it('does not expose legacy pipeline mode controls after switching audio', async () => {
     await mountWorkflow()
-    const picker = root!.querySelector<HTMLSelectElement>('select[aria-label="切换节点工作流音频"]')!
+    const picker = root!.querySelector<HTMLSelectElement>('select[aria-label="选择要查看历史的音频"]')!
     picker.value = 'aud_second'
     picker.dispatchEvent(new Event('change', { bubbles: true }))
     await settle()

@@ -39,6 +39,20 @@ const livePayload = {
 }
 
 describe('capabilities parser', () => {
+  it('reads resource and preview presentation metadata from the 1.3 catalog without node type branches', () => {
+    const payload = structuredClone(livePayload) as any
+    payload.workflow.schema_version = '1.3'
+    payload.workflow.nodes[0].config.fields = [{ key: 'resource_id', type: 'string', required: false, default: null }]
+    payload.workflow.nodes[0].presentation = { resource_input: { resource_type: 'audio', config_key: 'resource_id' } }
+    payload.workflow.nodes[2].presentation = { preview: { renderer: 'future_renderer' } }
+    const registry = createNodeRegistry(readCapabilities(payload))
+    expect(registry.kind('audio_input')?.resourceInput).toEqual({ resourceType: 'audio', configKey: 'resource_id' })
+    expect(registry.kind('audio_output')?.preview).toEqual({ renderer: 'future_renderer' })
+    expect(registry.capabilities.schemaVersion).toBe('1.3')
+    payload.workflow.nodes[0].presentation.resource_input.config_key = 'missing_field'
+    expect(() => readCapabilities(payload)).toThrow()
+  })
+
   it('accepts the live response shape and derives an editable registry', () => {
     const caps = readCapabilities(livePayload)
     const registry = createNodeRegistry(caps)

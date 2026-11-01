@@ -40,7 +40,7 @@ class WorkflowDefaultGraph(BaseModel):
 
 class CapabilitiesWorkflow(BaseModel):
     model_config = {"extra": "forbid"}
-    schema_version: str = "1.2"
+    schema_version: str = "1.3"
     ports: list[dict[str, object]]
     data_types: list[dict[str, object]]
     nodes: list[dict[str, object]]
@@ -95,7 +95,7 @@ async def capabilities():
     return {
         "schema_version": SCHEMA_VERSION,
         "workflow": {
-            "schema_version": "1.2",
+            "schema_version": "1.3",
             "ports": port_catalog(),
             "data_types": type_catalog(),
             "nodes": nodes,

@@ -13,6 +13,7 @@ from ..domain.workflow import (
     WorkflowRunError,
     WorkflowRunStatus,
     validate_workflow_graph,
+    validate_workflow_resources,
     workflow_snapshot,
 )
 from .workflow_runner import execute_workflow_run
@@ -83,8 +84,26 @@ class JobManager:
                 if document.workflow_revision != workflow_revision:
                     raise RuntimeError("WORKFLOW_REVISION_CONFLICT")
                 issues = validate_workflow_graph(document.nodes, document.edges)
+                issues.extend(
+                    validate_workflow_resources(self.store.load_project(project_id), document.nodes)
+                )
                 if issues:
                     raise ValueError("invalid workflow")
+                from ..domain.node_registry import NODE_DEFINITIONS
+
+                for node in document.nodes:
+                    definition = NODE_DEFINITIONS.get(node.type)
+                    binding = (
+                        (definition.presentation or {}).get("resource_input")
+                        if definition
+                        else None
+                    )
+                    if binding and binding["config_key"] in node.config:
+                        selected = node.config[binding["config_key"]]
+                        if not isinstance(selected, str):
+                            raise ValueError("invalid audio binding")
+                        if selected != audio_id:
+                            raise ValueError("INPUT_AUDIO_MISMATCH")
                 snapshot = workflow_snapshot(document)
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(

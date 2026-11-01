@@ -160,6 +160,12 @@ class WorkflowNodeError(BaseModel):
     message: str
 
 
+class WorkflowPreview(BaseModel):
+    renderer: str
+    content_url: str
+    media_type: str
+
+
 class WorkflowNodeRecord(BaseModel):
     node_id: str
     node_type: str
@@ -168,6 +174,7 @@ class WorkflowNodeRecord(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     artifact: WorkflowArtifact | None = None
+    preview: WorkflowPreview | None = None
     error: WorkflowNodeError | None = None
 
 
@@ -481,7 +488,7 @@ def validate_workflow_graph(
         issues.append(
             _issue(
                 "INVALID_OUTPUT_COUNT",
-                "工作流必须至少包含一个 audio_output 或 text_output 终端节点",
+                "工作流必须至少包含一个终端节点",
             )
         )
 
@@ -647,7 +654,7 @@ def validate_workflow_graph(
             issues.append(
                 _issue(
                     "NODE_HAS_NO_OUTPUT",
-                    "非终端节点必须能到达 audio_output 或 text_output",
+                    "非终端节点必须能到达终端节点",
                     node_id=node.id,
                 )
             )
@@ -692,3 +699,19 @@ def workflow_semantic_digest(nodes: list[WorkflowNode], edges: list[WorkflowEdge
         "utf-8"
     )
     return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_workflow_resources(project, nodes) -> list[WorkflowValidationIssue]:
+    """Check project-owned resources using registered input metadata."""
+    ids = {audio.id for audio in project.audios}
+    issues = []
+    for node in nodes:
+        definition = _nodes.NODE_DEFINITIONS.get(node.type)
+        binding = (definition.presentation or {}).get("resource_input") if definition else None
+        if binding and binding["config_key"] in node.config:
+            selected = node.config[binding["config_key"]]
+            if not isinstance(selected, str) or selected not in ids:
+                issues.append(
+                    _issue("INPUT_AUDIO_NOT_FOUND", "输入绑定的音频不属于当前项目", node_id=node.id)
+                )
+    return issues

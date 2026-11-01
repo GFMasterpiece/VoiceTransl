@@ -146,7 +146,7 @@ function button(text: string) {
   return Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim() === text)
 }
 
-function node(type: 'audio_input' | 'preprocess' | 'asr' | 'audio_output' | 'text_output', index = 0) {
+function node(type: string, index = 0) {
   return root!.querySelectorAll<SVGGElement>(`.workflow-node.is-${type}`)[index]
 }
 
@@ -804,6 +804,164 @@ describe('inline catalog field editing', () => {
       expect(config().filename_stem).toBe('audio-copy')
     }
     store.run = null; store.saving = false; store.validating = false
+  })
+})
+
+describe('catalog resources and preview workflows', () => {
+  function catalog() {
+    const value = structuredClone(testCapabilities)
+    value.workflow.schema_version = '1.3'
+    const source = value.workflow.nodes.find((entry: any) => entry.type === 'audio_input')
+    source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id' } }
+    source.config.fields = [{ key: 'audio_id', label: 'Audio ID', type: 'string', required: false, default: null }]
+    value.workflow.nodes.push({ type: 'audio_preview', label: 'Audio preview', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, config: { fields: [] }, presentation: { preview: { renderer: 'audio' } } })
+    return value
+  }
+  const project = { id: 'p1', name: 'Empty', created_at: '', updated_at: '', source: null, source_language: 'ja', target_language: 'en', audios: [] }
+
+  it('loads and saves an empty-audio project graph without requesting empty history routes', async () => {
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog())) : path.endsWith('/upload-policy') ? Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 })) : undefined, createPinia(), { audioId: null, project, audios: [] })
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.document).not.toBeNull()
+    expect(node('audio_input').querySelector('[data-resource="audio"]')).not.toBeNull()
+    expect(node('audio_input').querySelector('[data-field="audio_id"]')).toBeNull()
+    expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/audios/'))).toBe(false)
+    store.updateNode('output', { config: { filename_stem: 'empty-project-copy' } })
+    await store.validate(); await store.save()
+    expect(putCalls()).toHaveLength(1)
+    expect(button('运行节点工作流')!.disabled).toBe(true)
+  })
+
+  it('retries an input-node upload, preserves the graph, and saves the new resource binding', async () => {
+    let attempts = 0
+    setup((path, init) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.endsWith('/audios') && init?.method === 'POST') {
+        attempts++
+        return Promise.resolve(attempts === 1 ? response({ error: { code: 'UPLOAD_FAILED', message: 'Please retry' } }, 500) : response({ audio: { id: 'new-audio', source: { original_name: 'new.wav', language: 'ko', size_bytes: 4 } } }, 201))
+      }
+      return undefined
+    }, createPinia(), { audioId: null, project, audios: [] })
+    await settle()
+    const store = useWorkflowStore()
+    store.updateNode('output', { config: { filename_stem: 'keep-my-draft' } })
+    const language = node('audio_input').querySelector<HTMLInputElement>('[data-resource-language]')!
+    expect(language.value).toBe('ja')
+    language.value = 'ko'; language.dispatchEvent(new Event('input', { bubbles: true }))
+    const input = node('audio_input').querySelector<HTMLInputElement>('input[type=file]')!
+    Object.defineProperty(input, 'files', { configurable: true, value: [new File(['RIFF'], 'new.wav', { type: 'audio/wav' })] })
+    input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(node('audio_input').textContent).toContain('Please retry')
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.config).toEqual({})
+    node('audio_input').querySelectorAll<HTMLButtonElement>('button')[1]!.click(); await settle()
+    expect(attempts).toBe(2)
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.config.audio_id).toBe('new-audio')
+    expect(store.draft.nodes.find((entry) => entry.id === 'output')!.config.filename_stem).toBe('keep-my-draft')
+    expect(store.audioId).toBe('new-audio')
+    const request = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/audios') && (init as RequestInit)?.method === 'POST')!
+    expect(((request[1] as RequestInit).body as FormData).get('source_language')).toBe('ko')
+    await store.save()
+    expect(JSON.parse(String((putCalls()[0][1] as RequestInit).body)).nodes.find((entry: WorkflowNode) => entry.id === 'input').config.audio_id).toBe('new-audio')
+  })
+
+  it('selects existing resources as draft bindings and locks navigation while an upload is pending', async () => {
+    const pending = deferred<Response>()
+    const audios = [{ id: 'existing', source: { original_name: 'old.wav', language: 'ja', size_bytes: 4 } }]
+    setup((path, init) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.endsWith('/audios') && init?.method === 'POST') return pending.promise
+      return undefined
+    }, createPinia(), { audioId: null, project, audios })
+    await settle()
+    const store = useWorkflowStore()
+    const select = node('audio_input').querySelector<HTMLSelectElement>('[data-resource="audio"]')!
+    select.value = 'existing'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.config.audio_id).toBe('existing')
+    expect(store.audioId).toBe('existing')
+    const file = node('audio_input').querySelector<HTMLInputElement>('input[type=file]')!
+    Object.defineProperty(file, 'files', { configurable: true, value: [new File(['x'], 'pending.wav')] })
+    file.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(store.resourceUploading).toBe(true)
+    expect(node('audio_input').querySelector('progress')).not.toBeNull()
+    expect(app!._instance!.exposed!.requestClose(vi.fn())).toBe('blocked')
+    expect(await store.setAudioContext('other')).toBe(false)
+    const calls = fetchMock.mock.calls.length
+    await store.validate(); await store.save(); await store.startRun()
+    expect(fetchMock.mock.calls.length).toBe(calls)
+    pending.resolve(response({ error: { code: 'FAILED', message: 'Upload failed' } }, 500)); await settle()
+    expect(store.resourceUploading).toBe(false)
+    expect(store.draft.nodes.find((entry) => entry.id === 'input')!.config.audio_id).toBe('existing')
+  })
+
+  it('describes the bound input resource separately from the selected history audio with legacy fallback', async () => {
+    const bound = { id: 'bound', source: { original_name: 'input-resource.wav', language: 'ja', size_bytes: 4 } }
+    setup((path) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.endsWith('/workflow')) { const graph = documentBody(); graph.nodes[0]!.config = { audio_id: 'bound' }; return Promise.resolve(response(graph)) }
+      return undefined
+    }, createPinia(), { audioId: 'a1', audioName: 'history-resource.wav', project, audios: [bound] })
+    await settle()
+    expect(root!.querySelector('.workflow-mode-note')?.textContent).toContain('input-resource.wav')
+    expect(root!.querySelector('.workflow-mode-note')?.textContent).not.toContain('history-resource.wav')
+    expect(root!.querySelector('.inspector-type')?.textContent).toContain('input-resource.wav')
+    const metadata = root!.querySelector('.workflow-inspector-meta')!
+    expect(metadata.textContent).toContain('输入音频input-resource.wav')
+    expect(metadata.textContent).toContain('历史音频上下文history-resource.wav')
+    setLocale('en'); await settle()
+    expect(metadata.textContent).toContain('Input audioinput-resource.wav')
+    expect(metadata.textContent).toContain('History audio contexthistory-resource.wav')
+    useWorkflowStore().updateNode('input', { config: {} }); await settle()
+    expect(root!.querySelector('.workflow-mode-note')?.textContent).toContain('history-resource.wav')
+  })
+
+  it('changes history context without reloading or discarding the graph and ignores stale run responses', async () => {
+    const slow = deferred<Response>()
+    setup((path) => path.endsWith('/run-old') ? slow.promise : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    store.updateNode('output', { config: { filename_stem: 'draft-stays' } })
+    const draft = JSON.stringify(store.draft)
+    const old = store.loadRun('run-old')
+    await store.setAudioContext('a2')
+    slow.resolve(response(runBody({ id: 'run-old', status: 'completed', audio_id: 'a1' })))
+    await old; await settle()
+    expect(store.run).toBeNull()
+    expect(store.audioId).toBe('a2')
+    expect(JSON.stringify(store.draft)).toBe(draft)
+    expect(store.dirty).toBe(true)
+    expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/workflow'))).toHaveLength(1)
+  })
+
+  it('runs a preview-only graph on its bound resource and renders the selected run preview without download controls', async () => {
+    const source = { ...input, config: { audio_id: 'bound-audio' } }
+    const preview = { id: 'preview', type: 'audio_preview', config: {}, position: { x: 420, y: 120 } }
+    const nodes = [source, preview]
+    const edges = [{ ...edge, target: 'preview' }]
+    const completed = runBody({ status: 'completed', audio_id: 'bound-audio', workflow: { nodes, edges }, nodes: [
+      { node_id: 'preview', node_type: 'audio_preview', config: {}, status: 'completed', started_at: null, finished_at: null, artifact: { ...outputArtifact, download_url: null }, error: null, preview: { renderer: 'audio', content_url: '/api/v1/projects/p1/audios/bound-audio/workflow-runs/run-1/outputs/preview/content', media_type: 'audio/wav' } },
+    ] })
+    setup((path, init) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.endsWith('/workflow')) return Promise.resolve(response({ ...documentBody(), nodes, edges }))
+      if (path.endsWith('/workflow-runs') && init?.method === 'POST') return Promise.resolve(response(completed, 202))
+      return undefined
+    })
+    await settle()
+    const store = useWorkflowStore()
+    await store.startRun(); await settle()
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).includes('/audios/bound-audio/workflow-runs') && (init as RequestInit)?.method === 'POST')).toBe(true)
+    expect(node('audio_preview').querySelector('audio')?.getAttribute('src')).toContain('/audios/bound-audio/')
+    expect(root!.querySelector('.workflow-run-nodes button')).toBeNull()
+    store.updateNode('input', { position: { x: 90, y: 130 } }); await settle()
+    // Position alone does not change execution snapshot consistency.
+    expect(node('audio_preview').textContent).toContain('与画布一致')
+    store.updateNode('input', { config: { audio_id: 'other' } }); await settle()
+    expect(node('audio_preview').textContent).toContain('历史版本')
   })
 })
 

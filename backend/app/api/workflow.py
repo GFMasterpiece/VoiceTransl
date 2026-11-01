@@ -13,6 +13,7 @@ from ..domain import (
     validate_workflow_graph,
 )
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
+from ..domain.workflow import validate_workflow_resources
 from ..storage import ProjectNotFound
 from ..storage.project_store import WorkflowRevisionConflict
 
@@ -92,6 +93,7 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
     _project(request, pid)
     store = request.app.state.store
     issues = validate_workflow_graph(body.nodes, body.edges)
+    issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
     if issues:
         raise HTTPException(
             422,
@@ -128,6 +130,7 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
 async def validate_workflow(pid: str, body: WorkflowValidateRequest, request: Request):
     _project(request, pid)
     issues = validate_workflow_graph(body.nodes, body.edges, body.schema_version)
+    issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
     return WorkflowValidationResponse(valid=not issues, errors=issues)
 
 
@@ -153,6 +156,10 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
             )
         raise HTTPException(500, detail=_error("INTERNAL_ERROR", "工作流启动失败")) from error
     except ValueError as error:
+        if str(error) == "INPUT_AUDIO_MISMATCH":
+            raise HTTPException(
+                422, detail=_error("INPUT_AUDIO_MISMATCH", "输入节点绑定的音频与运行音频不一致")
+            ) from error
         raise HTTPException(
             422, detail=_error("INVALID_WORKFLOW", "工作流无效，无法运行")
         ) from error
@@ -236,4 +243,18 @@ async def download_workflow_output(pid: str, aid: str, rid: str, node_id: str, r
         path,
         media_type=record.artifact.media_type,
         filename=record.artifact.filename,
+    )
+
+
+@router.get("/projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/content")
+async def inline_workflow_output(pid: str, aid: str, rid: str, node_id: str, request: Request):
+    from ..domain.media import inline_media_type
+
+    _, record, path = _artifact_run(request, pid, aid, rid, node_id)
+    return FileResponse(
+        path,
+        media_type=inline_media_type(path),
+        headers={"X-Content-Type-Options": "nosniff"},
+        filename=record.artifact.filename,
+        content_disposition_type="inline",
     )

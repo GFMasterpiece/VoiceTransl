@@ -5,7 +5,14 @@ import { message, messageRef } from '../i18n'
 
 export interface Audio {
   id: string
-  source: Project['source']
+  source: AudioSource
+}
+
+export interface AudioSource {
+  original_name: string
+  language: string
+  size_bytes: number
+  media_type?: string | null
 }
 
 export interface ProjectPage {
@@ -22,12 +29,9 @@ export interface Project {
   updated_at: string
   preset?: string
   audios?: Audio[]
-  source: {
-    original_name: string
-    language: string
-    size_bytes: number
-    media_type?: string | null
-  }
+  source_language?: string | null
+  target_language?: string | null
+  source: AudioSource | null
 }
 
 export const useProjectsStore = defineStore('projects', () => {
@@ -105,6 +109,29 @@ export const useProjectsStore = defineStore('projects', () => {
     else if (total.value > offset.value + projects.value.length) await fetchProjects(offset.value)
   }
 
+  async function createEmptyProject(name: string, sourceLanguage: string, targetLanguage: string) {
+    ++fetchGeneration
+    creating.value = true
+    error.value = ''
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/empty`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), source_language: sourceLanguage, target_language: targetLanguage }),
+      })
+      if (!response.ok) throw await parseApiError(response)
+      const payload = await response.json() as { project: Project; job: null }
+      total.value += 1
+      await fetchProjects(offset.value)
+      return payload.project
+    } catch (reason) {
+      setError(reason instanceof Error ? reason : message('app.errors.create'))
+      throw reason
+    } finally {
+      creating.value = false
+    }
+  }
+
   async function addAudio(projectId: string, file: File, language: string) {
     const form = new FormData()
     form.append('file', file)
@@ -113,7 +140,7 @@ export const useProjectsStore = defineStore('projects', () => {
     if (!response.ok) throw await parseApiError(response)
     const payload = await response.json() as { audio: Audio }
     const project = projects.value.find((entry) => entry.id === projectId)
-    if (project) project.audios = [...(project.audios || [{ id: 'aud_primary', source: project.source }]), payload.audio]
+    if (project) project.audios = [...(project.audios || (project.source ? [{ id: 'aud_primary', source: project.source }] : [])), payload.audio]
     return payload.audio
   }
 
@@ -122,5 +149,5 @@ export const useProjectsStore = defineStore('projects', () => {
   const hasNext = computed(() => offset.value + limit.value < total.value)
   async function previousPage() { await fetchProjects(Math.max(0, offset.value - limit.value)) }
   async function nextPage() { if (hasNext.value) await fetchProjects(offset.value + limit.value) }
-  return { projects, total, limit, offset, pageCount, hasPrevious, hasNext, loading, creating, error, setError, fetchProjects, previousPage, nextPage, createProject, addAudio, deleteProject }
+  return { projects, total, limit, offset, pageCount, hasPrevious, hasNext, loading, creating, error, setError, fetchProjects, previousPage, nextPage, createProject, createEmptyProject, addAudio, deleteProject }
 })

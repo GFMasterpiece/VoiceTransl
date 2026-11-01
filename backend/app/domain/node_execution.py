@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .workflow import WorkflowPreview
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,7 @@ class NodeData:
 class NodeResult:
     outputs: dict[str, NodeData] = field(default_factory=dict)
     artifact: object | None = None
+    preview: WorkflowPreview | None = None
 
     def add(self, port: str, value: object) -> None:
         if port in self.outputs:

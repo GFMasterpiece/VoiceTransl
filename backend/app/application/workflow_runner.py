@@ -25,7 +25,7 @@ from ..domain.node_registry import (
     register_port,
     validate_node_result,
 )
-from .workflow_asr import TranscriptData, WorkflowASRCancelled, WorkflowASRError
+from .workflow_asr import WorkflowASRCancelled, WorkflowASRError
 
 COPY_CHUNK_SIZE = 1024 * 1024
 
@@ -241,6 +241,11 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
     validate_node_result(definition, result)
     if result.artifact is not None and not isinstance(result.artifact, WorkflowArtifact):
         raise TypeError("node artifact must be WorkflowArtifact")
+    if result.preview is not None:
+        from ..domain.workflow import WorkflowPreview
+
+        if not isinstance(result.preview, WorkflowPreview) or result.artifact is None:
+            raise TypeError("node preview requires a descriptor and persistent artifact")
     return result
 
 
@@ -360,6 +365,7 @@ async def execute_workflow_run(
                     )
                 )
                 record.artifact = result.artifact
+                record.preview = result.preview
                 outputs_by_node[node.id] = result.outputs
                 record.status = WorkflowNodeStatus.COMPLETED
                 record.finished_at = now()

@@ -71,6 +71,7 @@ class NodeDefinition:
     normalize_config: ConfigCallable | None = None
     validate_config: ConfigCallable | None = None
     execute: ExecuteCallable | None = None
+    presentation: dict[str, object] | None = None
 
     @property
     def config(self) -> NodeConfigCapability:
@@ -79,8 +80,33 @@ class NodeDefinition:
 
 def normalize_empty_config(config: dict[str, object]) -> dict[str, object]:
     if config:
-        raise ValueError("audio_input 的 config 必须为空对象")
+        raise ValueError("config 必须为空对象")
     return config
+
+
+def normalize_input_config(config: dict[str, object]) -> dict[str, object]:
+    if set(config) - {"audio_id"}:
+        raise ValueError("audio_input 仅接受 audio_id")
+    if "audio_id" in config:
+        from .project import AudioAsset
+
+        value = config["audio_id"]
+        if not isinstance(value, str):
+            raise ValueError("audio_id 必须是字符串")
+        AudioAsset.validate_id(value)
+    return dict(config)
+
+
+async def audio_preview_executor(context: NodeExecutionContext) -> NodeResult:
+    from ..application.workflow_preview import execute_audio_preview
+
+    return await execute_audio_preview(context)
+
+
+async def text_preview_executor(context: NodeExecutionContext) -> NodeResult:
+    from ..application.workflow_preview import execute_text_preview
+
+    return await execute_text_preview(context)
 
 
 def normalize_preprocess_config(config: dict[str, object]) -> dict[str, object]:
@@ -433,8 +459,10 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
         output_ports=(AUDIO_PORT,),
         terminal=False,
         config_kind="none",
-        normalize_config=normalize_empty_config,
-        validate_config=normalize_empty_config,
+        normalize_config=normalize_input_config,
+        validate_config=normalize_input_config,
+        fields=(CapabilityField(key="audio_id", type="string"),),
+        presentation={"resource_input": {"resource_type": "audio", "config_key": "audio_id"}},
         execute=input_executor,
         max_instances=1,
         required_inbound=0,
@@ -490,6 +518,24 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
         fields=(),
     ),
 }
+
+
+for _preview_type, _port, _renderer, _executor in (
+    ("audio_preview", AUDIO_PORT, "audio", audio_preview_executor),
+    ("text_preview", TRANSCRIPT_PORT, "text", text_preview_executor),
+):
+    NODE_DEFINITIONS[_preview_type] = NodeDefinition(
+        type=_preview_type,
+        label="音频预览" if _renderer == "audio" else "文本预览",
+        input_ports=(_port,),
+        output_ports=(),
+        terminal=True,
+        config_kind="none",
+        normalize_config=normalize_empty_config,
+        validate_config=normalize_empty_config,
+        presentation={"preview": {"renderer": _renderer}},
+        execute=_executor,
+    )
 
 
 def node_ports():
@@ -651,6 +697,7 @@ def node_catalog() -> list[dict[str, object]]:
             "max_instances": item.max_instances,
             "required_inbound": item.required_inbound,
             "removable": item.removable,
+            "presentation": item.presentation,
             "config": NodeConfigCapability(
                 kind=item.config_kind, fields=list(_capability_fields(item))
             ).model_dump(mode="json"),

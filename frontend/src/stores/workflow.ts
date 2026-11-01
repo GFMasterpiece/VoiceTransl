@@ -19,8 +19,16 @@ export const WORKFLOW_NODE_FIELDS_Y = 62
 export const WORKFLOW_NODE_FIELD_HEIGHT = 44
 export function workflowFieldHeight(field: { type: string }): number { return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT }
 
+export const WORKFLOW_RESOURCE_HEIGHT = 236
+export const WORKFLOW_PREVIEW_HEIGHT = 190
+export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry): number {
+  const kind = registry.kind(type)
+  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey).reduce((height, field) => height + workflowFieldHeight(field), 0)
+}
 export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): number {
-  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + (registry.kind(type)?.fields || []).reduce((height, field) => height + workflowFieldHeight(field), 0) + 10)
+  const kind = registry.kind(type)
+  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + workflowFieldsHeight(type, registry)
+    + (kind?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNode {
@@ -92,6 +100,7 @@ export interface WorkflowNodeRun {
   finished_at: string | null
   artifact: WorkflowArtifact | null
   error: WorkflowError | null
+  preview?: { renderer: string; content_url: string; media_type: string } | null
 }
 
 export interface WorkflowRun {
@@ -252,6 +261,7 @@ function readRun(value: unknown): WorkflowRun {
       throw message('workflow.invalidRun')
     }
     readArtifact(node.artifact)
+    if (node.preview != null && (typeof node.preview.renderer !== 'string' || typeof node.preview.content_url !== 'string' || typeof node.preview.media_type !== 'string')) throw message('workflow.invalidPreview')
   }
   return run
 }
@@ -342,6 +352,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const savedSignature = ref('')
   const loading = ref(false)
   const saving = ref(false)
+  const resourceUploading = ref(false)
   const validating = ref(false)
   const starting = ref(false)
   const cancelling = ref(false)
@@ -454,7 +465,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function validate(): Promise<WorkflowIssue[]> {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || saving.value || validating.value || activeRun.value) return []
+    if (!id || stopped || saving.value || validating.value || resourceUploading.value || activeRun.value) return []
     const localIssues = localConfigIssues()
     if (localIssues.length) return localIssues
     const token = sessionGeneration
@@ -502,7 +513,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
-  async function load(id: string, aid: string) {
+  async function load(id: string, aid: string | null) {
     stop()
     projectId.value = id
     audioId.value = aid
@@ -550,7 +561,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function save() {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || saving.value || loading.value || validating.value || activeRun.value) return null
+    if (!id || stopped || saving.value || loading.value || validating.value || resourceUploading.value || activeRun.value) return null
     const token = sessionGeneration
     if (localConfigIssues().length) return null
     const sequence = ++saveSequence
@@ -592,7 +603,33 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
+  const boundAudioId = computed(() => {
+    for (const node of draft.value.nodes) {
+      const resource = registry.value?.kind(node.type)?.resourceInput
+      if (resource?.resourceType === 'audio') {
+        const id = node.config[resource.configKey]
+        if (typeof id === 'string' && id) return id
+      }
+    }
+    return null
+  })
+  async function setAudioContext(aid: string | null) {
+    if (aid === audioId.value) return true
+    if (activeRun.value || saving.value || validating.value || starting.value || resourceUploading.value || loading.value || stopped) return false
+    sessionGeneration += 1
+    historySequence += 1
+    runDetailSequence += 1
+    outputSequence += 1
+    clearHistoryState()
+    historyLoading.value = false
+    audioId.value = aid
+    if (aid) await loadHistory()
+    return true
+  }
+
   async function startRun() {
+    if (resourceUploading.value || saving.value || validating.value || loading.value) return null
+    if (!dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
     const { id, audioId: aid } = currentKey()
     if (!id || !aid || stopped || starting.value || activeRun.value || !document.value) return null
     if (dirty.value) {
@@ -963,9 +1000,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, actionLoading, error, notice,
+    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, resourceUploading, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNode, currentOutputNode, activeRunId, run, activeRun,
-    history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty,
+    history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, setAudioContext,
     runMatchesDraft,
     setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
     updateNode, connect, disconnect, selectNode, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,

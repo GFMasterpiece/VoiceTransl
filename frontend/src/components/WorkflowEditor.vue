@@ -4,7 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'v
 import {
   workflowErrorLabel, workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, workflowNodeHeight,
-  WORKFLOW_NODE_WIDTH,
+  WORKFLOW_NODE_WIDTH, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight,
   executionSignature,
   inputPortForNode as registeredInputPortForNode,
   isTerminalNode,
@@ -15,10 +15,17 @@ import {
 } from '../stores/workflow'
 
 import NodeConfigFields from './NodeConfigFields.vue'
+import NodeResourceInput from './NodeResourceInput.vue'
+import NodePreview from './NodePreview.vue'
+import type { Audio, Project } from '../stores/projects'
 
 const clipId = useId()
-const props = defineProps<{ projectId: string; audioId: string; audioName: string }>()
+const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
+const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio] }>()
+const resourceUploads = ref<Record<string, boolean>>({})
+const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
 const store = useWorkflowStore()
+watch(resourceBusy, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
@@ -31,9 +38,9 @@ let pendingClose: (() => void) | null = null
 const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
 const selected = computed(() => store.selectedNode)
 const currentInput = computed(() => store.draft.nodes.find((node) => registry.value?.kind(node.type)?.isSource))
-const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun)
-const canValidateAndSave = computed(() => store.dirty && !store.saving && !store.loading && !store.validating && !store.activeRun)
-const canRun = computed(() => !store.dirty && !store.saving && !!store.document && !store.activeRun && !store.actionLoading)
+const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || resourceBusy.value)
+const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading)
+const canRun = computed(() => !store.dirty && !controlsLocked.value && !!store.document && !!(store.boundAudioId || store.audioId))
 
 const minZoom = .01
 const nodeWidth = WORKFLOW_NODE_WIDTH
@@ -47,7 +54,35 @@ function outputPortForNode(type: string) { return registry.value ? registeredOut
 function inputPortForNode(type: string) { return registry.value ? registeredInputPortForNode(type, registry.value) : null }
 function portLabel(id: string | null) { return id ? registry.value?.port(id)?.label || id : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
+const inputAudioName = computed(() => store.boundAudioId
+  ? props.audios?.find((audio) => audio.id === store.boundAudioId)?.source.original_name || t('workflow.resourceMissing')
+  : props.audioName)
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
+
+function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
+function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value) : 0 }
+function previewY(node: WorkflowNode) { return WORKFLOW_NODE_FIELDS_Y + fieldsHeight(node) + (kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) }
+function previewRecord(node: WorkflowNode) { return store.run?.nodes.find((record) => record.node_id === node.id && record.node_type === node.type) }
+async function bindResource(node: WorkflowNode, audioId: string | null) {
+  if (controlsLocked.value) return
+  const resource = kind(node)?.resourceInput
+  if (!resource) return
+  const config = { ...node.config }
+  if (audioId) config[resource.configKey] = audioId
+  else delete config[resource.configKey]
+  store.updateNode(node.id, { config })
+  if (audioId) await store.setAudioContext(audioId)
+}
+async function uploadedResource(node: WorkflowNode, audio: Audio) {
+  // The resource component releases its upload lock before publishing success.
+  emit('uploaded', audio)
+  await bindResource(node, audio.id)
+}
+watch(() => props.audioId, (id) => { void store.setAudioContext(id) })
+watch(() => store.audioId, (id) => { if (id && id !== props.audioId) emit('selectAudio', id) })
+function guardUnload(event: BeforeUnloadEvent) {
+  if (resourceBusy.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
+}
 
 function nodeStatus(node: WorkflowNode) {
   if (!store.runMatchesDraft) return 'draft'
@@ -270,6 +305,7 @@ async function runWorkflow() {
     store.setError(message('workflow.saveFirst'))
     return
   }
+  if (!canRun.value) return
   try { await store.startRun() } catch { /* Store exposes the actionable failure. */ }
 }
 
@@ -284,6 +320,7 @@ function selectHistory(runId: string) {
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
+  if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
   if (store.activeRun) {
     store.setError(message('workflow.leaveActive'))
     return 'blocked'
@@ -337,7 +374,7 @@ function download(nodeId: string) {
 async function retryOutputChecks() {
   const active = store.run
   if (!active) return
-  await store.loadOutputs(props.projectId, props.audioId, active.id)
+  await store.loadOutputs(props.projectId, active.audio_id, active.id)
 }
 
 function nodeKindLabel(node: WorkflowNode) {
@@ -350,7 +387,7 @@ function nodeKicker(node: WorkflowNode) {
 
 function nodeDescription(node: WorkflowNode) {
   const definition = registry.value?.kind(node.type)
-  if (definition?.isSource) return t('workflow.inputHelp', { name: props.audioName })
+  if (definition?.isSource) return t('workflow.inputHelp', { name: inputAudioName.value })
   return t('workflow.genericDescription', { name: nodeLabel(node) })
 }
 
@@ -406,15 +443,18 @@ defineExpose({ requestClose })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
+  window.addEventListener('beforeunload', guardUnload)
   window.addEventListener('pointermove', onWindowPointerMove)
   window.addEventListener('blur', clearGestures)
   window.addEventListener('pointerup', onWindowPointerUp)
   window.addEventListener('pointercancel', onWindowPointerUp)
 })
 onUnmounted(() => {
+  store.resourceUploading = false
   store.stop()
   pendingClose = null
   clearGestures()
+  window.removeEventListener('beforeunload', guardUnload)
   window.removeEventListener('pointermove', onWindowPointerMove)
   window.removeEventListener('blur', clearGestures)
   window.removeEventListener('pointerup', onWindowPointerUp)
@@ -441,9 +481,9 @@ onUnmounted(() => {
 
     <div v-if="store.loading" class="workflow-loading" role="status">{{ t('workflow.loading') }}</div>
     <template v-else>
-      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>{{ t('workflow.asrTextOutput') }}</strong><span>{{ t('workflow.boundAudioHelp', { name: props.audioName }) }}</span></div>
+      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>{{ t('workflow.asrTextOutput') }}</strong><span>{{ t('workflow.boundAudioHelp', { name: inputAudioName }) }}</span></div>
       <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
-        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="store.saving || !!store.activeRun || (kind.isSource && !!currentInput) || store.draft.nodes.length >= (registry?.capabilities.constraints.maxNodes || 0) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
+        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="controlsLocked || (kind.isSource && !!currentInput) || store.draft.nodes.length >= (registry?.capabilities.constraints.maxNodes || 0) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
         <span class="toolbar-rule" aria-hidden="true"></span>
         <span class="toolbar-spacer"></span>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
@@ -469,10 +509,16 @@ onUnmounted(() => {
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ truncate(nodeLabel(node), 23) }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
-                <foreignObject @focusin="store.selectNode(node.id)" v-if="registry && registry.kind(node.type)?.fields.length" x="8" :y="WORKFLOW_NODE_FIELDS_Y" :width="nodeWidth - 16" :height="nodeHeight(node) - WORKFLOW_NODE_FIELDS_Y - 8">
+                <foreignObject @focusin="store.selectNode(node.id)" v-if="registry && fieldsHeight(node)" x="8" :y="WORKFLOW_NODE_FIELDS_Y" :width="nodeWidth - 16" :height="fieldsHeight(node)">
                   <NodeConfigFields :node="node" :registry="registry" :locked="controlsLocked" @update="editNode(node, $event)" />
                 </foreignObject>
-                <text v-else class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? props.audioName : nodeLabel(node) }}</title>{{ truncate(registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node), 28) }}</text>
+                <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ truncate(registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node), 28) }}</text>
+                <foreignObject v-if="kind(node)?.resourceInput" x="8" :y="WORKFLOW_NODE_FIELDS_Y + fieldsHeight(node)" :width="nodeWidth - 16" :height="WORKFLOW_RESOURCE_HEIGHT" @focusin="store.selectNode(node.id)">
+                  <NodeResourceInput :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
+                </foreignObject>
+                <foreignObject v-if="kind(node)?.preview" x="8" :y="previewY(node)" :width="nodeWidth - 16" :height="WORKFLOW_PREVIEW_HEIGHT">
+                  <NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" />
+                </foreignObject>
                 <rect class="node-outline" :width="nodeWidth" :height="nodeHeight(node)" rx="14" />
                 <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ truncate(portLabel(inputPortForNode(node.type)), 13) }}</text>
                 <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-port-out)`" :x="nodeWidth - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ truncate(portLabel(outputPortForNode(node.type)), 13) }}</text>
@@ -497,10 +543,10 @@ onUnmounted(() => {
             <div class="inspector-actions">
               <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
             </div>
-            <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: props.audioName }) }}</p>
+            <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: inputAudioName }) }}</p>
           </template>
           <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>{{ t('workflow.inspectorEmpty') }}</p></div>
-          <dl class="workflow-inspector-meta"><div><dt>{{ t('workflow.workflowVersion') }}</dt><dd>{{ numberLabel(store.document?.workflow_revision) }}</dd></div><div><dt>{{ t('workflow.documentRevision') }}</dt><dd>{{ numberLabel(store.document?.revision) }}</dd></div><div><dt>{{ t('workflow.currentAudio') }}</dt><dd>{{ props.audioName }}</dd></div></dl>
+          <dl class="workflow-inspector-meta"><div><dt>{{ t('workflow.workflowVersion') }}</dt><dd>{{ numberLabel(store.document?.workflow_revision) }}</dd></div><div><dt>{{ t('workflow.documentRevision') }}</dt><dd>{{ numberLabel(store.document?.revision) }}</dd></div><div><dt>{{ t('workflow.inputAudio') }}</dt><dd>{{ inputAudioName }}</dd></div><div><dt>{{ t('workflow.historyAudio') }}</dt><dd>{{ props.audioName }}</dd></div></dl>
         </aside>
       </div>
 
@@ -518,7 +564,7 @@ onUnmounted(() => {
             <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>
             <p v-else-if="node.artifact">{{ t('workflow.snapshotArtifact', { port: node.artifact.port.toUpperCase(), type: node.artifact.media_type, size: sizeLabel(node.artifact.size_bytes) }) }}</p>
             <p v-else>{{ t('workflow.noNodeArtifact') }}</p>
-            <template v-if="node.artifact && node.status === 'completed'">
+            <template v-if="node.artifact && node.status === 'completed' && !registry?.kind(node.node_type)?.preview">
               <p class="workflow-output-state" :class="`is-${outputCheckState(node.node_id)}`">{{ outputCheckState(node.node_id) === 'checking' ? t('workflow.artifactChecking') : outputCheckState(node.node_id) === 'missing' ? t('workflow.artifactMissing') : outputCheckState(node.node_id) === 'failed' ? t('workflow.artifactCheckFailed') : t('workflow.artifactAvailable') }}</p>
               <button v-if="canDownloadOutput(node.node_id)" class="secondary-button compact-button" type="button" @click="download(node.node_id)">{{ t('workflow.download', { filename: node.artifact?.filename || '' }) }}</button>
               <button v-else-if="outputCheckState(node.node_id) === 'failed'" class="secondary-button compact-button" type="button" @click="retryOutputChecks">{{ t('workflow.retryChecks') }}</button>

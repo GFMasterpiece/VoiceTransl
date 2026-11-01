@@ -18,7 +18,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, field_validator
 
 from ..domain import (
     Job,
@@ -137,7 +138,7 @@ def config_editable(state, project_id: str, job: Job) -> bool:
 
 class CreateProjectResponse(BaseModel):
     project: Project
-    job: Job
+    job: Job | None
 
 
 def get_provider_profile(state, profile_id: str) -> ProviderProfile:
@@ -270,6 +271,30 @@ async def delete_provider_profile(profile_id: str, request: Request):
         profile for profile in state.store.load_provider_profiles() if profile.id != profile_id
     ]
     state.store.save_provider_profiles(profiles)
+
+
+class EmptyProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    source_language: str
+    target_language: str
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+@router.post("/projects/empty", status_code=201, response_model=CreateProjectResponse)
+async def create_empty_project(body: EmptyProjectRequest, request: Request):
+    source = _language_form("source_language", body.source_language)
+    target = _language_form("target_language", body.target_language)
+    if source.casefold() == target.casefold():
+        raise _language_error("target_language", "source_language 和 target_language 不能相同")
+    project = Project(
+        id="prj_" + uuid4().hex, name=body.name, source_language=source, target_language=target
+    )
+    deps(request).store.create_project(project)
+    return {"project": project, "job": None}
 
 
 @router.post("/projects", status_code=201, response_model=CreateProjectResponse)
@@ -552,3 +577,25 @@ async def audio_job(pid: str, aid: str, request: Request):
 @router.websocket("/projects/{pid}/audios/{aid}/events")
 async def audio_events(ws: WebSocket, pid: str, aid: str):
     await events(ws, pid, audio_id=aid)
+
+
+@router.get("/projects/{pid}/audios/{aid}/source")
+async def audio_source(pid: str, aid: str, request: Request):
+    state = deps(request)
+    get_project(state, pid)
+    try:
+        audio = state.store.audio(pid, aid)
+        path = state.store.scope(pid, aid).source_path(pid, audio.source.path)
+    except (OSError, ValueError):
+        raise HTTPException(
+            404, detail={"error": {"code": "AUDIO_NOT_FOUND", "message": "音频文件不存在"}}
+        )
+    from ..domain.media import inline_media_type
+
+    return FileResponse(
+        path,
+        media_type=inline_media_type(path),
+        headers={"X-Content-Type-Options": "nosniff"},
+        filename=path.name,
+        content_disposition_type="inline",
+    )

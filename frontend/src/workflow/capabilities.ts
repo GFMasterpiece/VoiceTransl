@@ -46,6 +46,8 @@ export interface CapabilityNode {
   configKind: string
   fields: readonly CapabilityField[]
   positionX: number | null
+  resourceInput?: { resourceType: string; configKey: string } | null
+  preview?: { renderer: string } | null
 }
 export interface CapabilityAsr {
   providers: readonly CapabilityOption[]
@@ -174,7 +176,14 @@ function node(value: unknown): CapabilityNode {
   if (!Array.isArray(fields)) fail('workflow.capConfigFields')
   const parsedFields = fields.map(field)
   if (new Set(parsedFields.map((entry) => entry.key)).size !== parsedFields.length) fail('workflow.capDuplicateFields')
+  const presentation = item.presentation == null ? {} : object(item.presentation, 'workflow.capPresentation')
+  const resource = presentation.resource_input == null ? null : object(presentation.resource_input, 'workflow.capPresentation')
+  const preview = presentation.preview == null ? null : object(presentation.preview, 'workflow.capPresentation')
+  if (resource && (typeof resource.resource_type !== 'string' || !safeIdentifier(resource.config_key) || !parsedFields.some((field) => field.key === resource.config_key && field.type === 'string'))) fail('workflow.capPresentation')
+  if (preview && (typeof preview.renderer !== 'string' || !preview.renderer)) fail('workflow.capPresentation')
   return {
+    resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key) } : null,
+    preview: preview ? { renderer: String(preview.renderer) } : null,
     type: item.type,
     label: item.label,
     addLabel: typeof item.add_label === 'string' && item.add_label.trim() ? item.add_label : item.label,
@@ -202,7 +211,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.2') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.2' && workflow.schema_version !== '1.3') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map(node)
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
@@ -249,7 +258,7 @@ export function readCapabilities(value: unknown): Capabilities {
   }
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
-    schemaVersion: '1.2',
+    schemaVersion: String(workflow.schema_version),
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,
