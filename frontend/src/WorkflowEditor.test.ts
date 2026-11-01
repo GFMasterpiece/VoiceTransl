@@ -3,7 +3,7 @@ import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_PORT_Y, workflowNodeHeight,
   cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition,
   resolveArtifactUrl, useWorkflowStore, validateNodeConfig,
   type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
@@ -473,15 +473,15 @@ describe('workflow validation and helpers', () => {
 
   it('places every new node without overlapping any existing node rectangle', () => {
     const firstPre = nextNodePosition('preprocess', [input, output], testRegistry)
-    expect(firstPre).toEqual({ x: 286, y: 240 })
+    expect(firstPre).toEqual({ x: 286, y: 246 })
     const secondPre = nextNodePosition('preprocess', [input, output, { ...preprocess, position: firstPre }], testRegistry)
-    expect(secondPre).toEqual({ x: 286, y: 360 })
-    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 360 })
+    expect(secondPre).toEqual({ x: 286, y: 372 })
+    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 372 })
     expect(nextNodePosition('audio_output', [{ ...input, position: { x: 80, y: 120 } }], testRegistry)).toEqual({ x: 500, y: 120 })
     const all = [input, output, { ...preprocess, position: firstPre }, { ...preprocess, id: 'preprocess-2', position: secondPre }]
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       const overlapX = Math.min(all[i].position.x + WORKFLOW_NODE_WIDTH, all[j].position.x + WORKFLOW_NODE_WIDTH) - Math.max(all[i].position.x, all[j].position.x)
-      const overlapY = Math.min(all[i].position.y + WORKFLOW_NODE_HEIGHT, all[j].position.y + WORKFLOW_NODE_HEIGHT) - Math.max(all[i].position.y, all[j].position.y)
+      const overlapY = Math.min(all[i].position.y + workflowNodeHeight(all[i].type, testRegistry), all[j].position.y + workflowNodeHeight(all[j].type, testRegistry)) - Math.max(all[i].position.y, all[j].position.y)
       expect(overlapX <= 0 || overlapY <= 0).toBe(true)
     }
   })
@@ -688,6 +688,34 @@ describe('workflow editor interactions', () => {
     expect(root!.querySelector('.node-accent')).toBeNull()
   })
 
+  it('previews every catalog field and keeps fixed socket endpoints as nodes grow', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    store.capabilities!.ports.find((entry) => entry.id === 'audio')!.label = 'Friendly audio extension port with a long name'
+    const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
+    kind.fields = [...kind.fields,
+      { ...kind.fields[0]!, key: 'enabled', label: 'Enabled extension', type: 'boolean', default: true, options: [] },
+      { ...kind.fields[0]!, key: 'mode', label: 'Mode extension', type: 'select', default: 'custom', options: [{ value: 'custom', label: 'Friendly mode' }] },
+      { ...kind.fields[0]!, key: 'details', label: 'Details extension', type: 'json', default: { nested: true }, options: [] },
+    ]
+    await settle()
+    const outputNode = node('audio_output')!
+    expect(outputNode.querySelectorAll('.node-config-row')).toHaveLength(4)
+    const values = [...outputNode.querySelectorAll('.node-config-value title')].map((entry) => entry.textContent)
+    expect(values).toEqual(['audio-copy', '是', 'Friendly mode', '{"nested":true}'])
+    const height = workflowNodeHeight('audio_output', store.registry!)
+    expect(height).toBeGreaterThan(WORKFLOW_NODE_HEIGHT)
+    expect(outputNode.querySelector('.node-card')?.getAttribute('height')).toBe(String(height))
+    expect(outputNode.querySelector('.node-port-in')?.getAttribute('cy')).toBe(String(WORKFLOW_NODE_PORT_Y))
+    expect(outputNode.querySelector('.node-port-label-in title')?.textContent).toBe('Friendly audio extension port with a long name')
+    expect(outputNode.querySelector('.node-port-label-in')?.getAttribute('clip-path')).toContain('port-in')
+    expect(root!.querySelector('.workflow-edge')?.getAttribute('d')).toContain(`420 ${120 + WORKFLOW_NODE_PORT_Y}`)
+    const position = nextNodePosition('audio_output', store.draft.nodes, store.registry!)
+    expect(position.y).toBeGreaterThanOrEqual(120 + height)
+    expect(store.draft.nodes.find((entry) => entry.type === 'audio_output')?.position).toEqual({ x: 420, y: 120 })
+  })
+
   it('renders the inspector as a compact node property rail', async () => {
     setup()
     await settle()
@@ -853,12 +881,15 @@ describe('workflow editor interactions', () => {
     button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const transforms = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node.is-audio_output'))
       .map((item) => item.getAttribute('transform'))
-    expect(transforms).toEqual(['translate(420 120)', 'translate(420 240)', 'translate(420 360)'])
+    expect(transforms).toEqual(['translate(420 120)', 'translate(420 246)', 'translate(420 372)'])
   })
 
   it('fits all nodes inside a narrow canvas using both dimensions', async () => {
     setup()
     await settle()
+    const store = useWorkflowStore()
+    const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
+    kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => ({ ...kind.fields[0]!, key: `extension_${index}` }))]
     button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
@@ -866,11 +897,10 @@ describe('workflow editor interactions', () => {
       toJSON: () => ({}),
     })
     button('适配')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    const store = useWorkflowStore()
     const minX = Math.min(...store.draft.nodes.map((item) => item.position.x))
     const minY = Math.min(...store.draft.nodes.map((item) => item.position.y))
     const maxX = Math.max(...store.draft.nodes.map((item) => item.position.x + WORKFLOW_NODE_WIDTH))
-    const maxY = Math.max(...store.draft.nodes.map((item) => item.position.y + WORKFLOW_NODE_HEIGHT))
+    const maxY = Math.max(...store.draft.nodes.map((item) => item.position.y + workflowNodeHeight(item.type, store.registry!)))
     const left = minX * store.zoom + store.pan.x
     const right = maxX * store.zoom + store.pan.x
     const top = minY * store.zoom + store.pan.y

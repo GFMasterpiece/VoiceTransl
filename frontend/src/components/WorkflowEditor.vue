@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { t, locale, message, messageRef, hasMessage } from '../i18n'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, useId } from 'vue'
 import {
   workflowErrorLabel, workflowIssueLabel,
-  WORKFLOW_NODE_HEIGHT,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_FIELD_HEIGHT, workflowNodeHeight,
   WORKFLOW_NODE_WIDTH,
   executionSignature,
   inputPortForNode as registeredInputPortForNode,
@@ -16,6 +16,7 @@ import {
   type WorkflowNode,
 } from '../stores/workflow'
 
+const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string; audioName: string }>()
 const store = useWorkflowStore()
 const canvas = ref<HTMLDivElement | null>(null)
@@ -58,13 +59,15 @@ const canValidateAndSave = computed(() => store.dirty && !store.saving && !store
 const canRun = computed(() => !store.dirty && !store.saving && !!store.document && !store.activeRun && !store.actionLoading)
 
 const nodeWidth = WORKFLOW_NODE_WIDTH
-const nodeHeight = WORKFLOW_NODE_HEIGHT
+function nodeHeight(node: WorkflowNode) { return registry.value ? workflowNodeHeight(node.type, registry.value) : WORKFLOW_NODE_HEIGHT }
+const portY = WORKFLOW_NODE_PORT_Y
 const registry = computed(() => store.registry)
 const nodeKinds = computed(() => registry.value?.kinds || [])
 const connectPointer = ref<{ x: number; y: number } | null>(null)
 const connectPointerId = ref<number | null>(null)
 function outputPortForNode(type: string) { return registry.value ? registeredOutputPortForNode(type, registry.value) : null }
 function inputPortForNode(type: string) { return registry.value ? registeredInputPortForNode(type, registry.value) : null }
+function portLabel(id: string | null) { return id ? registry.value?.port(id)?.label || id : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
 function validateNodeConfig(node: Pick<WorkflowNode, 'id' | 'type' | 'config'>) { return registry.value ? registeredValidateNodeConfig(node, registry.value) : [{ code: 'CAPABILITIES_UNAVAILABLE', ...issueText('workflow.capUnavailable') }] }
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
@@ -87,9 +90,9 @@ function edgePath(edge: { source: string; target: string }) {
   const target = store.draft.nodes.find((node) => node.id === edge.target)
   if (!source || !target) return ''
   const sx = source.position.x + nodeWidth
-  const sy = source.position.y + nodeHeight / 2
+  const sy = source.position.y + portY
   const tx = target.position.x
-  const ty = target.position.y + nodeHeight / 2
+  const ty = target.position.y + portY
   return connectionPath(sx, sy, tx, ty)
 }
 
@@ -104,7 +107,7 @@ const previewPath = computed(() => {
   if (!source) return null
   return connectionPath(
     source.position.x + nodeWidth,
-    source.position.y + nodeHeight / 2,
+    source.position.y + portY,
     connectPointer.value.x,
     connectPointer.value.y,
   )
@@ -220,7 +223,7 @@ function fitCanvas() {
   const minX = Math.min(...nodes.map((node) => node.position.x))
   const minY = Math.min(...nodes.map((node) => node.position.y))
   const maxX = Math.max(...nodes.map((node) => node.position.x + nodeWidth))
-  const maxY = Math.max(...nodes.map((node) => node.position.y + nodeHeight))
+  const maxY = Math.max(...nodes.map((node) => node.position.y + nodeHeight(node)))
   const width = Math.max(1, maxX - minX)
   const height = Math.max(1, maxY - minY)
   const bounds = canvas.value?.getBoundingClientRect()
@@ -402,13 +405,23 @@ function configFieldLabel(field: { type: string; options: readonly { value: stri
   return String(value)
 }
 
-function nodeMeta(node: WorkflowNode) {
-  const definition = registry.value?.kind(node.type)
-  if (definition?.isSource) return t('workflow.boundAudio')
-  return (definition?.fields || []).map((field) => {
+function truncate(text: string, budget: number) {
+  let size = 0
+  let result = ''
+  for (const char of text) {
+    size += /[^\u0000-\u00ff]/.test(char) ? 2 : 1
+    if (size > budget) return `${result}…`
+    result += char
+  }
+  return result
+}
+function nodeRows(node: WorkflowNode) {
+  return (registry.value?.kind(node.type)?.fields || []).map((field) => {
     const value = node.config[field.key] === undefined ? field.default : node.config[field.key]
-    return value === null || value === undefined || value === '' ? '' : `${field.label}: ${configFieldLabel(field, value)}`
-  }).filter(Boolean).slice(0, 2).join(' · ') || nodeLabel(node)
+    const text = value === null || value === undefined || value === '' ? '—'
+      : field.type === 'json' ? JSON.stringify(value) : configFieldLabel(field, value)
+    return { key: field.key, label: field.label, value: text }
+  })
 }
 
 function runStatusLabel(status?: string) {
@@ -493,21 +506,28 @@ onUnmounted(() => {
           <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
           <div class="workflow-stage" :style="{ transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})` }">
             <svg ref="stage" class="workflow-svg" :viewBox="'0 0 900 480'" width="900" height="480" role="group" :aria-label="t('workflow.canvasAria')" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp">
-              <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern></defs>
+              <defs><pattern id="workflow-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="oklch(91% .016 82)" stroke-width="1" /></pattern><clipPath :id="`${clipId}-title`"><rect x="22" y="0" width="139" height="30" /></clipPath><clipPath :id="`${clipId}-label`"><rect x="8" y="0" width="64" height="22" /></clipPath><clipPath :id="`${clipId}-value`"><rect x="80" y="0" width="84" height="22" /></clipPath><clipPath :id="`${clipId}-port-in`"><rect x="10" y="32" width="80" height="26" /></clipPath><clipPath :id="`${clipId}-port-out`"><rect x="98" y="32" width="80" height="26" /></clipPath></defs>
               <rect width="900" height="480" fill="url(#workflow-grid)" />
               <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
               <path v-for="edge in store.draft.edges" :key="`${edge.id}-line`" class="workflow-edge" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :d="edgePath(edge)" aria-hidden="true" />
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
               <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="button" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" :aria-pressed="store.selectedNodeId === node.id ? 'true' : 'false'" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="openNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
-                <rect class="node-card" :width="nodeWidth" :height="nodeHeight" rx="14" />
+                <rect class="node-card" :width="nodeWidth" :height="nodeHeight(node)" rx="14" />
                 <path class="node-header" d="M 14 0 H 174 Q 188 0 188 14 V 30 H 0 V 14 Q 0 0 14 0 Z" />
-                <text class="node-name" x="14" y="20">{{ nodeLabel(node) }}</text>
-                <text class="node-meta" x="20" y="76">{{ nodeMeta(node) }}</text>
-                <rect class="node-outline" :width="nodeWidth" :height="nodeHeight" rx="14" />
-                <rect :width="nodeWidth" :height="nodeHeight" fill="transparent" />
-                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="nodeHeight / 2" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" x="10" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ inputPortForNode(node.type) }}</text>
-                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="nodeHeight / 2" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :x="nodeWidth - 10" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ outputPortForNode(node.type) }}</text>
-                <text v-if="nodeIssue(node)" class="node-error-mark" x="176" y="24" aria-hidden="true">!</text>
+                <circle class="node-type-dot" cx="12" cy="15" r="3" />
+                <text class="node-name" :clip-path="`url(#${clipId}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ truncate(nodeLabel(node), 23) }}</text>
+                <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
+                <g v-for="(row, index) in nodeRows(node)" :key="row.key" class="node-config-row" :transform="`translate(8 ${WORKFLOW_NODE_FIELDS_Y + index * WORKFLOW_NODE_FIELD_HEIGHT})`">
+                  <title>{{ row.label }}: {{ row.value }}</title>
+                  <rect :width="nodeWidth - 16" height="22" rx="11" />
+                  <text class="node-config-label" :clip-path="`url(#${clipId}-label)`" x="8" y="15"><title>{{ row.label }}</title>{{ truncate(row.label, 12) }}</text>
+                  <text class="node-config-value" :clip-path="`url(#${clipId}-value)`" :x="nodeWidth - 24" y="15"><title>{{ row.value }}</title>{{ truncate(row.value, 14) }}</text>
+                </g>
+                <text v-if="!nodeRows(node).length" class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? props.audioName : nodeLabel(node) }}</title>{{ truncate(registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node), 28) }}</text>
+                <rect class="node-outline" :width="nodeWidth" :height="nodeHeight(node)" rx="14" />
+                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ truncate(portLabel(inputPortForNode(node.type)), 13) }}</text>
+                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="!controlsLocked && startConnection(node, $event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-port-out)`" :x="nodeWidth - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ truncate(portLabel(outputPortForNode(node.type)), 13) }}</text>
+                <text v-if="nodeIssue(node)" class="node-error-mark" x="161" y="20" aria-hidden="true">!</text>
               </g>
             </svg>
           </div>

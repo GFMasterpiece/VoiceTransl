@@ -14,6 +14,13 @@ export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'faile
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted'
 export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_HEIGHT = 92
+export const WORKFLOW_NODE_PORT_Y = 45
+export const WORKFLOW_NODE_FIELDS_Y = 62
+export const WORKFLOW_NODE_FIELD_HEIGHT = 26
+
+export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): number {
+  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + (registry.kind(type)?.fields.length || 0) * WORKFLOW_NODE_FIELD_HEIGHT + 10)
+}
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNode {
   id: string
@@ -288,14 +295,17 @@ export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry
   const sameType = nodes.filter((node) => node.type === type)
   const definition = registry.kind(type)
   const columnX = sameType[0]?.position.x ?? definition?.positionX ?? 500
+  const height = workflowNodeHeight(type, registry)
   let candidateY = sameType.length
-    ? Math.max(...sameType.map((node) => node.position.y)) + WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
+    ? Math.max(...sameType.map((node) => node.position.y + workflowNodeHeight(node.type, registry))) + WORKFLOW_NODE_ROW_GAP
     : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176
-  const overlaps = (y: number) => nodes.some((node) => (
-    Math.abs(node.position.x - columnX) < WORKFLOW_NODE_WIDTH
-    && Math.abs(node.position.y - y) < WORKFLOW_NODE_HEIGHT
-  ))
-  while (overlaps(candidateY)) candidateY += WORKFLOW_NODE_HEIGHT + WORKFLOW_NODE_ROW_GAP
+  while (true) {
+    const collisions = nodes.filter((node) => Math.abs(node.position.x - columnX) < WORKFLOW_NODE_WIDTH
+      && candidateY < node.position.y + workflowNodeHeight(node.type, registry) + WORKFLOW_NODE_ROW_GAP
+      && candidateY + height + WORKFLOW_NODE_ROW_GAP > node.position.y)
+    if (!collisions.length) break
+    candidateY = Math.max(...collisions.map((node) => node.position.y + workflowNodeHeight(node.type, registry))) + WORKFLOW_NODE_ROW_GAP
+  }
   return { x: columnX, y: candidateY }
 }
 
