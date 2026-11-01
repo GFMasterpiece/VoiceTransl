@@ -1,28 +1,30 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useProjectsStore, type Audio, type Project } from './stores/projects'
 import { useProjectDetailStore } from './stores/projectDetail'
 import { useWorkflowStore } from './stores/workflow'
 import WorkflowEditor from './components/WorkflowEditor.vue'
-import { locale, message, setLocale, t } from './i18n'
+import CanvasDialog from './components/CanvasDialog.vue'
+import { locale, message, messageRef, setLocale, t } from './i18n'
 
-type View = 'list' | 'create' | 'detail'
+type View = 'list' | 'detail'
 
 const store = useProjectsStore()
 const detail = useProjectDetailStore()
 const workflowStore = useWorkflowStore()
 const view = ref<View>('list')
 const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
+const createOpen = ref(false)
+const createPreparing = ref(false)
+const createError = messageRef()
 const projectName = ref('')
-const formBusy = computed(() => store.creating)
+const formBusy = computed(() => createPreparing.value || store.creating)
 
 const pageTitle = computed(() => {
-  if (view.value === 'create') return t('app.title.create')
   if (view.value === 'detail') return detail.project?.name || t('app.title.detail')
   return t('app.title.list')
 })
 const pageSubtitle = computed(() => {
-  if (view.value === 'create') return t('app.subtitle.create')
   if (view.value === 'detail') return t('app.subtitle.detail')
   return t('app.subtitle.list')
 })
@@ -55,30 +57,57 @@ function formatSize(size: number) {
 function audioCount(count: number) { return t(`app.projects.audio${count === 1 ? 'One' : 'Other'}`, { count: formatNumber(count) }) }
 function changeLocale(event: Event) { setLocale((event.target as HTMLSelectElement).value) }
 async function submitProject() {
-  if (formBusy.value) return
-  if (!projectName.value.trim()) { store.setError(message('app.create.chooseName')); return }
+  if (formBusy.value || !createOpen.value) return
+  if (!projectName.value.trim()) { createError.set(message('app.create.chooseName')); return }
+  if (view.value === 'detail' && workflowStore.loading) { createError.set(message('workflow.loading')); return }
+  const name = projectName.value
+  createError.set('')
+  createPreparing.value = true
+  if (view.value === 'detail' && workflowEditor.value) {
+    // Release this dialog before the editor can show its discard confirmation.
+    const needsConfirmation = workflowStore.dirty && !audioContextLocked.value
+    if (needsConfirmation) { createOpen.value = false; await nextTick() }
+    const result = workflowEditor.value?.requestClose(() => { void performCreate(name) })
+    if (result === 'blocked') {
+      createPreparing.value = false
+      createOpen.value = true
+      createError.set(workflowStore.error || message('app.errors.create'))
+    } else if (result === 'pending') createPreparing.value = false
+    return
+  }
+  await performCreate(name)
+}
+
+async function performCreate(name: string) {
+  createPreparing.value = true
+  // A confirmed editor dialog must finish restoring focus and inert states first.
+  await nextTick()
+  createOpen.value = true
   try {
-    const project = await store.createEmptyProject(projectName.value)
+    const project = await store.createEmptyProject(name)
+    createOpen.value = false
+    await nextTick()
+    createPreparing.value = false
     await openProject(project.id)
-  } catch {
-    // The store exposes the creation error without losing the name.
+  } catch (reason) {
+    createError.set(reason instanceof Error ? reason : message('app.errors.create'))
+  } finally {
+    createPreparing.value = false
   }
 }
 function cancelCreate() {
   if (!guardCreateNavigation()) return
-  openListView()
-}
-
-function openCreateView() {
-  projectName.value = ''
+  createOpen.value = false
+  createError.set('')
   store.error = ''
-  view.value = 'create'
 }
 
 function showCreate() {
-  if (!guardCreateNavigation()) return
-  if (view.value === 'detail') leaveWorkflow(openCreateView)
-  else openCreateView()
+  if (!guardCreateNavigation() || createOpen.value || workflowEditor.value?.hasOpenDialog()) return
+  projectName.value = ''
+  createError.set('')
+  store.error = ''
+  createOpen.value = true
 }
 
 function leaveWorkflow(action: () => void) {
@@ -104,6 +133,7 @@ async function loadProjectWorkspace(id: string, audioId?: string) {
 }
 
 async function openProject(id: string, audioId?: string) {
+  if (createOpen.value || !guardCreateNavigation()) return
   if (view.value === 'detail' && detail.project?.id === id) {
     if (audioId) focusAudio(audioId)
     return
@@ -143,7 +173,7 @@ function openListView() {
 }
 
 function showList() {
-  if (!guardCreateNavigation()) return
+  if (createOpen.value || !guardCreateNavigation()) return
   if (view.value === 'detail') leaveWorkflow(openListView)
   else openListView()
 }
@@ -163,6 +193,7 @@ async function deleteProjectNow(id: string, name: string) {
 }
 
 async function deleteProject(id: string, name: string) {
+  if (createOpen.value || !guardCreateNavigation()) return
   if (view.value === 'detail' && detail.project?.id === id) {
     leaveWorkflow(() => { void deleteProjectNow(id, name) })
     return
@@ -192,9 +223,9 @@ onUnmounted(() => {
     </header>
 
     <main class="main-content">
-      <section v-if="view !== 'detail'" class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div v-if="view !== 'create'" class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button></div></section>
+      <section v-if="view !== 'detail'" class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button></div></section>
 
-      <div v-if="currentError" class="alert" :class="{ 'workspace-alert': view === 'detail' }" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" :aria-label="t('app.actions.close')" @click="view === 'detail' ? (detail.error = '', workflowStore.error = '') : (store.error = '')">×</button></div>
+      <div v-if="currentError && !createOpen" class="alert" :class="{ 'workspace-alert': view === 'detail' }" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" :aria-label="t('app.actions.close')" @click="view === 'detail' ? (detail.error = '', workflowStore.error = '') : (store.error = '')">×</button></div>
 
       <section v-if="view === 'list'" class="list-layout">
         <div class="list-toolbar"><div><span class="section-kicker">{{ t('app.projects.kicker') }}</span><h2>{{ t('app.projects.title') }}</h2></div><button class="text-button" type="button" :disabled="store.loading" @click="store.fetchProjects()"><span :class="{ spinning: store.loading }" aria-hidden="true">↻</span>{{ t('app.actions.refresh') }}</button></div>
@@ -204,14 +235,6 @@ onUnmounted(() => {
         <nav v-if="store.total > store.limit || store.offset > 0" class="pagination-bar" :aria-label="t('app.projects.pagination')"><button class="secondary-button compact-button" type="button" :disabled="store.loading || !store.hasPrevious" @click="store.previousPage()">{{ t('app.actions.previous') }}</button><span>{{ t('app.projects.page', { page: formatNumber(Math.floor(store.offset / store.limit) + 1), pages: formatNumber(store.pageCount), total: formatNumber(store.total) }) }}</span><button class="secondary-button compact-button" type="button" :disabled="store.loading || !store.hasNext" @click="store.nextPage()">{{ t('app.actions.next') }}</button></nav>
       </section>
 
-      <section v-else-if="view === 'create'" class="create-layout">
-        <div class="create-copy"><span class="section-kicker">{{ t('app.create.kicker') }}</span><h2>{{ t('app.create.title') }}</h2><p>{{ t('app.create.description') }}</p></div>
-        <form class="create-form" :aria-busy="formBusy" @submit.prevent="submitProject">
-          <label class="field-label" for="project-name">{{ t('app.create.name') }} <span>{{ t('app.create.required') }}</span></label>
-          <input id="project-name" v-model="projectName" class="text-input" type="text" maxlength="200" :disabled="formBusy" :placeholder="t('app.create.emptyNamePlaceholder')" />
-          <div class="form-actions"><button class="secondary-button" type="button" :disabled="formBusy" @click="cancelCreate">{{ t('app.actions.back') }}</button><button class="primary-button" type="submit" :disabled="formBusy"><span v-if="formBusy" class="button-loader" aria-hidden="true"></span>{{ t(store.creating ? 'app.create.creating' : 'app.create.openCanvas') }}</button></div>
-        </form>
-      </section>
       <section v-else class="workspace" :aria-label="t('app.workspace.canvas')">
         <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded">
           <template #workspace-header>
@@ -240,5 +263,13 @@ onUnmounted(() => {
         </div>
       </section>
     </main>
+    <CanvasDialog class="project-create-modal" :open="createOpen" :title="t('app.title.create')" :close-disabled="formBusy" @close="cancelCreate">
+      <form class="create-form" :aria-busy="formBusy" @submit.prevent="submitProject">
+        <label class="field-label" for="project-name">{{ t('app.create.name') }} <span>{{ t('app.create.required') }}</span></label>
+        <input id="project-name" v-model="projectName" class="text-input" type="text" maxlength="200" autofocus :disabled="formBusy" :placeholder="t('app.create.emptyNamePlaceholder')" />
+        <p v-if="createError.text.value" class="create-error" role="alert">{{ createError.text.value }}</p>
+        <div class="form-actions"><button class="secondary-button" type="button" :disabled="formBusy" @click="cancelCreate">{{ t('app.actions.cancel') }}</button><button class="primary-button" type="submit" :disabled="formBusy"><span v-if="formBusy" class="button-loader" aria-hidden="true"></span>{{ t(store.creating ? 'app.create.creating' : 'app.create.submit') }}</button></div>
+      </form>
+    </CanvasDialog>
   </div>
 </template>

@@ -18,14 +18,14 @@ afterAll(() => {
 let app: App | undefined
 let fixture: HTMLDivElement | undefined
 async function settle() { await nextTick(); await nextTick(); await nextTick() }
-function mount(options: { open?: boolean; autofocus?: boolean } = {}) {
+function mount(options: { open?: boolean; autofocus?: boolean; closeDisabled?: boolean } = {}) {
   fixture = document.createElement('div')
   const trigger = document.createElement('button'); trigger.textContent = 'Open panel'
   const existingInert = document.createElement('aside'); existingInert.inert = true
   const host = document.createElement('div')
   fixture.append(trigger, existingInert, host); document.body.append(fixture)
   trigger.focus()
-  const props = reactive<{ open?: boolean }>({ open: options.open })
+  const props = reactive<{ open?: boolean; closeDisabled?: boolean }>({ open: options.open, closeDisabled: options.closeDisabled })
   const close = vi.fn(() => { props.open = false })
   app = createApp({
     render: () => h('main', [
@@ -114,6 +114,24 @@ describe('canvas dialog interaction lifecycle', () => {
     expect(ui.close).toHaveBeenCalledTimes(1)
     expect(ui.dialog()).toBeNull()
     expect(document.activeElement).toBe(ui.trigger)
+  })
+
+  it('keeps a busy dialog open for close-button, Escape and backdrop actions until closing is enabled', async () => {
+    const ui = mount({ closeDisabled: true }); await settle()
+    expect(ui.first().disabled).toBe(true)
+    ui.first().click()
+    expect(key('Escape').defaultPrevented).toBe(true)
+    ui.backdrop().dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await settle()
+    expect(ui.close).not.toHaveBeenCalled()
+    expect(ui.dialog()).not.toBeNull()
+    expect(ui.background.inert).toBe(true)
+    expect(ui.dialog().contains(document.activeElement)).toBe(true)
+    ui.props.closeDisabled = false; await settle()
+    expect(ui.first().disabled).toBe(false)
+    key('Escape'); await settle()
+    expect(ui.close).toHaveBeenCalledTimes(1)
+    expect(ui.background.inert).toBe(false)
   })
 
   it('removes document handlers and restores background state when unmounted while open', async () => {

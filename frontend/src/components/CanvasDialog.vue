@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { t } from '../i18n'
-const props = withDefaults(defineProps<{ open?: boolean; title: string }>(), { open: true })
+const props = withDefaults(defineProps<{ open?: boolean; title: string; closeDisabled?: boolean }>(), { open: true, closeDisabled: false })
 const emit = defineEmits<{ close: [] }>()
 const titleId = useId()
 const backdrop = ref<HTMLElement | null>(null)
@@ -12,10 +12,11 @@ const inertStates = new Map<HTMLElement, boolean>()
 function focusable() {
   return [...(dialog.value?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])].filter((item) => !item.hidden && !item.closest('[inert]'))
 }
-function focusFirst() { (dialog.value?.querySelector<HTMLElement>('[autofocus]') || focusable()[0] || dialog.value)?.focus() }
+function focusFirst() { (dialog.value?.querySelector<HTMLElement>('[autofocus]:not([disabled])') || focusable()[0] || dialog.value)?.focus() }
+function requestClose() { if (!props.closeDisabled) emit('close') }
 function keydown(event: KeyboardEvent) {
   if (!props.open || !dialog.value) return
-  if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); emit('close'); return }
+  if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); requestClose(); return }
   if (event.key !== 'Tab') return
   const items = focusable()
   const active = document.activeElement
@@ -54,9 +55,9 @@ watch(() => props.open, async (open) => {
 onUnmounted(() => { alive = false; release() })
 </script>
 <template>
-  <div v-if="open" ref="backdrop" class="canvas-dialog-backdrop" @pointerdown.self="emit('close')">
+  <div v-if="open" ref="backdrop" class="canvas-dialog-backdrop" @pointerdown.self="requestClose">
     <section ref="dialog" class="canvas-dialog" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1">
-      <header class="canvas-dialog-header"><h2 :id="titleId">{{ title }}</h2><button class="canvas-dialog-close" type="button" :aria-label="t('workflow.closePanel')" @click="emit('close')">×</button></header>
+      <header class="canvas-dialog-header"><h2 :id="titleId">{{ title }}</h2><button class="canvas-dialog-close" type="button" :aria-label="t('workflow.closePanel')" :disabled="closeDisabled" @click="requestClose">×</button></header>
       <div class="canvas-dialog-body"><slot /></div>
     </section>
   </div>

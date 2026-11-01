@@ -577,7 +577,7 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose })
+defineExpose({ requestClose, hasOpenDialog: () => !!activePanel.value || discardPrompt.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)

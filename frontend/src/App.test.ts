@@ -13,9 +13,9 @@ let root: HTMLDivElement | undefined
 const project = { id: 'created-project', name: 'Voice', created_at: '2026-01-01', updated_at: '2026-01-01', source: { original_name: 'voice.wav', language: 'ja', size_bytes: 5 } } satisfies Project
 const emptyProject: Project = { ...project, source: null, audios: [], source_language: null, target_language: null }
 const response = (payload: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload }) as Response
-async function settle() { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() }
+async function settle() { for (let phase = 0; phase < 3; phase++) { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() } }
 
-async function mount() {
+async function mount(openCreate = true) {
   const capabilities = { schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [
     { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
     { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
@@ -39,8 +39,10 @@ async function mount() {
   root = document.createElement('div'); document.body.append(root)
   app = createApp(App).use(pinia); app.mount(root)
   await settle()
-  root.querySelector<HTMLButtonElement>('.page-heading button')!.click()
-  await nextTick()
+  if (openCreate) {
+    root.querySelector<HTMLButtonElement>('.page-heading button')!.click()
+    await settle()
+  }
   return { store: useProjectsStore(pinia), detail: useProjectDetailStore(pinia), fetcher, pinia }
 }
 async function fillName(value: string) {
@@ -51,14 +53,38 @@ async function switchInterface(value: 'zh-CN' | 'en') {
   const picker = root!.querySelector<HTMLSelectElement>('.locale-picker')!
   picker.value = value; picker.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
 }
+async function closeCreate() {
+  root!.querySelector<HTMLButtonElement>('.project-create-modal .form-actions .secondary-button')!.click()
+  await settle()
+}
 afterEach(() => {
   app?.unmount(); app = undefined; root?.remove(); root = undefined
   vi.unstubAllGlobals(); vi.restoreAllMocks(); setLocale('zh-CN')
 })
 
 describe('name-only project creation', () => {
+  it('opens over the unchanged project list and restores focus to the trigger after cancellation', async () => {
+    await mount(false)
+    const list = root!.querySelector('.list-layout')
+    const trigger = root!.querySelector<HTMLButtonElement>('.page-heading button')!
+    trigger.focus(); trigger.click(); await settle()
+    expect(root!.querySelector('.list-layout')).toBe(list)
+    expect(document.activeElement).toBe(root!.querySelector('#project-name'))
+    await fillName('Cancelled name')
+    await closeCreate()
+    expect(root!.querySelector('[role="dialog"]')).toBeNull()
+    expect(root!.querySelector('.list-layout')).toBe(list)
+    expect(document.activeElement).toBe(trigger)
+    trigger.click(); await settle()
+    expect(root!.querySelector<HTMLInputElement>('#project-name')!.value).toBe('')
+  })
+
   it('shows only a name field and creates the project through JSON without uploads or an upload-policy request', async () => {
     const { fetcher, detail } = await mount()
+    expect(root!.querySelector('.list-layout')).not.toBeNull()
+    expect(root!.querySelector('.create-layout')).toBeNull()
+    expect(root!.querySelector('.project-create-modal [role="dialog"]')).not.toBeNull()
+    expect(document.activeElement).toBe(root!.querySelector('#project-name'))
     expect(root!.querySelectorAll('form input')).toHaveLength(1)
     expect(root!.querySelector('#source-language')).toBeNull()
     expect(root!.querySelector('#target-language')).toBeNull()
@@ -80,6 +106,7 @@ describe('name-only project creation', () => {
     expect(detail.project?.source_language).toBeNull()
     expect(detail.project?.target_language).toBeNull()
     expect(root!.querySelector('.is-canvas-workspace .node-workflow')).not.toBeNull()
+    expect(root!.querySelector('.project-create-modal')).toBeNull()
     expect(root!.querySelector('.workflow-audio-picker')).toBeNull()
     expect(root!.querySelector('button[aria-label="返回上传队列"]')).toBeNull()
   })
@@ -128,6 +155,14 @@ describe('name-only project creation', () => {
     expect(root!.querySelector('button[type="submit"]')?.textContent).toBe('Creating project…')
     expect(JSON.parse(requests[0]!.body as string)).toEqual({ name: 'Frozen name' })
     expect(requests).toHaveLength(1)
+    root!.querySelector<HTMLButtonElement>('.project-create-modal .canvas-dialog-close')!.click()
+    root!.querySelector('.project-create-modal')!.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await closeCreate()
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    expect(root!.querySelector('.project-create-modal')).not.toBeNull()
+    expect(root!.querySelector('.list-layout')).not.toBeNull()
+    expect(requests).toHaveLength(1)
     release(response({ project: emptyProject, job: null }, 201)); await settle(); await settle()
     expect(detail.project?.id).toBe(project.id)
     expect(root!.querySelector('.node-workflow')).not.toBeNull()
@@ -149,13 +184,14 @@ describe('name-only project creation', () => {
     expect(root!.querySelector('form')).toBe(form)
     expect(root!.querySelector('[role="alert"]')?.textContent).toContain('Enter a project name.')
     expect(root!.querySelector<HTMLInputElement>('#project-name')!.value).toBe('自定义 Project')
-    expect(root!.querySelector('button[type="submit"]')?.textContent).toBe('Create project and open canvas')
-    expect(root!.querySelector('h1')?.textContent).toBe('New project')
+    expect(root!.querySelector('button[type="submit"]')?.textContent).toBe('Create project')
+    expect(root!.querySelector('h1')?.textContent).toBe('My projects')
+    expect(root!.querySelector('.canvas-dialog-header h2')?.textContent).toBe('New project')
     expect(root!.querySelectorAll('form input')).toHaveLength(1)
   })
 
   it('renders unnamed-language projects without null labels and retains legacy source metadata, counts and pagination', async () => {
-    const { store } = await mount()
+    const { store } = await mount(false)
     vi.spyOn(store, 'fetchProjects').mockResolvedValue(undefined)
     store.projects = [emptyProject, { ...project, source_language: 'xx-CUSTOM' }, { ...emptyProject, id: 'uploaded-empty', audios: [{ id: 'aud_new', source: { ...project.source, original_name: 'new-resource.wav' } }] }]
     store.total = 1200; store.offset = 20
@@ -178,7 +214,7 @@ describe('name-only project creation', () => {
   })
 
   it('waits for the audio list before mounting the editor and automatically loads its initial history context', async () => {
-    const { detail } = await mount()
+    const { detail } = await mount(false)
     const workflow = useWorkflowStore()
     const originalFetch = fetch
     let resolveAudios!: (response: Response) => void
@@ -212,7 +248,7 @@ describe('name-only project creation', () => {
   })
 
   it('retains a compact route back to projects when the project cannot be loaded', async () => {
-    const { detail } = await mount()
+    const { detail } = await mount(false)
     vi.spyOn(detail, 'load').mockImplementation(async () => {
       detail.project = null
       detail.loading = false
@@ -361,11 +397,14 @@ describe('workflow navigation guards', () => {
     picker.value = 'aud_second'; picker.dispatchEvent(new Event('change', { bubbles: true }))
     root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
     root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click()
-    await nextTick()
+    await settle()
+    await fillName('Wait for start')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
     expect(detail.activeAudioId).toBe('aud_primary')
     expect(picker.value).toBe('aud_primary')
     expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
-    expect(root!.querySelector('.create-form')).toBeNull()
+    expect(root!.querySelector('.project-create-modal [role="alert"]')).not.toBeNull()
+    await closeCreate()
     release(response({}, 500))
     await starting; await settle()
     expect(workflow.actionLoading).toBe(false)
@@ -420,11 +459,11 @@ describe('workflow navigation guards', () => {
     expect(Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).some((item) => item.textContent?.trim() === '返回项目工作区')).toBe(false)
   })
 
-  it('keeps unsaved navigation guards on the compact back, create and delete controls', async () => {
+  it('keeps unsaved navigation guards on the compact back and delete controls', async () => {
     const { workflow } = await openDirtyWorkflow()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const discard = vi.spyOn(workflow, 'discardDraft')
-    for (const selector of ['.workspace-header-back', 'button[aria-label="新建项目"]', 'button[aria-label="删除项目"]']) {
+    for (const selector of ['.workspace-header-back', 'button[aria-label="删除项目"]']) {
       root!.querySelector<HTMLButtonElement>(selector)!.click()
       await nextTick()
       expect(root!.querySelector('.canvas-dialog[role="dialog"][aria-modal="true"] .workflow-discard'), selector).not.toBeNull()
@@ -445,18 +484,160 @@ describe('workflow navigation guards', () => {
     expect(root!.querySelector('.topbar')).not.toBeNull()
   })
 
+  it('opens and cancels the creation modal without altering a dirty canvas, input, selection, viewport or history', async () => {
+    const { workflow, detail } = await openDirtyWorkflow()
+    workflow.capabilities = { ...workflow.capabilities!, nodes: workflow.capabilities!.nodes.map((node) => node.isSource ? { ...node, resourceInput: { resourceType: 'audio', configKey: 'audio_id' } } : node) }
+    workflow.pan = { x: 44, y: -32 }; workflow.zoom = .8; workflow.selectedNodeId = 'output'
+    workflow.history = [{ id: 'old-run', workflow_revision: 1, status: 'completed', created_at: '2026-01-01', finished_at: null, error: null }]
+    await settle()
+    const language = root!.querySelector<HTMLInputElement>('[data-resource-language]')!
+    language.value = 'ko'; language.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    const canvas = root!.querySelector('.node-workflow')
+    const draft = workflow.draft
+    const snapshot = JSON.stringify(draft)
+    const history = workflow.history
+    const leave = vi.spyOn(workflow, 'leaveEditor')
+    const stop = vi.spyOn(workflow, 'stop')
+    const discard = vi.spyOn(workflow, 'discardDraft')
+    const stopDetail = vi.spyOn(detail, 'stop')
+    const trigger = root!.querySelector<HTMLButtonElement>('.workspace-header-actions button[aria-label="新建项目"]')!
+    trigger.focus(); trigger.click(); await settle()
+    expect(root!.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(root!.querySelector('.workflow-discard')).toBeNull()
+    await closeCreate()
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    expect(root!.querySelector('[data-resource-language]')).toBe(language)
+    expect(language.value).toBe('ko')
+    expect(workflow.draft).toBe(draft)
+    expect(JSON.stringify(workflow.draft)).toBe(snapshot)
+    expect(workflow.dirty).toBe(true)
+    expect(workflow.pan).toEqual({ x: 44, y: -32 })
+    expect(workflow.zoom).toBe(.8)
+    expect(workflow.selectedNodeId).toBe('output')
+    expect(workflow.history).toBe(history)
+    expect(detail.activeAudioId).toBe('aud_primary')
+    expect(document.activeElement).toBe(trigger)
+    expect(leave).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled(); expect(discard).not.toHaveBeenCalled(); expect(stopDetail).not.toHaveBeenCalled()
+  })
+
+  it('waits for dirty confirmation before creating and returns to the canvas when editing continues', async () => {
+    const { workflow, pinia } = await openDirtyWorkflow()
+    const create = vi.spyOn(useProjectsStore(pinia), 'createEmptyProject').mockResolvedValue({ ...emptyProject, id: 'new-project' })
+    const leave = vi.spyOn(workflow, 'leaveEditor')
+    const discard = vi.spyOn(workflow, 'discardDraft')
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+    await fillName('Pending confirmation')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    expect(create).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+    expect(leave).not.toHaveBeenCalled()
+    expect(root!.querySelector('.project-create-modal')).toBeNull()
+    expect(root!.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(root!.querySelector('.workflow-discard')).not.toBeNull()
+    findButton('继续编辑')!.click(); await settle()
+    expect(root!.querySelector('[role="dialog"]')).toBeNull()
+    expect(workflow.dirty).toBe(true)
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('keeps a single editor dialog when a creation request arrives while a run panel is open', async () => {
+    const { pinia } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    const draft = workflow.draft
+    root!.querySelector<HTMLButtonElement>('[data-open-panel="run"]')!.click(); await settle()
+    app!._instance!.exposed!.showCreate(); await settle()
+    expect(root!.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(root!.querySelector('.project-create-modal')).toBeNull()
+    expect(root!.querySelector('[data-panel="run"]')).not.toBeNull()
+    expect(workflow.draft).toBe(draft)
+  })
+
+  it('keeps the old editor active after a failed creation and switches projects only after a successful response', async () => {
+    const { pinia, detail } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    vi.mocked(workflow.load).mockRestore()
+    await workflow.load(project.id, 'aud_primary'); await settle()
+    workflow.setCleanBaseline(workflow.draft)
+    const canvas = root!.querySelector('.node-workflow')
+    const leave = vi.spyOn(workflow, 'leaveEditor')
+    const stop = vi.spyOn(workflow, 'stop')
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const originalFetch = fetch
+    let release!: (value: Response) => void
+    vi.stubGlobal('fetch', vi.fn((path: RequestInfo | URL, init?: RequestInit) => {
+      if (String(path).endsWith('/projects/empty') && init?.method === 'POST') return new Promise<Response>((resolve) => { release = resolve })
+      return originalFetch(path, init)
+    }))
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+    await fillName('Retry project')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
+    root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.click()
+    await settle()
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    expect(leave).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    release(response({ error: { message: 'Create failed' } }, 503)); await settle()
+    expect(root!.querySelector('.project-create-modal [role="alert"]')?.textContent).toContain('Create failed')
+    expect(root!.querySelector<HTMLInputElement>('#project-name')!.value).toBe('Retry project')
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    expect(leave).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled()
+    await closeCreate()
+    workflow.updateNode('output', { config: { filename_stem: 'still-editable' } })
+    expect(workflow.draft.nodes.find((node) => node.id === 'output')!.config.filename_stem).toBe('still-editable')
+    workflow.setCleanBaseline(workflow.draft)
+    const nextProject = { ...emptyProject, id: 'new-project', name: 'New canvas' }
+    vi.mocked(detail.load).mockImplementation(async (id: string) => { detail.project = id === nextProject.id ? nextProject : project; detail.audios = []; detail.activeAudioId = null; detail.loading = false })
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+    await fillName('New canvas')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    expect(root!.querySelector('.node-workflow')).toBe(canvas)
+    expect(leave).not.toHaveBeenCalled()
+    release(response({ project: nextProject, job: null }, 201)); await settle(); await settle()
+    expect(detail.project?.id).toBe(nextProject.id)
+    expect(root!.querySelector('.project-create-modal')).toBeNull()
+    expect(root!.querySelector('.node-workflow')).not.toBe(canvas)
+    expect(leave).toHaveBeenCalledTimes(1)
+    expect(stop).toHaveBeenCalled()
+  })
+
+  it('hands dirty confirmation back to a single busy creation dialog before sending the request', async () => {
+    const { workflow, pinia } = await openDirtyWorkflow()
+    let reject!: (reason: Error) => void
+    const create = vi.spyOn(useProjectsStore(pinia), 'createEmptyProject').mockImplementation(() => new Promise((_resolve, rejectPromise) => { reject = rejectPromise }))
+    const leave = vi.spyOn(workflow, 'leaveEditor')
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+    await fillName('Confirmed project')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    expect(create).not.toHaveBeenCalled()
+    findButton('放弃修改')!.click(); await settle()
+    expect(create).toHaveBeenCalledWith('Confirmed project')
+    expect(root!.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(root!.querySelector('.project-create-modal')).not.toBeNull()
+    expect(root!.querySelector('.workflow-discard')).toBeNull()
+    expect(root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.disabled).toBe(true)
+    expect(leave).not.toHaveBeenCalled()
+    reject(new Error('Try again')); await settle()
+    expect(root!.querySelector('.project-create-modal [role="alert"]')?.textContent).toContain('Try again')
+    expect(root!.querySelector('.node-workflow')).not.toBeNull()
+    expect(leave).not.toHaveBeenCalled()
+  })
+
   it('blocks compact navigation while saving, validating or running and keeps busy project deletion disabled', async () => {
     const { pinia, detail } = await mountWorkflow()
     const workflow = useWorkflowStore(pinia)
+    const create = vi.spyOn(useProjectsStore(pinia), 'createEmptyProject').mockResolvedValue(emptyProject)
     for (const lock of ['saving', 'validating'] as const) {
       workflow[lock] = true
       await nextTick()
-      for (const selector of ['.workspace-header-back', 'button[aria-label="新建项目"]']) {
-        root!.querySelector<HTMLButtonElement>(selector)!.click()
-        await nextTick()
-        expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
-        expect(root!.querySelector('.create-form')).toBeNull()
-      }
+      root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click(); await nextTick()
+      expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
+      root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+      await fillName('Wait for save')
+      root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+      expect(root!.querySelector('.project-create-modal [role="alert"]')).not.toBeNull()
+      expect(create).not.toHaveBeenCalled()
+      await closeCreate()
       expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
       workflow[lock] = false
     }
@@ -467,17 +648,38 @@ describe('workflow navigation guards', () => {
     picker.value = 'aud_second'; picker.dispatchEvent(new Event('change', { bubbles: true }))
     root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
     root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click()
-    await nextTick()
+    await settle()
+    await fillName('Wait for run')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
     expect(detail.activeAudioId).toBe('aud_primary')
     expect(picker.value).toBe('aud_primary')
     expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
     expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
     expect(root!.textContent).toContain('节点运行尚未结束')
-    expect(root!.querySelectorAll('.alert[role="alert"]')).toHaveLength(1)
+    expect(root!.querySelector('.project-create-modal [role="alert"]')?.textContent).toContain('节点运行尚未结束')
+    expect(create).not.toHaveBeenCalled()
+    await closeCreate()
     workflow.run = null
     detail.audios[1]!.job = { id: 'other-job', status: 'running' }
     await nextTick()
     expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
+  })
+
+  it('keeps creation in one dialog while the current workflow is still loading', async () => {
+    const { pinia } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    const create = vi.spyOn(useProjectsStore(pinia), 'createEmptyProject').mockResolvedValue(emptyProject)
+    workflow.draft.nodes[0]!.position.x += 24
+    workflow.markDirty(); workflow.loading = true
+    await settle()
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click(); await settle()
+    await fillName('Wait for graph')
+    root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle()
+    expect(create).not.toHaveBeenCalled()
+    expect(root!.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(root!.querySelector('.project-create-modal [role="alert"]')).not.toBeNull()
+    expect(root!.querySelector('.workflow-discard')).toBeNull()
+    workflow.loading = false
   })
 
   it('changes audio history context without leaving, discarding, or remounting the project canvas', async () => {
