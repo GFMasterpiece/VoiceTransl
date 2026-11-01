@@ -678,6 +678,16 @@ describe('capability catalog and node registry', () => {
 })
 
 describe('workflow editor interactions', () => {
+  it('renders compact typed nodes with colored headers and side sockets', async () => {
+    setup()
+    await settle()
+
+    expect(root!.querySelectorAll('.node-header')).toHaveLength(2)
+    expect(root!.querySelectorAll('.node-name')).toHaveLength(2)
+    expect(root!.querySelector('.node-port-label-in')).not.toBeNull()
+    expect(root!.querySelector('.node-accent')).toBeNull()
+  })
+
   it('adds an output, edits its filename, validates and saves the expected payload', async () => {
     setup()
     await settle()
