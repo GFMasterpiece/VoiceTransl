@@ -327,19 +327,19 @@ export function nodeLabel(node: WorkflowNode, registry: NodeRegistry): string {
   return registry.label(node.type)
 }
 
-export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry, measurements: Record<string, WorkflowNodeSize> = {}): WorkflowNode['position'] {
+export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry, measurements: Record<string, WorkflowNodeSize> = {}, preferred?: WorkflowNode['position']): WorkflowNode['position'] {
   const sameType = nodes.filter((node) => node.type === type)
   const definition = registry.kind(type)
-  const columnX = sameType[0]?.position.x ?? definition?.positionX ?? 500
+  const columnX = preferred?.x ?? sameType[0]?.position.x ?? definition?.positionX ?? 500
   const minimum = sameType.reduce((size, node) => ({
     width: Math.max(size.width, measurements[node.id]?.width || 0),
     height: Math.max(size.height, measurements[node.id]?.height || 0),
   }), { width: 0, height: 0 })
   const { width, height } = workflowNodeSize({ type }, registry, minimum)
   const nodeSize = (node: WorkflowNode) => workflowNodeSize(node, registry, measurements[node.id])
-  let candidateY = sameType.length
+  let candidateY = preferred?.y ?? (sameType.length
     ? Math.max(...sameType.map((node) => node.position.y + nodeSize(node).height)) + WORKFLOW_NODE_ROW_GAP
-    : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176
+    : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176)
   while (true) {
     const collisions = nodes.filter((node) => columnX < node.position.x + nodeSize(node).width
       && columnX + width > node.position.x
@@ -912,8 +912,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     link.click()
   }
 
-  function addNode(type: NodeType) {
-    if (stopped || loading.value || activeRun.value || !registry.value) return
+  function addNode(type: NodeType, position?: WorkflowNode['position']) {
+    if (stopped || loading.value || saving.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || !registry.value) return
+    if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -925,12 +926,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
       errorState.set(definition.maxInstances === 1 ? message('workflow.maxOne', { p0: type }) : message('workflow.maxMany', { p0: type, p1: definition.maxInstances }))
       return
     }
+    const placed = nextNodePosition(type, nodes, registry.value, nodeMinimums.value, position ? { x: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.x))), y: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.y))) } : undefined)
+    if (!Number.isFinite(placed.x) || !Number.isFinite(placed.y) || Math.abs(placed.x) > 1_000_000 || Math.abs(placed.y) > 1_000_000) { errorState.set(message('workflow.nodePlacementFailed')); return }
     const id = nextNodeId(type, nodes, registry.value)
     const node: WorkflowNode = {
       id,
       type,
       config: registry.value.createDefaultConfig(type),
-      position: nextNodePosition(type, nodes, registry.value, nodeMinimums.value),
+      position: placed,
     }
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]

@@ -130,6 +130,10 @@ describe('empty project canvas entry', () => {
     expect(detail.loading).toBe(true)
     expect(detail.activeAudioId).toBeNull()
     expect(root!.querySelector('.node-workflow')).toBeNull()
+    expect(root!.querySelector('.is-canvas-workspace .workspace-loading-shell .workspace-header-back')).not.toBeNull()
+    expect(root!.querySelector('.workspace-loading-shell .locale-picker')).not.toBeNull()
+    expect(root!.querySelector('.topbar')).toBeNull()
+    expect(root!.querySelector('.page-heading')).toBeNull()
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
     resolveAudios(response({ items: [{ id: 'initial-audio', source: project.source }] }))
     await opening; await settle(); await settle(); await settle()
@@ -138,6 +142,24 @@ describe('empty project canvas entry', () => {
     expect(detail.activeAudioId).toBe('initial-audio')
     expect(workflow.history.map((run) => run.id)).toEqual(['older-run'])
     expect(fetcher.mock.calls.some(([path]) => String(path).includes('/audios/initial-audio/workflow-runs?'))).toBe(true)
+  })
+
+  it('retains a compact route back to projects when the project cannot be loaded', async () => {
+    const { detail } = await mount(true, false)
+    vi.spyOn(detail, 'load').mockImplementation(async () => {
+      detail.project = null
+      detail.loading = false
+      detail.error = '项目详情加载失败'
+      throw new Error('Unavailable project')
+    })
+    await app!._instance!.exposed!.openProject(project.id)
+    await settle()
+    expect(root!.querySelector('.workspace-alert[role="alert"]')?.textContent).toContain('项目详情加载失败')
+    expect(root!.querySelector('.node-workflow')).toBeNull()
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
+    await settle()
+    expect(root!.querySelector('.list-layout')).not.toBeNull()
+    expect(root!.querySelector('.is-canvas-workspace')).toBeNull()
   })
 
   it('keeps the empty-project form and language validation when changing interface language', async () => {
@@ -380,7 +402,7 @@ describe('upload view integration', () => {
     await chooseLanguages()
     root!.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await settle()
-    root!.querySelector<HTMLAnchorElement>('.brand')!.click()
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
     await settle()
     expect(root!.querySelector('button[aria-label="返回上传队列"]')).not.toBeNull()
     root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click()
@@ -537,18 +559,19 @@ describe('workflow navigation guards', () => {
     await nextTick()
     const fixture = { nodes: [{ id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } }, { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }], edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }] }
     workflow.setCleanBaseline(fixture)
-    workflow.updateNode('input', { config: {} })
+    workflow.draft.nodes[0]!.position.x += 24
     workflow.markDirty()
     await nextTick()
     // App navigation tests exercise the page-level guards; the child editor's modal flow is covered separately.
     expect(root!.querySelector('.node-workflow')).not.toBeNull()
+    expect(workflow.dirty).toBe(true)
     return { ...state, workflow }
   }
 
   it('locks history selection during save, validation, upload and active runs without diverging detail context', async () => {
     const { pinia, detail } = await mountWorkflow()
     const workflow = useWorkflowStore(pinia)
-    for (const lock of ['saving', 'validating', 'resourceUploading'] as const) {
+    for (const lock of ['saving', 'validating', 'resourceUploading', 'loading'] as const) {
       workflow[lock] = true
       await settle()
       const select = root!.querySelector<HTMLSelectElement>('.workflow-audio-picker select')!
@@ -559,6 +582,38 @@ describe('workflow navigation guards', () => {
       expect(select.value).toBe('aud_primary')
       workflow[lock] = false
     }
+  })
+
+  it('locks history selection, project deletion and navigation while the start request is pending', async () => {
+    const { pinia, detail } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    vi.mocked(workflow.load).mockRestore()
+    await workflow.load(project.id, 'aud_primary')
+    await settle()
+    const originalFetch = fetch
+    let release!: (value: Response) => void
+    vi.stubGlobal('fetch', vi.fn((request: RequestInfo | URL, init?: RequestInit) => {
+      if (String(request).endsWith('/workflow-runs') && init?.method === 'POST') return new Promise<Response>((resolve) => { release = resolve })
+      return originalFetch(request, init)
+    }))
+    const starting = workflow.startRun().catch(() => null)
+    await settle()
+    expect(workflow.actionLoading).toBe(true)
+    const picker = root!.querySelector<HTMLSelectElement>('.workflow-audio-picker select')!
+    expect(picker.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
+    picker.value = 'aud_second'; picker.dispatchEvent(new Event('change', { bubbles: true }))
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click()
+    await nextTick()
+    expect(detail.activeAudioId).toBe('aud_primary')
+    expect(picker.value).toBe('aud_primary')
+    expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
+    expect(root!.querySelector('.create-form')).toBeNull()
+    release(response({}, 500))
+    await starting; await settle()
+    expect(workflow.actionLoading).toBe(false)
+    expect(picker.disabled).toBe(false)
   })
 
   it('does not expose a legacy pipeline switch and keeps the node canvas as the only workspace', async () => {
@@ -596,6 +651,12 @@ describe('workflow navigation guards', () => {
 
   it('keeps the node workspace reachable and provides project navigation', async () => {
     await mountWorkflow()
+    expect(root!.querySelector('.app-shell.is-canvas-workspace')).not.toBeNull()
+    expect(root!.querySelector('.topbar')).toBeNull()
+    expect(root!.querySelector('.page-heading')).toBeNull()
+    expect(root!.querySelector('.workspace-title')).toBeNull()
+    expect(root!.querySelector('.workflow-workspace-header .workspace-project-title')?.textContent).toBe('Voice')
+    expect(root!.querySelectorAll('.locale-picker')).toHaveLength(1)
     expect(root!.querySelector('.workspace')).not.toBeNull()
     expect(root!.querySelector('.back-button')).not.toBeNull()
     expect(root!.querySelector('button[aria-label="新建项目"]')).not.toBeNull()
@@ -603,9 +664,71 @@ describe('workflow navigation guards', () => {
     expect(Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).some((item) => item.textContent?.trim() === '返回项目工作区')).toBe(false)
   })
 
+  it('keeps unsaved navigation guards on the compact back, create and delete controls', async () => {
+    const { workflow } = await openDirtyWorkflow()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const discard = vi.spyOn(workflow, 'discardDraft')
+    for (const selector of ['.workspace-header-back', 'button[aria-label="新建项目"]', 'button[aria-label="删除项目"]']) {
+      root!.querySelector<HTMLButtonElement>(selector)!.click()
+      await nextTick()
+      expect(root!.querySelector('.canvas-dialog[role="dialog"][aria-modal="true"] .workflow-discard'), selector).not.toBeNull()
+      expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
+      expect(workflow.dirty).toBe(true)
+      findButton('继续编辑')!.click()
+      await nextTick()
+    }
+    expect(confirm).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
+    await nextTick()
+    findButton('放弃修改')!.click()
+    await settle()
+    expect(discard).toHaveBeenCalledTimes(1)
+    expect(root!.querySelector('.is-canvas-workspace')).toBeNull()
+    expect(root!.querySelector('.list-layout')).not.toBeNull()
+    expect(root!.querySelector('.topbar')).not.toBeNull()
+  })
+
+  it('blocks compact navigation while saving, validating or running and keeps busy project deletion disabled', async () => {
+    const { pinia, detail } = await mountWorkflow()
+    const workflow = useWorkflowStore(pinia)
+    for (const lock of ['saving', 'validating'] as const) {
+      workflow[lock] = true
+      await nextTick()
+      for (const selector of ['.workspace-header-back', 'button[aria-label="新建项目"]']) {
+        root!.querySelector<HTMLButtonElement>(selector)!.click()
+        await nextTick()
+        expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
+        expect(root!.querySelector('.create-form')).toBeNull()
+      }
+      expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
+      workflow[lock] = false
+    }
+    workflow.run = { id: 'active-run', project_id: project.id, audio_id: 'aud_primary', workflow_revision: 1, status: 'running', created_at: '2026-01-01', started_at: '2026-01-01', finished_at: null, cancel_requested: false, error: null, workflow: workflow.draft, nodes: [] }
+    await nextTick()
+    const picker = root!.querySelector<HTMLSelectElement>('.workflow-audio-picker select')!
+    expect(picker.disabled).toBe(true)
+    picker.value = 'aud_second'; picker.dispatchEvent(new Event('change', { bubbles: true }))
+    root!.querySelector<HTMLButtonElement>('.workspace-header-back')!.click()
+    root!.querySelector<HTMLButtonElement>('button[aria-label="新建项目"]')!.click()
+    await nextTick()
+    expect(detail.activeAudioId).toBe('aud_primary')
+    expect(picker.value).toBe('aud_primary')
+    expect(root!.querySelector('.is-canvas-workspace')).not.toBeNull()
+    expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
+    expect(root!.textContent).toContain('节点运行尚未结束')
+    expect(root!.querySelectorAll('.alert[role="alert"]')).toHaveLength(1)
+    workflow.run = null
+    detail.audios[1]!.job = { id: 'other-job', status: 'running' }
+    await nextTick()
+    expect(root!.querySelector<HTMLButtonElement>('button[aria-label="删除项目"]')!.disabled).toBe(true)
+  })
+
   it('changes audio history context without leaving, discarding, or remounting the project canvas', async () => {
     const state = await mountWorkflow()
     const workflow = useWorkflowStore(state.pinia)
+    workflow.capabilities = { ...workflow.capabilities!, nodes: workflow.capabilities!.nodes.map((node) => node.isSource ? { ...node, resourceInput: { resourceType: 'audio', configKey: 'audio_id' } } : node) }
+    workflow.draft.nodes[0]!.config.audio_id = 'aud_primary'
     workflow.draft.nodes[0]!.position.x += 24
     workflow.markDirty()
     const draft = workflow.draft
@@ -618,6 +741,8 @@ describe('workflow navigation guards', () => {
     picker.dispatchEvent(new Event('change', { bubbles: true }))
     await settle()
     expect(state.detail.activeAudioId).toBe('aud_second')
+    expect(workflow.boundAudioId).toBe('aud_primary')
+    expect(workflow.draft.nodes[0]!.config.audio_id).toBe('aud_primary')
     expect(root!.querySelector('.node-workflow')).toBe(canvas)
     expect(workflow.draft).toBe(draft)
     expect(workflow.dirty).toBe(true)

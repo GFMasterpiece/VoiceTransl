@@ -43,7 +43,7 @@ const pageSubtitle = computed(() => {
   if (view.value === 'detail') return t('app.subtitle.detail')
   return t('app.subtitle.list')
 })
-const currentError = computed(() => view.value === 'detail' ? detail.error || workflowStore.error : store.error)
+const currentError = computed(() => view.value === 'detail' ? detail.error || (!detail.project || detail.loading ? workflowStore.error : '') : store.error)
 const audioContextLocked = computed(() => !!workflowStore.activeRun || workflowStore.saving || workflowStore.validating || workflowStore.actionLoading || workflowStore.resourceUploading || workflowStore.loading)
 const workflowLeaveError = computed(() => {
   if (workflowStore.activeRun) return message('app.errors.activeRun')
@@ -275,17 +275,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-shell">
-    <header class="topbar">
+  <div class="app-shell" :class="{ 'is-canvas-workspace': view === 'detail' }">
+    <header v-if="view !== 'detail'" class="topbar">
       <a class="brand" href="#" :aria-label="t('app.brandHome')" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><div class="topbar-status"><span class="status-dot"></span>{{ t('app.connected') }}</div>
       <select class="locale-picker" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
     </header>
 
     <main class="main-content">
-      <section class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div v-if="view !== 'create'" class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button><button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button" type="button" :aria-label="t('app.actions.queue')" @click="returnUploadQueue">{{ t('app.actions.queue') }}</button></div></section>
+      <section v-if="view !== 'detail'" class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div v-if="view !== 'create'" class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button><button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button" type="button" :aria-label="t('app.actions.queue')" @click="returnUploadQueue">{{ t('app.actions.queue') }}</button></div></section>
 
-      <div v-if="currentError" class="alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" :aria-label="t('app.actions.close')" @click="view === 'detail' ? (detail.error = '', workflowStore.error = '') : (store.error = '')">×</button></div>
+      <div v-if="currentError" class="alert" :class="{ 'workspace-alert': view === 'detail' }" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" :aria-label="t('app.actions.close')" @click="view === 'detail' ? (detail.error = '', workflowStore.error = '') : (store.error = '')">×</button></div>
 
       <section v-if="view === 'list'" class="list-layout">
         <div class="list-toolbar"><div><span class="section-kicker">{{ t('app.projects.kicker') }}</span><h2>{{ t('app.projects.title') }}</h2></div><button class="text-button" type="button" :disabled="store.loading" @click="store.fetchProjects()"><span :class="{ spinning: store.loading }" aria-hidden="true">↻</span>{{ t('app.actions.refresh') }}</button></div>
@@ -331,14 +331,32 @@ onUnmounted(() => {
         </form>
       </section>
 
-      <section v-else class="workspace">
-        <div class="workspace-header"><button class="back-button" type="button" @click="showList">{{ t('app.workspace.back') }}</button><div class="workspace-actions"><label v-if="detail.audios.length" class="workflow-audio-picker"><span>{{ t('app.workspace.current') }}</span><select :value="detail.activeAudioId || ''" :aria-label="t('app.workspace.switch')" :disabled="audioContextLocked" @change="switchWorkflowAudio"><option v-for="audio in detail.audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option></select></label><button class="secondary-button danger-button" type="button" :disabled="detail.anyRunning || !!workflowStore.activeRun" @click="deleteProject(detail.project?.id || '', detail.project?.name || '')">{{ t('app.actions.deleteProject') }}</button></div></div>
-        <div v-if="detail.loading && !detail.project" class="workspace-skeleton"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
-        <template v-else-if="detail.project">
-          <WorkflowEditor v-if="!detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded" />
-          <p v-if="detail.loading" class="config-loading" role="status">{{ t('app.workspace.loading') }}</p>
-          <section class="workspace-title compact"><div><span class="section-kicker">{{ detail.activeAudio?.source.language.toUpperCase() }}</span><h2>{{ detail.activeAudio?.source.original_name || t('app.workspace.choose') }}</h2><p>{{ detail.project.name }} · {{ formatSize(detail.activeAudio?.source.size_bytes || 0) }}</p></div></section>
-        </template>
+      <section v-else class="workspace" :aria-label="t('app.workspace.canvas')">
+        <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded">
+          <template #workspace-header>
+            <button class="back-button workspace-header-back" type="button" @click="showList">{{ t('app.workspace.back') }}</button>
+            <h1 class="workspace-project-title" :title="detail.project.name">{{ detail.project.name }}</h1>
+            <label v-if="detail.audios.length" class="workflow-audio-picker"><span>{{ t('app.workspace.current') }}</span><select :value="detail.activeAudioId || ''" :aria-label="t('app.workspace.switch')" :disabled="audioContextLocked" @change="switchWorkflowAudio"><option v-for="audio in detail.audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option></select></label>
+            <div class="workspace-header-actions">
+              <button class="secondary-button compact-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate">{{ t('app.actions.create') }}</button>
+              <button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button compact-button" type="button" :aria-label="t('app.actions.queue')" @click="returnUploadQueue">{{ t('app.actions.queue') }}</button>
+              <button class="secondary-button compact-button danger-button" type="button" :aria-label="t('app.actions.deleteProject')" :disabled="detail.anyRunning || audioContextLocked" @click="deleteProject(detail.project.id, detail.project.name)">{{ t('app.actions.deleteProject') }}</button>
+            </div>
+            <select class="locale-picker workspace-language-control" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
+          </template>
+        </WorkflowEditor>
+        <div v-else class="workspace-loading-shell">
+          <div class="workspace-header">
+            <button class="back-button workspace-header-back" type="button" @click="showList">{{ t('app.workspace.back') }}</button>
+            <h1 class="workspace-project-title">{{ pageTitle }}</h1>
+            <div class="workspace-header-actions">
+              <button class="secondary-button compact-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate">{{ t('app.actions.create') }}</button>
+              <button v-if="uploadItems.length || upload.targetProjectId.value" class="secondary-button compact-button" type="button" :aria-label="t('app.actions.queue')" @click="returnUploadQueue">{{ t('app.actions.queue') }}</button>
+            </div>
+            <select class="locale-picker workspace-language-control" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
+          </div>
+          <div v-if="detail.loading" class="workspace-skeleton" role="status" :aria-label="t('app.workspace.loading')"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
+        </div>
       </section>
     </main>
   </div>

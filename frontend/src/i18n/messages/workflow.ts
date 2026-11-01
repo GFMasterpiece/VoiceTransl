@@ -1,5 +1,14 @@
 export const workflowMessages = {
   "zh-CN": {
+    "nodePlacementFailed": "此处没有可用的节点空间，请平移画布后换个位置添加。",
+    "closePanel": "关闭面板",
+    "addNode": "添加节点",
+    "searchNodes": "搜索节点",
+    "noMatchingNodes": "没有匹配的节点",
+    "nodeInstanceLimit": "已达此节点数量上限",
+    "graphNodeLimit": "已达画布节点数量上限",
+    "nodeRequired": "此输入节点不可删除",
+    "canvasMenu": "画布节点菜单",
     "resizeNode": "调整{name}的大小",
     "resizeWidth": "调整{name}的宽度",
     "resizeHeight": "调整{name}的高度",
@@ -322,6 +331,15 @@ export const workflowMessages = {
     "error_INVALID_TEXT_FORMAT": "文本输出格式无效，请选择可用格式。"
   },
   "en": {
+    "nodePlacementFailed": "There is no room for a node here. Pan the canvas and choose another position.",
+    "closePanel": "Close panel",
+    "addNode": "Add node",
+    "searchNodes": "Search nodes",
+    "noMatchingNodes": "No matching nodes",
+    "nodeInstanceLimit": "Node instance limit reached",
+    "graphNodeLimit": "Canvas node limit reached",
+    "nodeRequired": "This input node cannot be deleted",
+    "canvasMenu": "Canvas node menu",
     "resizeNode": "Resize {name}",
     "resizeWidth": "Resize {name} width",
     "resizeHeight": "Resize {name} height",

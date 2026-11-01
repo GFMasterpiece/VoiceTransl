@@ -5,6 +5,7 @@ import { displayError, initializeLocale, locale, LOCALE_STORAGE_KEY, message, me
 import { appMessages } from './messages/app'
 import { commonMessages } from './messages/common'
 import { workflowMessages } from './messages/workflow'
+import { workflowPanelMessages } from './messages/workflowPanels'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -21,7 +22,7 @@ function placeholders(text: string): string[] {
 
 describe('translation catalogs', () => {
   it.each([
-    ['common', commonMessages], ['app', appMessages], ['workflow', workflowMessages],
+    ['common', commonMessages], ['app', appMessages], ['workflow', workflowMessages], ['workflow-panel', workflowPanelMessages],
   ] as const)('%s has matching keys and interpolation arguments', (name, catalog) => {
     const chinese = dictionary(catalog['zh-CN'])
     const english = dictionary(catalog.en)
@@ -35,7 +36,7 @@ describe('translation catalogs', () => {
       setLocale(current)
       for (const [key, value] of Object.entries(dictionary(catalog[current]))) {
         const params = Object.fromEntries(placeholders(value).map((argument) => [argument, `example-${argument}`]))
-        expect(t(`${name}.${key}`, params), `${current}.${name}.${key}`)
+        expect(t(`${name === 'workflow-panel' ? 'workflow' : name}.${key}`, params), `${current}.${name}.${key}`)
           .toBe(value.replace(/\{([\w]+)\}/g, (_match, argument: string) => params[argument]!))
       }
     }

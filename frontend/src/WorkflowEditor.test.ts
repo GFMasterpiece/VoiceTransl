@@ -10,7 +10,7 @@ import {
 } from './stores/workflow'
 import { readCapabilities } from './workflow/capabilities'
 import { createNodeRegistry, type NodeRegistry } from './workflow/nodeRegistry'
-import { setLocale, message } from './i18n'
+import { setLocale, message, t } from './i18n'
 import { workflowErrorLabel, workflowIssueLabel } from './stores/workflow'
 
 const testCapabilities: Record<string, any> = {
@@ -146,6 +146,35 @@ function button(text: string) {
   return Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim() === text)
 }
 
+async function closePanel() {
+  if (root!.querySelector('.workflow-panel-content')) {
+    root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click()
+    await settle()
+  }
+}
+async function openPanel(panel: 'run' | 'artifacts' | 'logs') {
+  if (root!.querySelector(`.workflow-panel-content[data-panel="${panel}"]`)) return
+  await closePanel()
+  root!.querySelector<HTMLButtonElement>(`[data-open-panel="${panel}"]`)!.click()
+  await settle()
+}
+async function startRun() {
+  await openPanel('run')
+  button(t('workflow.runWorkflow'))!.click()
+  await settle()
+}
+async function addNode(type: string) {
+  await closePanel()
+  const store = useWorkflowStore()
+  const position = nextNodePosition(type, store.draft.nodes, store.registry!, store.nodeMinimums)
+  const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+  const bounds = svg.getBoundingClientRect()
+  svg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left + store.pan.x + position.x * store.zoom, clientY: bounds.top + store.pan.y + position.y * store.zoom }))
+  await settle()
+  root!.querySelector<HTMLButtonElement>(`[data-add-kind="${type}"]`)!.click()
+  await settle()
+}
+
 function node(type: string, index = 0) {
   return root!.querySelectorAll<SVGGElement>(`.workflow-node.is-${type}`)[index]
 }
@@ -177,7 +206,7 @@ describe('workflow localization', () => {
     await settle()
     expect(root!.querySelector('h2')?.textContent).toContain('Node workflow')
     expect(button('Validate & save')).toBeTruthy()
-    expect(button('Run workflow')).toBeTruthy()
+    expect(root!.querySelector('[data-open-panel=run]')).toBeTruthy()
     expect(root!.querySelector('[aria-label="Workflow tools"]')).toBeTruthy()
     expect(root!.querySelector('[aria-label="Output port audio"] title')?.textContent).toBe('Output port audio')
     expect(root!.textContent).toContain('用户录音.wav')
@@ -240,7 +269,9 @@ describe('workflow localization', () => {
     expect(JSON.stringify(store.draft)).toBe(cleanDraft)
     expect(executionSignature(store.draft, store.registry!)).toBe(cleanSignature)
     expect(JSON.stringify(store.run)).toBe(snapshot)
+    await openPanel('run')
     expect(root!.textContent).toContain('Snapshot matches the current canvas')
+    await closePanel()
     store.addNode('asr')
     await settle()
     const dirtyDraft = JSON.stringify(store.draft)
@@ -315,6 +346,7 @@ describe('workflow localization', () => {
     const history = JSON.stringify(store.history)
     setLocale('en')
     await settle()
+    await openPanel('run')
     expect(root!.textContent).toContain('Partially completed')
     expect(root!.textContent).toContain('Blocked')
     expect(root!.textContent).toContain('Some output nodes failed.')
@@ -346,6 +378,7 @@ describe('workflow localization', () => {
     store.outputChecks = { output: { state } }
     if (state === 'available') store.outputs = { output: structuredClone(outputArtifact) }
     await settle()
+    await openPanel('artifacts')
     expect(root!.querySelector('.workflow-output-state')?.textContent).toBe(label)
     if (state === 'available') expect(button('Download audio-copy.wav')).toBeTruthy()
     if (state === 'failed') expect(button('Retry check')).toBeTruthy()
@@ -364,7 +397,7 @@ describe('workflow localization', () => {
     setLocale('en')
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
     await settle()
-    button('＋ Plugin node')!.click()
+    await addNode('extension')
     await settle()
     const store = useWorkflowStore()
     const extension = store.draft.nodes.find((item) => item.type === 'extension')!
@@ -372,7 +405,7 @@ describe('workflow localization', () => {
     expect(card.textContent).toContain('插件处理节点')
     expect(card.textContent).not.toContain('AUDIO OUTPUT')
     expect(card.textContent).not.toContain('audio-copy')
-    expect(root!.querySelector('.inspector-type')?.textContent).toBe('插件处理节点 · configuration defined by the server capability catalog')
+    expect(root!.querySelector('.workflow-inspector')).toBeNull()
     card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
     const fieldGroup = card
@@ -388,7 +421,7 @@ describe('workflow localization', () => {
     setLocale('zh-CN')
     await settle()
     expect(JSON.stringify(store.draft)).toBe(draft)
-    expect(button('＋ Plugin node')).toBeTruthy()
+    expect(root!.querySelector('[data-add-node]')).toBeTruthy()
     expect(store.registry!.label('extension')).toBe('插件处理节点')
   })
 
@@ -398,6 +431,8 @@ describe('workflow localization', () => {
     await settle()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     node('audio_output').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await settle()
+    node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 200 }))
     await settle()
     button('Delete node')!.click()
     expect(confirm).toHaveBeenCalledWith('Delete node “Audio output”? Its connections will also be removed.')
@@ -568,7 +603,7 @@ describe('capability catalog and node registry', () => {
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
     await settle()
     const store = useWorkflowStore()
-    button('＋ 降噪')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('denoise')
     expect(store.draft.nodes.find((item) => item.type === 'denoise')?.config).toEqual({ strength: 2 })
     const denoiseNode = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node')).find((item) => item.getAttribute('class')?.includes('is-denoise'))!
     denoiseNode.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
@@ -582,7 +617,7 @@ describe('capability catalog and node registry', () => {
     setup()
     await settle()
     const store = useWorkflowStore()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
     const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
     store.selectNode(pre.id); await settle()
     node('preprocess').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
@@ -730,11 +765,14 @@ describe('inline catalog field editing', () => {
     expect(leave).not.toHaveBeenCalled()
     await settle()
     expect(root!.querySelector('.workflow-discard')).not.toBeNull()
+    button(t('workflow.continueEditing'))!.click(); await settle()
     store.selectNode('input')
     setLocale('en'); await settle()
     expect(control('details').value).toBe('{ "incomplete":')
     expect(node('audio_output').querySelector('.node-field-error')?.textContent).toContain('JSON')
+    await openPanel('run')
     expect(button('Save before running') || button('Save to run')).toBeTruthy()
+    await closePanel()
     const calls = fetchMock.mock.calls.length
     await store.validate(); await store.save(); await store.startRun()
     expect(fetchMock.mock.calls.length).toBe(calls)
@@ -830,6 +868,7 @@ describe('catalog resources and preview workflows', () => {
     store.updateNode('output', { config: { filename_stem: 'empty-project-copy' } })
     await store.validate(); await store.save()
     expect(putCalls()).toHaveLength(1)
+    await openPanel('run')
     expect(button('运行节点工作流')!.disabled).toBe(true)
   })
 
@@ -905,17 +944,16 @@ describe('catalog resources and preview workflows', () => {
       return undefined
     }, createPinia(), { audioId: 'a1', audioName: 'history-resource.wav', project, audios: [bound] })
     await settle()
-    expect(root!.querySelector('.workflow-mode-note')?.textContent).toContain('input-resource.wav')
-    expect(root!.querySelector('.workflow-mode-note')?.textContent).not.toContain('history-resource.wav')
-    expect(root!.querySelector('.inspector-type')?.textContent).toContain('input-resource.wav')
-    const metadata = root!.querySelector('.workflow-inspector-meta')!
-    expect(metadata.textContent).toContain('输入音频input-resource.wav')
-    expect(metadata.textContent).toContain('历史音频上下文history-resource.wav')
+    expect(node('audio_input').querySelector<HTMLSelectElement>('[data-resource="audio"]')!.value).toBe('bound')
+    expect(node('audio_input').textContent).toContain('input-resource.wav')
+    expect(useWorkflowStore().audioId).toBe('a1')
+    expect(useWorkflowStore().boundAudioId).toBe('bound')
+    expect(root!.querySelector('.workflow-inspector')).toBeNull()
     setLocale('en'); await settle()
-    expect(metadata.textContent).toContain('Input audioinput-resource.wav')
-    expect(metadata.textContent).toContain('History audio contexthistory-resource.wav')
+    expect(node('audio_input').textContent).toContain('input-resource.wav')
     useWorkflowStore().updateNode('input', { config: {} }); await settle()
-    expect(root!.querySelector('.workflow-mode-note')?.textContent).toContain('history-resource.wav')
+    expect(node('audio_input').querySelector<HTMLSelectElement>('[data-resource="audio"]')!.value).toBe('')
+    expect(useWorkflowStore().boundAudioId).toBeNull()
   })
 
   it('changes history context without reloading or discarding the graph and ignores stale run responses', async () => {
@@ -1045,6 +1083,125 @@ describe('workflow viewport coordinates and gestures', () => {
     pointer(svg, 'pointermove', 400, 400)
     expect(store.pan).toEqual({ x: 0, y: 0 })
     expect(store.draft.nodes.find((entry) => entry.id === 'input')!.position).toEqual(input.position)
+  })
+})
+
+describe('canvas context menus', () => {
+  function menu(target: Element, x = 300, y = 200) {
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })
+    target.dispatchEvent(event)
+    return event
+  }
+  it('places searched nodes at the clicked world coordinate including negative coordinates and avoids existing nodes', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    store.pan = { x: 600, y: 400 }; store.zoom = .5
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 60, right: 1100, bottom: 560, width: 1000, height: 500, x: 100, y: 60, toJSON: () => ({}) })
+    menu(svg, 300, 200); await settle()
+    const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!
+    search.value = 'preprocess'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(1)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await settle()
+    expect(store.draft.nodes.find((node) => node.type === 'preprocess')?.position).toEqual({ x: -800, y: -520 })
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    menu(svg, 300, 200); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-add-kind=preprocess]')!.click(); await settle()
+    const nodes = store.draft.nodes.filter((node) => node.type === 'preprocess')
+    expect(nodes[1]!.position.y).toBeGreaterThanOrEqual(nodes[0]!.position.y + store.getNodeSize(nodes[0]!).height)
+  })
+
+  it('opens node deletion without moving it, obeys removable metadata and retains confirmation', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    const position = { ...store.draft.nodes[1]!.position }
+    node('audio_output').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 2, clientX: 500, clientY: 200 }))
+    menu(node('audio_output')); await settle()
+    root!.querySelector('.workflow-svg')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 700, clientY: 500 }))
+    expect(store.draft.nodes[1]!.position).toEqual(position)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.click(); await settle()
+    expect(store.draft.nodes).toHaveLength(2)
+    confirm.mockReturnValue(true)
+    menu(node('audio_output')); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.click(); await settle()
+    expect(store.draft.nodes.map((node) => node.id)).toEqual(['input'])
+    menu(node('audio_input')); await settle()
+    expect(root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.disabled).toBe(true)
+    expect(document.activeElement).toBe(root!.querySelector('.canvas-context-menu'))
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+  })
+
+  it('derives source and instance menu availability from the capability catalog', async () => {
+    const capabilities = structuredClone(testCapabilities)
+    capabilities.workflow.nodes.push({ ...capabilities.workflow.nodes[0], type: 'another_input', label: 'Another input', add_label: 'Another input', max_instances: null })
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(capabilities)) : undefined)
+    await settle()
+    menu(root!.querySelector('.workflow-svg')!); await settle()
+    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=audio_input]')!.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=another_input]')!.disabled).toBe(true)
+    const before = useWorkflowStore().draft.nodes.length
+    root!.querySelector<HTMLButtonElement>('[data-add-kind=another_input]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(useWorkflowStore().draft.nodes).toHaveLength(before)
+  })
+
+  it('preserves native editable/media menus and supports keyboard entry, escape, outside clicks and view/lock dismissal', async () => {
+    setup(); await settle()
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    const input = node('audio_output').querySelector('input')!
+    expect(menu(input).defaultPrevented).toBe(false)
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    for (const tag of ['textarea', 'select', 'audio', 'video']) {
+      const native = document.createElement(tag); root!.querySelector('.workflow-canvas')!.append(native)
+      expect(menu(native).defaultPrevented).toBe(false); native.remove()
+    }
+    svg.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })); await settle()
+    expect(document.activeElement).toBe(root!.querySelector('.canvas-node-search input'))
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); await settle()
+    expect((document.activeElement as HTMLElement).dataset.addKind).toBeTruthy()
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    menu(svg); await settle()
+    window.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })); await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    menu(svg); await settle()
+    useWorkflowStore().zoom = .5; await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    menu(svg); await settle()
+    useWorkflowStore().saving = true; await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    menu(svg); await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+  })
+
+  it('rejects nonfinite or exhausted placement coordinates without inserting illegal graph positions', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    store.addNode('preprocess', { x: Number.NaN, y: 0 })
+    expect(store.draft.nodes).toHaveLength(2)
+    store.addNode('preprocess', { x: 2_000_000, y: -2_000_000 })
+    expect(store.draft.nodes.find((node) => node.type === 'preprocess')?.position).toEqual({ x: 1_000_000, y: -1_000_000 })
+    store.updateNode('output', { position: { x: 0, y: 999_950 }, size: { width: 500, height: 500 } })
+    const count = store.draft.nodes.length
+    store.addNode('preprocess', { x: 0, y: 999_950 })
+    expect(store.draft.nodes).toHaveLength(count)
+    expect(store.error).toContain('没有可用的节点空间')
+    expect(store.draft.nodes.every((node) => Number.isFinite(node.position.y) && Math.abs(node.position.y) <= 1_000_000)).toBe(true)
+  })
+
+  it('keeps the initial valid coordinate if first-paint content expansion exhausts available placement space', async () => {
+    Object.defineProperty(SVGElement.prototype, 'getComputedTextLength', { configurable: true, value: function(this: SVGTextElement) { return this.classList.contains('node-name') ? 500 : 20 } })
+    try {
+      setup(); await settle()
+      const store = useWorkflowStore()
+      store.updateNode('output', { position: { x: 300, y: 999_950 } })
+      store.addNode('preprocess', { x: 0, y: 999_950 })
+      await settle(); await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); await settle()
+      const inserted = store.draft.nodes.find((node) => node.type === 'preprocess')!
+      expect(inserted.position.y).toBe(999_950)
+      expect(store.error).toContain('没有可用的节点空间')
+    } finally { delete (SVGElement.prototype as any).getComputedTextLength }
   })
 })
 
@@ -1332,13 +1489,12 @@ describe('workflow editor interactions', () => {
     expect(store.draft.nodes.find((entry) => entry.type === 'audio_output')?.position).toEqual({ x: 420, y: 120 })
   })
 
-  it('renders the inspector as a compact node property rail', async () => {
-    setup()
-    await settle()
-
-    expect(root!.querySelector('.workflow-inspector.is-audio_input')).not.toBeNull()
-    expect(root!.querySelector('.inspector-type-id')?.textContent).toBe('audio_input')
-    expect(root!.querySelector('.inspector-actions')).not.toBeNull()
+  it('keeps the viewport clear of permanent property and result panels', async () => {
+    setup(); await settle()
+    expect(root!.querySelector('.workflow-inspector')).toBeNull()
+    expect(root!.querySelector('.workflow-run-panel')).toBeNull()
+    expect(root!.querySelector('.node-workflow-heading')).toBeNull()
+    expect(root!.querySelector('[data-add-node]')).not.toBeNull()
   })
 
   it('adds an output, edits its filename, validates and saves the expected payload', async () => {
@@ -1346,7 +1502,7 @@ describe('workflow editor interactions', () => {
     await settle()
     expect(root!.querySelector('svg.workflow-svg')).not.toBeNull()
     expect(root!.querySelectorAll('.workflow-node')).toHaveLength(2)
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
     expect(root!.querySelectorAll('.workflow-node')).toHaveLength(3)
     node('audio_output', 0)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await settle()
@@ -1369,7 +1525,7 @@ describe('workflow editor interactions', () => {
       ? Promise.resolve(response({ valid: false, errors: [{ code: 'INVALID_FILENAME_STEM', message: '文件名含路径分隔符', node_id: 'output' }] }))
       : undefined)
     await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
     node('audio_output', 0)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
     const filename = node('audio_output').querySelector<HTMLInputElement>('input[data-field="filename_stem"]')!
     filename.value = 'bad' + String.fromCharCode(92) + 'name'
@@ -1388,7 +1544,7 @@ describe('workflow editor interactions', () => {
     await settle()
     const store = useWorkflowStore()
     const beforeEdges = JSON.parse(JSON.stringify(store.draft.edges))
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
     expect(store.draft.nodes.filter((item) => item.type === 'preprocess')).toHaveLength(1)
     expect(store.draft.edges).toEqual(beforeEdges)
     expect(store.draft.nodes.find((item) => item.type === 'preprocess')?.config).toEqual({ provider: 'mock' })
@@ -1405,8 +1561,8 @@ describe('workflow editor interactions', () => {
   it('creates chained preprocessing through actual source-right and target-left port clicks', async () => {
     setup()
     await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
+    await addNode('preprocess')
     const store = useWorkflowStore()
     const first = store.draft.nodes.filter((item) => item.type === 'preprocess')[0]
     const second = store.draft.nodes.filter((item) => item.type === 'preprocess')[1]
@@ -1447,8 +1603,8 @@ describe('workflow editor interactions', () => {
   it('removes a preprocess and its incident edges without touching unrelated branches', async () => {
     setup()
     await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
+    await addNode('audio_output')
     const store = useWorkflowStore()
     const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
     const extraOutput = store.draft.nodes.find((item) => item.type === 'audio_output' && item.id !== 'output')!
@@ -1466,7 +1622,7 @@ describe('workflow editor interactions', () => {
   it('shows invalid preprocess drafts as locatable issues and leaves the draft intact', async () => {
     setup((path) => path.endsWith('/workflow/validate') ? Promise.resolve(response({ valid: false, errors: [{ code: 'INVALID_PREPROCESS_PROVIDER', message: 'Provider 无效', node_id: 'preprocess-1' }] })) : undefined)
     await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
     const store = useWorkflowStore()
     const pre = store.draft.nodes.find((item) => item.type === 'preprocess')!
     store.updateNode(pre.id, { config: { provider: 'custom', sample_rate: 1000 } })
@@ -1479,8 +1635,8 @@ describe('workflow editor interactions', () => {
   it('does not cover default outputs when adding and stacking preprocess nodes', async () => {
     setup()
     await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
+    await addNode('preprocess')
     const store = useWorkflowStore()
     const boxes = store.draft.nodes.map((item) => ({ id: item.id, left: item.position.x, right: item.position.x + WORKFLOW_NODE_WIDTH, top: item.position.y, bottom: item.position.y + WORKFLOW_NODE_HEIGHT }))
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
@@ -1493,8 +1649,8 @@ describe('workflow editor interactions', () => {
   it('stacks repeatedly added outputs without covering each other', async () => {
     setup()
     await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
+    await addNode('audio_output')
     const transforms = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node.is-audio_output'))
       .map((item) => item.getAttribute('transform'))
     expect(transforms).toEqual(['translate(420 120)', 'translate(420 264)', 'translate(420 408)'])
@@ -1506,7 +1662,7 @@ describe('workflow editor interactions', () => {
     const store = useWorkflowStore()
     const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
     kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => ({ ...kind.fields[0]!, key: `extension_${index}`, type: index < 3 ? 'json' as const : 'string' as const, default: index < 3 ? {} : 'text' }))]
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
     const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
       x: 0, y: 0, top: 0, left: 0, right: 343, bottom: 390, width: 343, height: 390,
@@ -1539,7 +1695,7 @@ describe('workflow editor interactions', () => {
       ? Promise.resolve(response({ valid: false, errors: [{ code: 'OUTPUT_INPUT_COUNT', message: '输出需要一个音频输入', node_id: 'output' }] }))
       : undefined)
     await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(root!.querySelector('.workflow-issues')!.textContent).toContain('输出需要一个音频输入')
     expect(putCalls()).toHaveLength(0)
@@ -1559,7 +1715,8 @@ describe('workflow editor interactions', () => {
       return undefined
     })
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
+    await openPanel('artifacts')
     const post = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/workflow-runs') && (init as RequestInit)?.method === 'POST')
     expect(JSON.parse(String((post![1] as RequestInit).body))).toEqual({ workflow_revision: 1 })
     expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/outputs/input'))).toBe(true)
@@ -1589,7 +1746,8 @@ describe('workflow editor interactions', () => {
       return undefined
     })
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
+    await openPanel('artifacts')
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/outputs/preprocess-1'))).toBe(true)
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith('/outputs/input'))).toBe(false)
     const download = Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.includes('audio-pre.wav'))
@@ -1603,7 +1761,7 @@ describe('workflow editor interactions', () => {
   it('adds and edits Mock ASR and text output using catalog fields and options', async () => {
     setup()
     await settle()
-    button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('asr')
     const store = useWorkflowStore()
     const asrNode = store.draft.nodes.find((item) => item.type === 'asr')!
     expect(asrNode.config).toEqual({ provider: 'mock', language: 'ja' })
@@ -1617,7 +1775,7 @@ describe('workflow editor interactions', () => {
     await settle()
     const applied = store.draft.nodes.find((item) => item.id === asrNode.id)!
     expect(applied.config).toEqual({ provider: 'mock', language: 'en' })
-    button('＋ 文本输出')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('text_output')
     const textNode = store.draft.nodes.find((item) => item.type === 'text_output')!
     node('text_output')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await settle()
     const format = node('text_output').querySelector<HTMLSelectElement>('select[data-field="format"]')!
@@ -1631,7 +1789,7 @@ describe('workflow editor interactions', () => {
   it('rejects a non-catalog ASR provider locally and preserves the original config', async () => {
     setup()
     await settle()
-    button('＋ ASR')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('asr')
     const store = useWorkflowStore()
     const asrId = store.draft.nodes.find((item) => item.type === 'asr')!.id
     store.updateNode(asrId, { config: { provider: 'custom', language: 'ja' } })
@@ -1664,7 +1822,8 @@ describe('workflow editor interactions', () => {
       return undefined
     })
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
+    await openPanel('artifacts')
     expect(root!.textContent).toContain('TRANSCRIPT')
     expect(root!.textContent).toContain('application/json')
     expect(root!.textContent).toContain('TEXT')
@@ -1699,7 +1858,7 @@ describe('workflow editor interactions', () => {
       return undefined
     }, pinia)
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
     const store = useWorkflowStore(pinia)
     expect(store.activeRun).toBeTruthy()
     expect(root!.querySelectorAll('.workflow-node.is-preprocess')).toHaveLength(1)
@@ -1714,7 +1873,7 @@ describe('workflow editor interactions', () => {
     expect(store.draft.nodes).toHaveLength(nodeCount)
     expect(button('校验并保存')?.disabled).toBe(true)
     expect(button('取消运行')).toBeTruthy()
-    expect(Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim().startsWith('运行历史'))?.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-add-node]')!.disabled).toBe(true)
     store.stop()
   })
 
@@ -1733,7 +1892,8 @@ describe('workflow editor interactions', () => {
       return undefined
     })
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
+    await openPanel('artifacts')
     const store = useWorkflowStore()
     expect(store.run?.nodes[1].artifact?.filename).toBe('audio-copy.wav')
     expect(root!.textContent).toContain('快照产物')
@@ -1766,7 +1926,8 @@ describe('workflow editor interactions', () => {
       return undefined
     })
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
+    await openPanel('artifacts')
     expect(root!.textContent).toContain('产物检查失败，可重试。')
     expect(root!.textContent).not.toContain('产物缺失，不可下载。')
     expect(button('重试检查')).toBeTruthy()
@@ -1792,10 +1953,11 @@ describe('workflow editor interactions', () => {
         : Promise.resolve(response({ valid: true, errors: [] }))
     })
     await settle()
-    button('＋ 预处理')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('preprocess')
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await nextTick()
     const store = useWorkflowStore()
-    store.addNode('preprocess')
+    store.draft.nodes.push({ ...structuredClone(preprocess), id: 'external-preprocess', position: { x: 286, y: 600 } })
+    store.markDirty()
     pendingValidation.resolve(response({ valid: true, errors: [] })); await settle()
     expect(putCalls()).toHaveLength(0)
     expect(store.draft.nodes.filter((item) => item.type === 'preprocess')).toHaveLength(2)
@@ -1810,11 +1972,11 @@ describe('workflow editor interactions', () => {
       ? Promise.resolve(response({ detail: { error: { code: 'WORKFLOW_REVISION_CONFLICT', message: '工作流已被修改，请刷新后重试' } } }, 409))
       : undefined)
     await settle()
-    button('＋ 输出节点')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await addNode('audio_output')
     button('校验并保存')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
     expect(root!.querySelector('.node-workflow-alert')?.textContent).toContain('工作流已被修改')
     expect(root!.querySelectorAll('.workflow-node')).toHaveLength(3)
-    expect(root!.querySelector('.workflow-dirty-state')?.textContent).toContain('未保存')
+    expect(root!.querySelector('.workflow-save-state')?.textContent).toContain('未保存')
   })
 })
 
@@ -1858,7 +2020,7 @@ describe('workflow request isolation and polling', () => {
     expect(store.history).toHaveLength(1)
     expect(store.history[0]).not.toHaveProperty('workflow')
     store.markDirty()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
     expect(store.activeRun).toBeTruthy()
     const validatePromise = store.validate()
     await vi.advanceTimersByTimeAsync(1900)
@@ -1889,7 +2051,7 @@ describe('workflow request isolation and polling', () => {
     const store = useWorkflowStore()
     expect(store.document).toBeTruthy()
     expect(store.history).toHaveLength(0)
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
     expect(store.run?.nodes[0].artifact?.download_url).toBeNull()
     expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/outputs/input'))).toBe(true)
     store.stop()
@@ -1950,9 +2112,7 @@ describe('workflow request isolation and polling', () => {
     }, pinia)
     await settle()
     const store = useWorkflowStore()
-    const toggle = Array.from(root!.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.trim().startsWith('运行历史'))
-    toggle!.click()
-    await settle()
+    await openPanel('run')
     const oldRow = Array.from(root!.querySelectorAll<HTMLButtonElement>('.workflow-history-row')).find((item) => item.textContent?.includes('run-old'))
     expect(oldRow).toBeTruthy()
     button('运行节点工作流')!.click()
@@ -1986,7 +2146,7 @@ describe('workflow request isolation and polling', () => {
     })
     setup((path) => path.endsWith('/workflow-runs') ? Promise.resolve(response(historical, 202)) : undefined)
     await settle()
-    button('运行节点工作流')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    await startRun()
     expect(root!.textContent).toContain('历史快照，不映射当前画布状态')
     expect(root!.querySelector('.workflow-node')?.getAttribute('class')).toContain('is-state-draft')
   })

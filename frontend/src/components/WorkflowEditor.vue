@@ -2,12 +2,11 @@
 import { t, locale, message, hasMessage } from '../i18n'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import {
-  workflowErrorLabel, workflowIssueLabel,
+  workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, workflowNodeHeight,
   WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight,
   executionSignature,
   inputPortForNode as registeredInputPortForNode,
-  isTerminalNode,
   nodeLabel as registeredNodeLabel,
   outputPortForNode as registeredOutputPortForNode,
   useWorkflowStore,
@@ -15,6 +14,8 @@ import {
 } from '../stores/workflow'
 
 import NodeConfigFields from './NodeConfigFields.vue'
+import CanvasDialog from './CanvasDialog.vue'
+import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
 import { measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
@@ -35,15 +36,15 @@ const panning = ref<{ startX: number; startY: number; x: number; y: number } | n
 type PortDirection = 'input' | 'output'
 const connectionStart = ref<{ nodeId: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
-const historyOpen = ref(false)
+const activePanel = ref<'run' | 'artifacts' | 'logs' | null>(null)
+const contextMenu = ref<{ x: number; y: number; world: { x: number; y: number }; nodeId?: string } | null>(null)
+const menuElement = ref<HTMLElement | null>(null)
+const menuSearch = ref('')
+let menuTrigger: Element | null = null
 const discardPrompt = ref(false)
 let pendingClose: (() => void) | null = null
-const selectedKind = computed(() => selected.value && registry.value ? registry.value.kind(selected.value.type) : null)
-const selected = computed(() => store.selectedNode)
-const currentInput = computed(() => store.draft.nodes.find((node) => registry.value?.kind(node.type)?.isSource))
 const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
 const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading)
-const canRun = computed(() => !store.dirty && !controlsLocked.value && !!store.document && !!(store.boundAudioId || store.audioId))
 
 const minZoom = .01
 function nodeWidth(node: WorkflowNode) { return store.getNodeSize(node).width }
@@ -86,6 +87,81 @@ watch(() => store.audioId, (id) => { if (id && id !== props.audioId) emit('selec
 function guardUnload(event: BeforeUnloadEvent) {
   if (resourceBusy.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
 }
+
+const filteredKinds = computed(() => nodeKinds.value.filter((entry) => `${entry.label} ${entry.addLabel} ${entry.type}`.toLocaleLowerCase().includes(menuSearch.value.trim().toLocaleLowerCase())))
+function addDisabledReason(type: string) {
+  if (controlsLocked.value) return t('workflow.leaveSaving')
+  const definition = registry.value?.kind(type)
+  if (!definition) return t('workflow.capUnavailable')
+  if (store.draft.nodes.length >= (registry.value?.capabilities.constraints.maxNodes || 0)) return t('workflow.graphNodeLimit')
+  if (definition.isSource && store.draft.nodes.filter((node) => registry.value?.kind(node.type)?.isSource).length >= (registry.value?.capabilities.constraints.maxSources ?? 0)) return t('workflow.inputCount', { p0: registry.value?.capabilities.constraints.maxSources ?? 0 })
+  if (definition.maxInstances !== null && store.draft.nodes.filter((node) => node.type === type).length >= definition.maxInstances) return t('workflow.nodeInstanceLimit')
+  return ''
+}
+function closeMenu(restore = false) {
+  contextMenu.value = null; menuSearch.value = ''
+  if (restore && menuTrigger?.isConnected && 'focus' in menuTrigger) (menuTrigger as HTMLElement).focus()
+  menuTrigger = null
+}
+async function showMenu(x: number, y: number, world: { x: number; y: number }, nodeId?: string, trigger?: Element) {
+  if (controlsLocked.value || activePanel.value) return
+  clearGestures()
+  menuTrigger = trigger || stage.value
+  menuSearch.value = ''
+  if (nodeId) store.selectNode(nodeId)
+  contextMenu.value = { x, y, world, nodeId }
+  await nextTick()
+  if (!contextMenu.value || !menuElement.value) return
+  const bounds = menuElement.value.getBoundingClientRect()
+  contextMenu.value.x = Math.max(8, Math.min(x, window.innerWidth - (bounds.width || 264) - 8))
+  contextMenu.value.y = Math.max(8, Math.min(y, window.innerHeight - (bounds.height || 320) - 8))
+  ;(menuElement.value.querySelector<HTMLElement>('input, button:not([disabled])') || menuElement.value).focus()
+}
+function canvasContextMenu(event: MouseEvent) {
+  const target = event.target as Element
+  if (target.closest('input, textarea, select, audio, video, button, [contenteditable="true"]')) return
+  event.preventDefault()
+  const group = target.closest<SVGGElement>('.workflow-node')
+  void showMenu(event.clientX, event.clientY, canvasPoint(event as PointerEvent), group?.dataset.nodeId, group || stage.value || undefined)
+}
+function openAddMenu(event?: MouseEvent) {
+  const bounds = stage.value?.getBoundingClientRect()
+  if (!bounds) return
+  const clientX = bounds.left + bounds.width / 2
+  const clientY = bounds.top + bounds.height / 2
+  const point = canvasPoint({ clientX, clientY } as PointerEvent)
+  const trigger = event?.currentTarget as Element | undefined
+  const anchor = trigger?.getBoundingClientRect()
+  void showMenu(anchor?.left ?? clientX, anchor?.bottom ?? clientY, point, undefined, trigger)
+}
+function addFromMenu(type: string) {
+  const menu = contextMenu.value
+  if (!menu || addDisabledReason(type)) return
+  store.addNode(type, menu.world)
+  closeMenu(true)
+}
+function deleteFromMenu() {
+  const node = store.draft.nodes.find((entry) => entry.id === contextMenu.value?.nodeId)
+  if (!node || controlsLocked.value || registry.value?.kind(node.type)?.removable === false) return
+  closeMenu(true)
+  if (window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(node) }))) store.removeNode(node.id)
+}
+function menuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); closeMenu(true); return }
+  const items = [...(menuElement.value?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || [])]
+  if (event.key === 'Enter' && event.target instanceof HTMLInputElement) { event.preventDefault(); items[0]?.click(); return }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !items.length) return
+  event.preventDefault()
+  const current = items.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+  items[index]?.focus()
+}
+function outsideMenu(event: PointerEvent) { if (contextMenu.value && (!(event.target instanceof Node) || !menuElement.value?.contains(event.target))) closeMenu() }
+function canvasKeyboard(event: KeyboardEvent) {
+  if ((event.target as Element).closest('.workflow-node, input, textarea, select, audio, video')) return
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openAddMenu() }
+}
+watch(() => [store.pan.x, store.pan.y, store.zoom, controlsLocked.value, activePanel.value], () => { closeMenu() }, { flush: 'sync' })
 
 function nodeStatus(node: WorkflowNode) {
   if (!store.runMatchesDraft) return 'draft'
@@ -167,12 +243,6 @@ function editNode(node: WorkflowNode, config: Record<string, unknown>) {
   store.updateNode(node.id, { config })
 }
 
-function removeSelected() {
-  if (controlsLocked.value || !selected.value || registry.value?.kind(selected.value.type)?.removable === false) return
-  if (!window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(selected.value) }))) return
-  store.removeNode(selected.value.id)
-}
-
 const contentMinimums = ref<Record<string, NodeContentMinimum>>({})
 let measurementFrame: number | null = null
 let measurementDisposed = false
@@ -229,7 +299,8 @@ function measureContent() {
         if (!collisions.length) break
         y = Math.max(...collisions.map((other) => other.position.y + store.getNodeSize(other).height)) + WORKFLOW_NODE_ROW_GAP
       }
-      if (y !== node.position.y) store.updateNode(node.id, { position: { ...node.position, y } })
+      if (Math.abs(y) > 1_000_000) store.setError(message('workflow.nodePlacementFailed'))
+      else if (y !== node.position.y) store.updateNode(node.id, { position: { ...node.position, y } })
     }
     const body = group.querySelector('.node-body')
     if (body && resizeObserver && !observedBodies.has(body)) { resizeObserver.observe(body); observedBodies.add(body) }
@@ -309,8 +380,8 @@ function onPointerMove(event: PointerEvent) {
     const node = store.draft.nodes.find((item) => item.id === drag.value!.nodeId)
     if (!node) return
     node.position = {
-      x: Math.max(16, Math.round(drag.value.x + point.x - drag.value.startX)),
-      y: Math.max(16, Math.round(drag.value.y + point.y - drag.value.startY)),
+      x: Math.max(-1_000_000, Math.min(1_000_000, Math.round(drag.value.x + point.x - drag.value.startX))),
+      y: Math.max(-1_000_000, Math.min(1_000_000, Math.round(drag.value.y + point.y - drag.value.startY))),
     }
     store.markDirty()
     return
@@ -435,24 +506,6 @@ async function reloadCapabilities() {
   await store.load(props.projectId, props.audioId)
 }
 
-async function runWorkflow() {
-  if (store.dirty) {
-    store.setError(message('workflow.saveFirst'))
-    return
-  }
-  if (!canRun.value) return
-  try { await store.startRun() } catch { /* Store exposes the actionable failure. */ }
-}
-
-async function cancelWorkflow() {
-  try { await store.cancelRun() } catch { /* Store exposes the actionable failure. */ }
-}
-
-function selectHistory(runId: string) {
-  historyOpen.value = true
-  void store.loadRun(runId)
-}
-
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
@@ -460,7 +513,7 @@ function requestClose(action: () => void): CloseRequestResult {
     store.setError(message('workflow.leaveActive'))
     return 'blocked'
   }
-  if (store.saving || store.validating) {
+  if (store.saving || store.validating || store.actionLoading) {
     store.setError(message('workflow.leaveSaving'))
     return 'blocked'
   }
@@ -483,6 +536,13 @@ function discardAndClose() {
 }
 
 function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    if ((event.target as Element).closest('input, select, textarea, audio, video')) return
+    event.preventDefault(); event.stopPropagation()
+    const bounds = (event.currentTarget as SVGGElement).getBoundingClientRect()
+    void showMenu(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2, node.position, node.id, event.currentTarget as Element)
+    return
+  }
   if ((event.target as Element).closest('input, select, textarea, foreignObject')) return
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
@@ -494,50 +554,15 @@ function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
   }
 }
 
-function outputCheckState(nodeId: string) {
-  return store.outputChecks[nodeId]?.state || 'checking'
-}
-
-function canDownloadOutput(nodeId: string) {
-  return outputCheckState(nodeId) === 'available' && !!store.outputs[nodeId]?.download_url
-}
-
-function download(nodeId: string) {
-  void store.downloadArtifact(nodeId)
-}
-
-async function retryOutputChecks() {
-  const active = store.run
-  if (!active) return
-  await store.loadOutputs(props.projectId, active.audio_id, active.id)
-}
-
 function nodeKindLabel(node: WorkflowNode) {
   return registry.value?.label(node.type) || node.type
 }
-
-function nodeKicker(node: WorkflowNode) {
-  return node.type.replace(/_/g, ' ').toUpperCase()
-}
-
-function nodeDescription(node: WorkflowNode) {
-  const definition = registry.value?.kind(node.type)
-  if (definition?.isSource) return t('workflow.inputHelp', { name: inputAudioName.value })
-  return t('workflow.genericDescription', { name: nodeLabel(node) })
-}
-
-function deleteLabel() { return t('workflow.deleteNode') }
 
 function onWindowPointerMove(event: PointerEvent) {
   if (event.target instanceof Node && stage.value?.contains(event.target)) return
   onPointerMove(event)
 }
 function onWindowPointerUp(event: PointerEvent) { onPointerUp(event) }
-
-function runStatusLabel(status?: string) {
-  const key = `workflow.runStatus_${status}`
-  return status ? (hasMessage(key) ? t(key) : status) : t('workflow.notRun')
-}
 
 function nodeStatusLabel(status: string) {
   const key = `workflow.nodeStatus_${status}`
@@ -552,23 +577,12 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-function sizeLabel(bytes: number) {
-  const megabytes = bytes >= 1024 * 1024
-  const value = megabytes ? bytes / 1024 / 1024 : Math.max(1, Math.round(bytes / 1024))
-  return `${new Intl.NumberFormat(locale.value, { minimumFractionDigits: megabytes ? 1 : 0, maximumFractionDigits: megabytes ? 1 : 0 }).format(value)} ${megabytes ? 'MB' : 'KB'}`
-}
-
-function dateLabel(value?: string | null) {
-  if (!value) return t('workflow.notRecorded')
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? t('workflow.notRecorded') : new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(date)
-}
-
 defineExpose({ requestClose })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
   void document.fonts?.ready.then(scheduleMeasurement)
+  window.addEventListener('pointerdown', outsideMenu, true)
   window.addEventListener('beforeunload', guardUnload)
   window.addEventListener('pointermove', onWindowPointerMove)
   window.addEventListener('blur', clearGestures)
@@ -583,6 +597,7 @@ onUnmounted(() => {
   store.stop()
   pendingClose = null
   clearGestures()
+  window.removeEventListener('pointerdown', outsideMenu, true)
   window.removeEventListener('beforeunload', guardUnload)
   window.removeEventListener('pointermove', onWindowPointerMove)
   window.removeEventListener('blur', clearGestures)
@@ -593,40 +608,33 @@ onUnmounted(() => {
 
 <template>
   <section class="node-workflow" aria-labelledby="node-workflow-title" :aria-busy="store.loading || store.saving ? 'true' : 'false'">
-    <header class="node-workflow-heading">
-      <div>
-        <span class="section-kicker">{{ t('workflow.kicker') }}</span>
-        <h2 id="node-workflow-title">{{ t('workflow.title') }} <span class="mvp-badge">{{ t('workflow.audioBranch') }}</span></h2>
-        <p>{{ t('workflow.intro') }}</p>
-      </div>
-      <div class="node-workflow-actions">
-        <button class="secondary-button" type="button" :disabled="!!store.activeRun" @click="historyOpen = !historyOpen">{{ historyOpen ? t('workflow.collapseHistory') : t('workflow.historyCount', { count: numberLabel(store.history.length) }) }}</button>
-      </div>
-    </header>
-
-    <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
-    <div v-if="store.notice" class="workflow-notice" role="status">{{ store.notice }}</div>
-        <div v-if="discardPrompt" class="workflow-discard" role="alertdialog" aria-labelledby="discard-title"><div><strong id="discard-title">{{ t('workflow.discardTitle') }}</strong><p>{{ t('workflow.discardDescription') }}</p></div><div><button class="secondary-button" type="button" @click="discardPrompt = false">{{ t('workflow.continueEditing') }}</button><button class="primary-button" type="button" @click="discardAndClose">{{ t('workflow.discardChanges') }}</button></div></div>
-
-    <div v-if="store.loading" class="workflow-loading" role="status">{{ t('workflow.loading') }}</div>
-    <template v-else>
-      <div class="workflow-mode-note"><span class="mode-dot" aria-hidden="true"></span><strong>{{ t('workflow.asrTextOutput') }}</strong><span>{{ t('workflow.boundAudioHelp', { name: inputAudioName }) }}</span></div>
-      <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
-        <button v-for="kind in nodeKinds" :key="kind.type" class="secondary-button compact-button" type="button" :disabled="controlsLocked || (kind.isSource && !!currentInput) || store.draft.nodes.length >= (registry?.capabilities.constraints.maxNodes || 0) || (kind.maxInstances !== null && store.draft.nodes.filter((node) => node.type === kind.type).length >= kind.maxInstances)" @click="store.addNode(kind.type)">＋ {{ kind.addLabel }}</button>
-        <span class="toolbar-rule" aria-hidden="true"></span>
-        <span class="toolbar-spacer"></span>
+    <h2 id="node-workflow-title" class="visually-hidden">{{ t('workflow.title') }}</h2>
+    <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
+      <div class="workflow-workspace-header"><slot name="workspace-header" /></div>
+      <div class="workflow-toolbar-actions">
+        <button class="secondary-button compact-button" type="button" data-add-node :disabled="controlsLocked || store.loading" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
+        <span class="workflow-save-state" role="status">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= minZoom" @click="setZoom(store.zoom - .1)">−</button>
         <span class="zoom-value" aria-live="polite">{{ percentLabel(store.zoom) }}</span>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomIn')" :disabled="store.zoom >= 1.8" @click="setZoom(store.zoom + .1)">+</button>
         <button class="secondary-button compact-button" type="button" @click="fitCanvas">{{ t('workflow.fit') }}</button>
         <button class="secondary-button compact-button" type="button" @click="store.pan = { x: 0, y: 0 }">{{ t('workflow.resetView') }}</button>
+        <button v-for="panel in (['run', 'artifacts', 'logs'] as const)" :key="panel" class="secondary-button compact-button" type="button" :data-open-panel="panel" :aria-expanded="activePanel === panel" @click="activePanel = panel">{{ t(`workflow.${panel === 'run' ? 'panelRun' : panel === 'artifacts' ? 'panelArtifacts' : 'panelLogs'}`) }}</button>
       </div>
+    </div>
+    <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
+    <div v-if="store.notice" class="workflow-notice" role="status">{{ store.notice }}</div>
+    <CanvasDialog :open="discardPrompt" :title="t('workflow.discardTitle')" @close="discardPrompt = false">
+      <div class="workflow-discard"><p>{{ t('workflow.discardDescription') }}</p><div><button class="secondary-button" type="button" @click="discardPrompt = false">{{ t('workflow.continueEditing') }}</button><button class="primary-button" type="button" @click="discardAndClose">{{ t('workflow.discardChanges') }}</button></div></div>
+    </CanvasDialog>
 
+    <div v-if="store.loading" class="workflow-loading" role="status">{{ t('workflow.loading') }}</div>
+    <template v-else>
       <div class="workflow-main">
-        <div ref="canvas" class="workflow-canvas" :style="gridStyle" @wheel="onWheel">
+        <div ref="canvas" class="workflow-canvas" :style="gridStyle" @wheel="onWheel" @contextmenu="canvasContextMenu">
           <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
-            <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" :aria-label="t('workflow.canvasAria')" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
+            <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" tabindex="0" :aria-label="t('workflow.canvasAria')" @keydown="canvasKeyboard" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
 
               <g class="workflow-content" :transform="`translate(${store.pan.x} ${store.pan.y}) scale(${store.zoom})`">
               <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
@@ -667,51 +675,20 @@ onUnmounted(() => {
           <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong><span>{{ t('workflow.emptyCanvasHelp') }}</span></div>
         </div>
 
-        <aside class="workflow-inspector" :class="selected ? `is-${selected.type}` : 'is-empty'" aria-labelledby="workflow-inspector-title">
-          <div class="inspector-topline"><span class="section-kicker">{{ t('workflow.inspectorKicker') }}</span><span class="workflow-dirty-state">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span></div>
-          <div class="inspector-title">
-            <span class="inspector-node-kind">{{ selected ? nodeKicker(selected) : t('workflow.selectNode') }}</span>
-            <h3 id="workflow-inspector-title">{{ selected ? nodeLabel(selected) : t('workflow.selectNode') }}</h3>
-            <code v-if="selected" class="inspector-type-id">{{ selected.type }}</code>
-          </div>
-          <template v-if="selected">
-            <p class="inspector-type">{{ nodeDescription(selected) }}</p>
-            <div class="workflow-field"><span>{{ t('workflow.nodeId') }}</span><code>{{ selected.id }}</code></div>
-            <p class="inspector-help">{{ t('workflow.inlineEditHelp') }}</p>
-            <div class="inspector-actions">
-              <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
-            </div>
-            <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: inputAudioName }) }}</p>
-          </template>
-          <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>{{ t('workflow.inspectorEmpty') }}</p></div>
-          <dl class="workflow-inspector-meta"><div><dt>{{ t('workflow.workflowVersion') }}</dt><dd>{{ numberLabel(store.document?.workflow_revision) }}</dd></div><div><dt>{{ t('workflow.documentRevision') }}</dt><dd>{{ numberLabel(store.document?.revision) }}</dd></div><div><dt>{{ t('workflow.inputAudio') }}</dt><dd>{{ inputAudioName }}</dd></div><div><dt>{{ t('workflow.historyAudio') }}</dt><dd>{{ props.audioName }}</dd></div></dl>
-        </aside>
       </div>
 
       <ul v-if="store.validationIssues.length" class="workflow-issues" aria-live="polite"><li v-for="(issue, index) in store.validationIssues" :key="`${issue.code}-${index}`"><button type="button" :disabled="!issue.node_id" @click="issue.node_id && (store.selectNode(issue.node_id), focusNode(store.draft.nodes.find((node) => node.id === issue.node_id)!))">{{ issue.node_id ? t('workflow.nodeReference', { id: issue.node_id }) : t('workflow.workflow') }}</button><span>{{ workflowIssueLabel(issue) }}</span></li></ul>
 
-      <section class="workflow-run-panel" aria-labelledby="workflow-run-title">
-        <div class="workflow-run-heading"><div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3 id="workflow-run-title">{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div><div class="workflow-run-actions"><button v-if="store.activeRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelWorkflow">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button><button v-else class="primary-button" type="button" :disabled="!canRun" @click="runWorkflow">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button></div></div>
-        <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ runStatusLabel(store.run?.status) }}</span><span v-if="store.run">{{ t('workflow.runSummary', { id: store.run.id, version: numberLabel(store.run.workflow_revision), date: dateLabel(store.run.created_at), snapshot: store.runMatchesDraft ? t('workflow.snapshotMatches') : t('workflow.snapshotHistorical') }) }}</span><span v-else>{{ t('workflow.noRuns') }}</span></div>
-        <div v-if="store.runLoading" class="workflow-loading small" role="status">{{ t('workflow.loadingRun') }}</div>
-        <div v-else-if="store.runError" class="workflow-run-error" role="alert">{{ store.runError }}</div>
-        <p v-if="store.run?.error" class="workflow-run-error" role="alert">{{ workflowErrorLabel(store.run.error) }}</p>
-        <div v-if="store.run" class="workflow-run-nodes">
-          <article v-for="node in store.run.nodes" :key="node.node_id" class="workflow-run-node">
-            <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ nodeStatusLabel(node.status) }}</span></div>
-            <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>
-            <p v-else-if="node.artifact">{{ t('workflow.snapshotArtifact', { port: node.artifact.port.toUpperCase(), type: node.artifact.media_type, size: sizeLabel(node.artifact.size_bytes) }) }}</p>
-            <p v-else>{{ t('workflow.noNodeArtifact') }}</p>
-            <template v-if="node.artifact && node.status === 'completed' && !registry?.kind(node.node_type)?.preview">
-              <p class="workflow-output-state" :class="`is-${outputCheckState(node.node_id)}`">{{ outputCheckState(node.node_id) === 'checking' ? t('workflow.artifactChecking') : outputCheckState(node.node_id) === 'missing' ? t('workflow.artifactMissing') : outputCheckState(node.node_id) === 'failed' ? t('workflow.artifactCheckFailed') : t('workflow.artifactAvailable') }}</p>
-              <button v-if="canDownloadOutput(node.node_id)" class="secondary-button compact-button" type="button" @click="download(node.node_id)">{{ t('workflow.download', { filename: node.artifact?.filename || '' }) }}</button>
-              <button v-else-if="outputCheckState(node.node_id) === 'failed'" class="secondary-button compact-button" type="button" @click="retryOutputChecks">{{ t('workflow.retryChecks') }}</button>
-            </template>
-          </article>
-        </div>
-        <div v-if="historyOpen" class="workflow-history"><div class="workflow-history-heading"><h4>{{ t('workflow.history') }}</h4><button class="text-button" type="button" :disabled="store.historyLoading" @click="store.loadHistory()">{{ store.historyLoading ? t('workflow.refreshing') : t('workflow.refresh') }}</button></div><p v-if="store.historyError" class="workflow-run-error" role="alert">{{ store.historyError }}</p><div v-if="!store.history.length && !store.historyLoading" class="workflow-history-empty">{{ t('workflow.historyEmpty') }}</div><button v-for="item in store.history" :key="item.id" class="workflow-history-row" :class="{ 'is-active': store.run?.id === item.id }" type="button" :disabled="store.runLoading || !!store.activeRun" @click="selectHistory(item.id)"><span><strong>{{ item.id }}</strong><small>{{ dateLabel(item.created_at) }} · {{ t('workflow.version', { version: numberLabel(item.workflow_revision) }) }}</small></span><span class="run-status" :class="`is-${item.status}`">{{ runStatusLabel(item.status) }}</span></button></div>
-      </section>
     </template>
 
+    <div v-if="contextMenu" ref="menuElement" class="canvas-context-menu" role="menu" tabindex="-1" :aria-label="t('workflow.canvasMenu')" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @pointerdown.stop @contextmenu.prevent @keydown="menuKey">
+      <template v-if="!contextMenu.nodeId">
+        <label class="canvas-node-search"><span class="visually-hidden">{{ t('workflow.searchNodes') }}</span><input v-model="menuSearch" type="search" @contextmenu.stop :placeholder="t('workflow.searchNodes')" :aria-label="t('workflow.searchNodes')" /></label>
+        <button v-for="entry in filteredKinds" :key="entry.type" role="menuitem" type="button" :data-add-kind="entry.type" :disabled="!!addDisabledReason(entry.type)" :title="addDisabledReason(entry.type) || entry.label" @click="addFromMenu(entry.type)"><span>＋ {{ entry.addLabel }}</span><small v-if="addDisabledReason(entry.type)">{{ addDisabledReason(entry.type) }}</small></button>
+        <p v-if="!filteredKinds.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
+      </template>
+      <button v-else role="menuitem" type="button" data-delete-node :disabled="controlsLocked || registry?.kind(store.selectedNode?.type || '')?.removable === false" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
+    </div>
+    <WorkflowPanels :panel="activePanel" @close="activePanel = null" />
   </section>
 </template>
