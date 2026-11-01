@@ -774,6 +774,21 @@ describe('workflow editor interactions', () => {
     expect(store.draft.edges.filter((item) => item.target === first.id)).toHaveLength(1)
   })
 
+  it('keeps a source connection active when its port receives pointerup', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    const sourcePort = root!.querySelector<SVGCircleElement>('.workflow-node.is-audio_input .node-port-out')!
+    sourcePort.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    sourcePort.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    sourcePort.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    await settle()
+
+    expect(store.error).toBe('')
+    expect(root!.querySelector('.connection-hint')).not.toBeNull()
+    expect(store.draft.edges).toEqual([edge])
+  })
+
   it('removes a preprocess and its incident edges without touching unrelated branches', async () => {
     setup()
     await settle()

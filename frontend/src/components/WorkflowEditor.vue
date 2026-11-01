@@ -23,7 +23,6 @@ const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
 const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
 const connectFrom = ref<string | null>(null)
-const pointerTarget = ref<string | null>(null)
 const settingsOpen = ref(false)
 const historyOpen = ref(false)
 const discardPrompt = ref(false)
@@ -141,7 +140,8 @@ function removeSelected() {
 
 function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
   if (store.activeRun) return
-  if ((event.target as Element).closest('button')) return
+  const target = event.target as Element
+  if (target.closest('button') || target.closest('.node-port')) return
   event.preventDefault()
   const point = canvasPoint(event)
   drag.value = { nodeId: node.id, startX: point.x, startY: point.y, x: node.position.x, y: node.position.y }
@@ -169,11 +169,12 @@ function onPointerMove(event: PointerEvent) {
 }
 
 function onPointerUp(event: PointerEvent) {
-  if (connectFrom.value && pointerTarget.value) store.connect(connectFrom.value, pointerTarget.value)
+  const target = event.target as Element | null
+  if (connectFrom.value && (event.type === 'pointercancel' || !target?.closest('.node-port'))) {
+    connectFrom.value = null
+  }
   drag.value = null
   panning.value = null
-  connectFrom.value = null
-  pointerTarget.value = null
   if (stage.value?.hasPointerCapture?.(event.pointerId)) stage.value.releasePointerCapture(event.pointerId)
 }
 
@@ -469,9 +470,9 @@ onUnmounted(() => {
                 <text class="node-kicker" x="22" y="27">{{ nodeKicker(node) }}</text>
                 <text class="node-name" x="22" y="52">{{ nodeLabel(node) }}</text>
                 <text class="node-meta" x="22" y="72">{{ nodeMeta(node) }}</text>
-                <rect :width="nodeWidth" :height="nodeHeight" fill="transparent" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" />
-                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="nodeHeight / 2" r="7" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" @click.stop="!controlsLocked && finishConnection(node)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label" x="12" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ inputPortForNode(node.type) }}</text>
-                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="nodeHeight / 2" r="7" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerenter="pointerTarget = node.id" @pointerleave="pointerTarget = null" @click.stop="!controlsLocked && startConnection(node)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label" :x="nodeWidth - 12" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ outputPortForNode(node.type) }}</text>
+                <rect :width="nodeWidth" :height="nodeHeight" fill="transparent" />
+                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="nodeHeight / 2" r="7" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @click.stop="!controlsLocked && finishConnection(node)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label" x="12" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ inputPortForNode(node.type) }}</text>
+                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth" :cy="nodeHeight / 2" r="7" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @click.stop="!controlsLocked && startConnection(node)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label" :x="nodeWidth - 12" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ outputPortForNode(node.type) }}</text>
                 <text v-if="nodeIssue(node)" class="node-error-mark" x="176" y="24" aria-hidden="true">!</text>
               </g>
             </svg>
