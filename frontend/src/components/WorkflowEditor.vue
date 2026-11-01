@@ -514,14 +514,20 @@ onUnmounted(() => {
           <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong><span>{{ t('workflow.emptyCanvasHelp') }}</span></div>
         </div>
 
-        <aside class="workflow-inspector" aria-labelledby="workflow-inspector-title">
+        <aside class="workflow-inspector" :class="selected ? `is-${selected.type}` : 'is-empty'" aria-labelledby="workflow-inspector-title">
           <div class="inspector-topline"><span class="section-kicker">{{ t('workflow.inspectorKicker') }}</span><span class="workflow-dirty-state">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span></div>
-          <h3 id="workflow-inspector-title">{{ selected ? nodeLabel(selected) : t('workflow.selectNode') }}</h3>
+          <div class="inspector-title">
+            <span class="inspector-node-kind">{{ selected ? nodeKicker(selected) : t('workflow.selectNode') }}</span>
+            <h3 id="workflow-inspector-title">{{ selected ? nodeLabel(selected) : t('workflow.selectNode') }}</h3>
+            <code v-if="selected" class="inspector-type-id">{{ selected.type }}</code>
+          </div>
           <template v-if="selected">
             <p class="inspector-type">{{ nodeDescription(selected) }}</p>
             <div class="workflow-field"><span>{{ t('workflow.nodeId') }}</span><code>{{ selected.id }}</code></div>
-            <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">{{ t('workflow.editSettings') }}</button>
-            <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
+            <div class="inspector-actions">
+              <button class="primary-button inspector-edit" type="button" :disabled="controlsLocked" @click="openNode(selected)">{{ t('workflow.editSettings') }}</button>
+              <button v-if="selectedKind?.removable" class="text-button inspector-delete" type="button" :disabled="controlsLocked" @click="removeSelected">{{ deleteLabel() }}</button>
+            </div>
             <p v-if="selectedKind?.isSource" class="inspector-help">{{ t('workflow.inputHelp', { name: props.audioName }) }}</p>
           </template>
           <div v-else class="inspector-empty"><span aria-hidden="true">↖</span><p>{{ t('workflow.inspectorEmpty') }}</p></div>

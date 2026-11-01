@@ -688,6 +688,15 @@ describe('workflow editor interactions', () => {
     expect(root!.querySelector('.node-accent')).toBeNull()
   })
 
+  it('renders the inspector as a compact node property rail', async () => {
+    setup()
+    await settle()
+
+    expect(root!.querySelector('.workflow-inspector.is-audio_input')).not.toBeNull()
+    expect(root!.querySelector('.inspector-type-id')?.textContent).toBe('audio_input')
+    expect(root!.querySelector('.inspector-actions')).not.toBeNull()
+  })
+
   it('adds an output, edits its filename, validates and saves the expected payload', async () => {
     setup()
     await settle()
