@@ -747,46 +747,38 @@ describe('workflow editor interactions', () => {
     const store = useWorkflowStore()
     const first = store.draft.nodes.filter((item) => item.type === 'preprocess')[0]
     const second = store.draft.nodes.filter((item) => item.type === 'preprocess')[1]
-    store.selectNode(first.id); await settle()
-    button('连线模式')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    const dragConnection = (source: SVGCircleElement, target: SVGCircleElement) => {
+      source.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+      target.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    }
     const inputRight = root!.querySelector<SVGCircleElement>('.workflow-node.is-audio_input .node-port-out')!
-    inputRight.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(0, 'in').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(0, 'in').dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); await settle()
+    dragConnection(inputRight, port(0, 'in')); await settle()
     expect(store.draft.edges.some((item) => item.source === 'input' && item.target === first.id)).toBe(true)
-    store.selectNode(first.id); await settle()
-    button('连线模式')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(0, 'out').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(1, 'in').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(1, 'in').dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); await settle()
+    dragConnection(port(0, 'out'), port(1, 'in')); await settle()
     expect(store.draft.edges.some((item) => item.source === first.id && item.target === second.id)).toBe(true)
-    store.selectNode(second.id); await settle()
-    button('连线模式')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    outputPort('in').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    outputPort('in').dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); await settle()
+    dragConnection(port(1, 'out'), outputPort('in')); await settle()
     expect(store.draft.edges.filter((item) => item.target === 'output')).toEqual([expect.objectContaining({ source: second.id })])
-    store.selectNode(second.id); await settle()
-    button('连线模式')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(0, 'in').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
-    port(0, 'in').dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); await settle()
+    dragConnection(port(1, 'out'), port(0, 'in')); await settle()
     expect(store.error).toContain('循环')
     expect(store.draft.edges.some((item) => item.source === second.id && item.target === first.id)).toBe(false)
     expect(store.draft.edges.filter((item) => item.target === first.id)).toHaveLength(1)
   })
 
-  it('keeps a source connection active when its port receives pointerup', async () => {
+  it('shows a preview while dragging from a source port and cancels on blank release', async () => {
     setup()
     await settle()
     const store = useWorkflowStore()
     const sourcePort = root!.querySelector<SVGCircleElement>('.workflow-node.is-audio_input .node-port-out')!
     sourcePort.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
-    sourcePort.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    sourcePort.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    root!.querySelector<SVGElement>('.workflow-svg')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 320, clientY: 160 }))
     await settle()
 
     expect(store.error).toBe('')
-    expect(root!.querySelector('.connection-hint')).not.toBeNull()
+    expect(root!.querySelector('.workflow-edge-preview')).not.toBeNull()
     expect(store.draft.edges).toEqual([edge])
+    root!.querySelector<SVGElement>('.workflow-svg')!.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    await settle()
+    expect(root!.querySelector('.workflow-edge-preview')).toBeNull()
   })
 
   it('removes a preprocess and its incident edges without touching unrelated branches', async () => {
