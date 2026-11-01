@@ -8,8 +8,8 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 
 ## Current Features
 
-- Simplified Chinese / English interface switching, browser language detection, and saved preferences. Switching preserves upload queues, form values, and workflow drafts.
-- Paginated projects, multi-audio upload queues, and per-file retries. Creating a project requires explicit source and target languages; uploading does not start a run.
+- Simplified Chinese / English interface switching, browser language detection, and saved preferences. Switching preserves form values, node upload state, and workflow drafts.
+- Paginated projects and name-only empty project creation. Select or upload audio and provide its source language in the audio input node; failed uploads can be retried and do not start a run.
 - A project-level workflow canvas with independent node settings, typed-port validation, saved revisions, and conflict detection. The backend capability API supplies the node catalog and settings.
 - A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
 - Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.

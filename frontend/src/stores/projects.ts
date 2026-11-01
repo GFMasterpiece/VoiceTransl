@@ -109,7 +109,7 @@ export const useProjectsStore = defineStore('projects', () => {
     else if (total.value > offset.value + projects.value.length) await fetchProjects(offset.value)
   }
 
-  async function createEmptyProject(name: string, sourceLanguage: string, targetLanguage: string) {
+  async function createEmptyProject(name: string, sourceLanguage?: string, targetLanguage?: string) {
     ++fetchGeneration
     creating.value = true
     error.value = ''
@@ -117,7 +117,7 @@ export const useProjectsStore = defineStore('projects', () => {
       const response = await fetch(`${API_BASE_URL}/projects/empty`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), source_language: sourceLanguage, target_language: targetLanguage }),
+        body: JSON.stringify({ name: name.trim(), ...(sourceLanguage !== undefined ? { source_language: sourceLanguage } : {}), ...(targetLanguage !== undefined ? { target_language: targetLanguage } : {}) }),
       })
       if (!response.ok) throw await parseApiError(response)
       const payload = await response.json() as { project: Project; job: null }

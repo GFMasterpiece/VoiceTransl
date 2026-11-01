@@ -41,30 +41,41 @@ afterEach(() => {
 describe('projects store', () => {
   it('creates an empty project through JSON and refreshes the authoritative project page', async () => {
     setActivePinia(createPinia())
-    const empty = { ...project, source: null, audios: [], source_language: 'xx-CUSTOM', target_language: 'zh-CN' }
+    const empty = { ...project, source: null, audios: [], source_language: null, target_language: null }
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(jsonResponse(init?.method === 'POST'
       ? { project: empty, job: null }
       : { items: [empty], total: 1, limit: 20, offset: 0 })))
     vi.stubGlobal('fetch', fetchMock)
     const store = useProjectsStore()
-    await expect(store.createEmptyProject('  Empty canvas  ', 'xx-CUSTOM', 'zh-CN')).resolves.toEqual(empty)
+    await expect(store.createEmptyProject('  Empty canvas  ')).resolves.toEqual(empty)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/v1/projects/empty')
     expect(init.method).toBe('POST')
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'Empty canvas', source_language: 'xx-CUSTOM', target_language: 'zh-CN' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Empty canvas' })
     expect(store.projects).toEqual([empty])
     expect(store.total).toBe(1)
     expect(store.creating).toBe(false)
   })
 
+  it('preserves explicitly supplied legacy empty-project language fields for compatible callers', async () => {
+    setActivePinia(createPinia())
+    const empty = { ...project, source: null, audios: [], source_language: 'xx-CUSTOM', target_language: 'zh-CN' }
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(jsonResponse(init?.method === 'POST'
+      ? { project: empty, job: null }
+      : { items: [empty], total: 1, limit: 20, offset: 0 })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(useProjectsStore().createEmptyProject('Legacy caller', 'xx-CUSTOM', 'zh-CN')).resolves.toEqual(empty)
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({ name: 'Legacy caller', source_language: 'xx-CUSTOM', target_language: 'zh-CN' })
+  })
+
   it('keeps backend empty-project validation errors visible and leaves existing data intact', async () => {
     setActivePinia(createPinia())
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { message: '语言配置无效' } }, 422)))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: { message: '项目名称无效' } }, 422)))
     const store = useProjectsStore()
     store.projects = [project]
-    await expect(store.createEmptyProject('Empty', 'ja', 'ja')).rejects.toThrow('语言配置无效')
-    expect(store.error).toBe('语言配置无效')
+    await expect(store.createEmptyProject('Empty')).rejects.toThrow('项目名称无效')
+    expect(store.error).toBe('项目名称无效')
     expect(store.projects).toEqual([project])
     expect(store.creating).toBe(false)
   })

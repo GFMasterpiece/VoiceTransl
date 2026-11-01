@@ -857,6 +857,48 @@ describe('catalog resources and preview workflows', () => {
   }
   const project = { id: 'p1', name: 'Empty', created_at: '', updated_at: '', source: null, source_language: 'ja', target_language: 'en', audios: [] }
 
+  it('requires a source language in the input node for a name-only project and preserves the explicit value across interface changes', async () => {
+    const newProject = { ...project, source_language: null, target_language: null }
+    setup((path, init) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.endsWith('/audios') && init?.method === 'POST') return Promise.resolve(response({ audio: { id: 'new-audio', source: { original_name: 'new.wav', language: 'xx-CUSTOM', size_bytes: 4 } } }, 201))
+      return undefined
+    }, createPinia(), { audioId: null, project: newProject, audios: [] })
+    await settle()
+    const language = node('audio_input').querySelector<HTMLInputElement>('[data-resource-language]')!
+    expect(language.value).toBe('')
+    const file = node('audio_input').querySelector<HTMLInputElement>('input[type=file]')!
+    Object.defineProperty(file, 'files', { configurable: true, value: [new File(['RIFF'], 'new.wav')] })
+    file.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(node('audio_input').textContent).toContain('请选择或输入源语言')
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/audios') && (init as RequestInit)?.method === 'POST')).toBe(false)
+    language.value = 'xx-CUSTOM'; language.dispatchEvent(new Event('input', { bubbles: true }))
+    setLocale('en'); await settle()
+    expect(language.value).toBe('xx-CUSTOM')
+    expect(newProject.source_language).toBeNull()
+    expect(newProject.target_language).toBeNull()
+    node('audio_input').querySelectorAll<HTMLButtonElement>('button')[1]!.click(); await settle()
+    const uploads = fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/audios') && (init as RequestInit)?.method === 'POST')
+    expect(uploads).toHaveLength(1)
+    expect(((uploads[0]![1] as RequestInit).body as FormData).get('source_language')).toBe('xx-CUSTOM')
+    expect(((uploads[0]![1] as RequestInit).body as FormData).has('target_language')).toBe(false)
+    expect(useWorkflowStore().boundAudioId).toBe('new-audio')
+  })
+
+  it('prefills a legacy project source language without changing its persisted metadata', async () => {
+    const legacy = { ...project, source_language: null, source: { original_name: 'legacy.wav', language: 'ko', size_bytes: 4 } }
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog())) : path.endsWith('/upload-policy') ? Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 })) : undefined, createPinia(), { audioId: null, project: legacy, audios: [] })
+    await settle()
+    const language = node('audio_input').querySelector<HTMLInputElement>('[data-resource-language]')!
+    expect(language.value).toBe('ko')
+    language.value = 'en'; language.dispatchEvent(new Event('input', { bubbles: true }))
+    setLocale('en'); await settle()
+    expect(language.value).toBe('en')
+    expect(legacy.source_language).toBeNull()
+    expect(legacy.source.language).toBe('ko')
+  })
+
   it('loads and saves an empty-audio project graph without requesting empty history routes', async () => {
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog())) : path.endsWith('/upload-policy') ? Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 })) : undefined, createPinia(), { audioId: null, project, audios: [] })
     await settle()
@@ -925,6 +967,9 @@ describe('catalog resources and preview workflows', () => {
     file.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     expect(store.resourceUploading).toBe(true)
     expect(node('audio_input').querySelector('progress')).not.toBeNull()
+    const unload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
     expect(app!._instance!.exposed!.requestClose(vi.fn())).toBe('blocked')
     expect(await store.setAudioContext('other')).toBe(false)
     const calls = fetchMock.mock.calls.length

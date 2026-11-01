@@ -275,8 +275,8 @@ async def delete_provider_profile(profile_id: str, request: Request):
 
 class EmptyProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    source_language: str
-    target_language: str
+    source_language: str | None = None
+    target_language: str | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -286,9 +286,17 @@ class EmptyProjectRequest(BaseModel):
 
 @router.post("/projects/empty", status_code=201, response_model=CreateProjectResponse)
 async def create_empty_project(body: EmptyProjectRequest, request: Request):
-    source = _language_form("source_language", body.source_language)
-    target = _language_form("target_language", body.target_language)
-    if source.casefold() == target.casefold():
+    source = (
+        _language_form("source_language", body.source_language)
+        if body.source_language is not None
+        else None
+    )
+    target = (
+        _language_form("target_language", body.target_language)
+        if body.target_language is not None
+        else None
+    )
+    if source is not None and target is not None and source.casefold() == target.casefold():
         raise _language_error("target_language", "source_language 和 target_language 不能相同")
     project = Project(
         id="prj_" + uuid4().hex, name=body.name, source_language=source, target_language=target

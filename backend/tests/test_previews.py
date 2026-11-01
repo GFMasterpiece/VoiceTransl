@@ -117,11 +117,10 @@ async def test_empty_upload_binding_preview_persistence(tmp_path, text):
     "body",
     [
         dict(name="x", source_language="ja", target_language="JA"),
-        dict(name="x", source_language="ja"),
         dict(name="x", source_language=" ", target_language="zh"),
     ],
 )
-async def test_empty_languages_required(tmp_path, body):
+async def test_empty_optional_languages_validate_supplied_values(tmp_path, body):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         assert (await c.post("/api/v1/projects/empty", json=body)).status_code == 422

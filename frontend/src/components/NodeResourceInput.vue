@@ -5,9 +5,9 @@ import { t, message, messageRef } from '../i18n'
 import type { Audio } from '../stores/projects'
 import { fileExtension, type UploadPolicy } from '../composables/useUploadQueue'
 
-const props = defineProps<{ projectId: string; audios: readonly Audio[]; value: unknown; sourceLanguage: string; resourceType: string; locked: boolean }>()
+const props = defineProps<{ projectId: string; audios: readonly Audio[]; value: unknown; sourceLanguage?: string | null; resourceType: string; locked: boolean }>()
 const emit = defineEmits<{ bind: [id: string | null]; uploaded: [audio: Audio]; busy: [value: boolean] }>()
-const language = ref(props.sourceLanguage)
+const language = ref(props.sourceLanguage || '')
 const fileInput = ref<HTMLInputElement | null>(null)
 const pending = ref<File | null>(null)
 const uploading = ref(false)
@@ -77,7 +77,7 @@ onUnmounted(() => { alive = false; controller.abort(); emit('busy', false) })
     <p v-if="resourceType !== 'audio'" role="alert">{{ t('workflow.resourceUnsupported', { type: resourceType }) }}</p>
     <template v-else>
       <label><span>{{ t('workflow.resourceChoose') }}</span><select data-resource="audio" :value="value || ''" :disabled="locked" @change="!locked && emit('bind', ($event.target as HTMLSelectElement).value || null)"><option value="">{{ t('workflow.resourceContext') }}</option><option v-for="audio in audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option><option v-if="value && !audios.some((audio) => audio.id === value)" :value="String(value)">{{ t('workflow.resourceMissing') }}</option></select></label>
-      <label><span>{{ t('app.create.source') }}</span><input :value="language" @input="!locked && (language = ($event.target as HTMLInputElement).value)" data-resource-language type="text" :disabled="locked" autocomplete="off" /></label>
+      <label><span>{{ t('app.create.source') }}</span><input :value="language" @input="!locked && (language = ($event.target as HTMLInputElement).value)" data-resource-language type="text" :disabled="locked" :placeholder="t('app.create.sourcePlaceholder')" autocomplete="off" /></label>
       <button class="node-resource-upload" type="button" :disabled="locked || !policy" @click="fileInput?.click()">{{ t('workflow.resourceUpload') }}</button>
       <input ref="fileInput" class="visually-hidden" type="file" :accept="policy?.allowed_extensions.map((extension) => `.${extension}`).join(',')" :disabled="locked || !policy" :aria-label="t('workflow.resourceFile')" @change="choose" />
       <small>{{ t('workflow.resourceDrop') }}</small>
