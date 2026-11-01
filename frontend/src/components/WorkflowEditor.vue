@@ -502,8 +502,8 @@ onUnmounted(() => {
                 <rect class="node-card" :width="nodeWidth" :height="nodeHeight" rx="14" />
                 <path class="node-header" d="M 14 0 H 174 Q 188 0 188 14 V 30 H 0 V 14 Q 0 0 14 0 Z" />
                 <text class="node-name" x="14" y="20">{{ nodeLabel(node) }}</text>
-                <text class="node-kicker" x="14" y="48">{{ nodeKicker(node) }}</text>
-                <text class="node-meta" x="14" y="70">{{ nodeMeta(node) }}</text>
+                <text class="node-meta" x="14" y="56">{{ nodeMeta(node) }}</text>
+                <text class="node-kicker" x="14" y="78">{{ nodeKicker(node) }}</text>
                 <rect class="node-outline" :width="nodeWidth" :height="nodeHeight" rx="14" />
                 <rect :width="nodeWidth" :height="nodeHeight" fill="transparent" />
                 <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="nodeHeight / 2" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop @pointerup.stop="!controlsLocked && finishConnection(node, $event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" x="9" :y="nodeHeight / 2 + 3" aria-hidden="true">{{ inputPortForNode(node.type) }}</text>
