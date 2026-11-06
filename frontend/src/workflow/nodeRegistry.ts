@@ -56,7 +56,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     get addLabel() { return present(`workflow.node_${entry.type}_add`, entry.addLabel) },
     fields: entry.fields.map((field) => ({
       ...field,
-      get label() { return present(`workflow.field_${entry.configKind}_${field.key}`, field.label) },
+      get label() { return present(`workflow.field_${entry.type}_${field.key}`, present(`workflow.field_${entry.configKind}_${field.key}`, field.label)) },
       options: field.options.map((option) => ({
         ...option,
         get label() { return present(`workflow.option_${entry.configKind}_${field.key}_${option.value}`, option.label) },

@@ -4,8 +4,17 @@ import math
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from . import node_registry as _nodes
 from .node_config import (
@@ -184,10 +193,35 @@ class WorkflowPreview(BaseModel):
     media_type: str
 
 
+class WorkflowParameterSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["config", "connection"]
+    edge_id: str | None = None
+    source_node_id: str | None = None
+    source_port: str | None = None
+    target_port: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_origin(self, handler):
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+    @model_validator(mode="after")
+    def validate_origin(self):
+        endpoints = (self.edge_id, self.source_node_id, self.source_port, self.target_port)
+        if self.kind == "connection" and not all(endpoints):
+            raise ValueError("connection parameter origin requires complete endpoints")
+        if self.kind == "config" and any(value is not None for value in endpoints):
+            raise ValueError("config parameter origin cannot contain connection endpoints")
+        return self
+
+
 class WorkflowNodeRecord(BaseModel):
     node_id: str
     node_type: str
     config: dict[str, object] = Field(default_factory=dict)
+    parameter_sources: dict[str, WorkflowParameterSource] | None = None
+    effective_config: dict[str, object] | None = None
     status: WorkflowNodeStatus = WorkflowNodeStatus.PENDING
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -313,6 +347,31 @@ def workflow_snapshot(document: WorkflowDocument) -> WorkflowSnapshot:
     )
 
 
+def workflow_parameter_sources(
+    node: WorkflowNode, edges: list[WorkflowEdge]
+) -> dict[str, WorkflowParameterSource]:
+    """Freeze parameter origins from this run's graph, never the editable graph."""
+    definition = _nodes.NODE_DEFINITIONS.get(node.type)
+    if definition is None:
+        return {}
+    incoming = {edge.target_port: edge for edge in edges if edge.target == node.id}
+    origins = {}
+    for item in definition.fields:
+        edge = incoming.get(item.input_port) if item.input_port is not None else None
+        origins[item.key] = (
+            WorkflowParameterSource(
+                kind="connection",
+                edge_id=edge.id,
+                source_node_id=edge.source,
+                source_port=edge.source_port,
+                target_port=edge.target_port,
+            )
+            if edge is not None
+            else WorkflowParameterSource(kind="config")
+        )
+    return origins
+
+
 def _issue(
     code: str, message: str, *, node_id: str | None = None, edge_id: str | None = None
 ) -> WorkflowValidationIssue:
@@ -374,6 +433,7 @@ def validate_workflow_graph(
     node_by_id: dict[str, WorkflowNode] = {}
     input_nodes: list[WorkflowNode] = []
     explicit_sources: list[WorkflowNode] = []
+    parameter_sources: list[WorkflowNode] = []
     output_nodes: list[WorkflowNode] = []
     for node in nodes:
         if not NODE_ID_PATTERN.fullmatch(node.id):
@@ -402,6 +462,8 @@ def validate_workflow_graph(
         if definition.is_source:
             explicit_sources.append(node)
             input_nodes.append(node)
+        if definition.is_parameter_source:
+            parameter_sources.append(node)
         if definition.terminal:
             output_nodes.append(node)
         if definition.validate_config is not None:
@@ -530,7 +592,7 @@ def validate_workflow_graph(
                         node_id=node.id,
                     )
                 )
-    for node in input_nodes:
+    for node in [*input_nodes, *parameter_sources]:
         if node.id in outgoing and not outgoing[node.id]:
             issues.append(
                 _issue(
@@ -565,9 +627,8 @@ def validate_workflow_graph(
     if len(input_nodes) != 1 or not output_nodes or graph_has_cycle:
         return issues
 
-    input_id = input_nodes[0].id
     reachable_from_input: set[str] = set()
-    pending = [input_id]
+    pending = [node.id for node in [*input_nodes, *parameter_sources]]
     while pending:
         node_id = pending.pop()
         if node_id in reachable_from_input:
@@ -581,7 +642,7 @@ def validate_workflow_graph(
             issues.append(
                 _issue(
                     "UNREACHABLE_NODE",
-                    "节点必须从唯一源节点可达",
+                    "节点必须从音频源或参数源节点可达",
                     node_id=node.id,
                 )
             )

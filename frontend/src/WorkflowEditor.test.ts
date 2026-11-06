@@ -2197,6 +2197,126 @@ describe('workflow request isolation and polling', () => {
   })
 })
 
+describe('catalog-driven parameter connections', () => {
+  async function parameterNodes() {
+    const catalog = structuredClone(testCapabilities) as any
+    catalog.workflow.schema_version = '1.5'
+    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => ({ id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities] }))
+    for (const declaration of catalog.workflow.nodes) {
+      declaration.required_input_ports = [...declaration.input_ports]
+      declaration.is_parameter_source = false
+      for (const field of declaration.config.fields) field.input_port = null
+    }
+    for (const type of ['string', 'number', 'integer', 'boolean']) {
+      catalog.workflow.data_types.push({ id: type, label: type, parent_type_id: type === 'integer' ? 'number' : null, capabilities: [] })
+      catalog.workflow.ports.push({ id: type, type_id: type, label: type })
+      catalog.workflow.nodes.push({ type: `${type}_value`, label: type, input_ports: [], output_ports: [type], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { kind: 'object', fields: [{ key: 'value', label: 'value', type, default: type === 'string' ? 'en' : type === 'boolean' ? false : 2, input_port: null }] } })
+    }
+    for (const [type, key, port] of [['asr', 'language', 'language'], ['audio_output', 'filename_stem', 'filename_stem'], ['text_output', 'filename_stem', 'filename_stem'], ['text_output', 'format', 'text_format']]) {
+      if (!catalog.workflow.ports.some((entry: any) => entry.id === port)) catalog.workflow.ports.push({ id: port, type_id: 'string', label: port })
+      const declaration = catalog.workflow.nodes.find((entry: any) => entry.type === type)
+      declaration.input_ports.push(port)
+      declaration.config.fields.find((field: any) => field.key === key).input_port = port
+    }
+    catalog.workflow.ports.push({ id: 'count_parameter', type_id: 'number', label: 'Extension socket' })
+    const outputKind = catalog.workflow.nodes.find((entry: any) => entry.type === 'audio_output')
+    outputKind.input_ports.push('count_parameter')
+    outputKind.config.fields.push({ key: 'count', type: 'number', label: 'Extension count', default: 2, input_port: 'count_parameter' })
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.capabilitiesError).toBe('')
+    for (const type of ['string', 'integer', 'number', 'boolean']) store.addNode(`${type}_value`)
+    store.addNode('string_value')
+    store.addNode('asr')
+    await settle()
+    const source = store.draft.nodes.find((entry) => entry.type === 'string_value')!
+    const other = store.draft.nodes.filter((entry) => entry.type === 'string_value')[1]!
+    const target = store.draft.nodes.find((entry) => entry.type === 'asr')!
+    return { store, source, other, target }
+  }
+  function socket(id: string, port: string, direction: string) { return root!.querySelector<SVGElement>(`[data-node-id="${id}"] [data-port-direction="${direction}"][data-port-id="${port}"]`)! }
+  function pointer(target: EventTarget, type: string) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: 400, clientY: 250 })
+    Object.defineProperty(event, 'pointerId', { value: 7 }); target.dispatchEvent(event)
+  }
+
+  it('distinguishes parameter sockets by mapped field labels and logical types in both locales', async () => {
+    const { store, target } = await parameterNodes()
+    store.addNode('text_output'); await settle()
+    const text = store.draft.nodes.find((entry) => entry.type === 'text_output')!
+    const snapshot = JSON.stringify(store.draft)
+    for (const language of ['zh-CN', 'en']) {
+      setLocale(language); await settle()
+      for (const [id, port, fieldKey, typeId] of [
+        [text.id, 'filename_stem', 'filename_stem', 'string'],
+        [text.id, 'text_format', 'format', 'string'],
+        [target.id, 'language', 'language', 'string'],
+        ['output', 'count_parameter', 'count', 'number'],
+      ]) {
+        const definition = store.registry!.kind(store.draft.nodes.find((entry) => entry.id === id)!.type)!
+        const field = definition.fields.find((entry) => entry.key === fieldKey)!
+        const label = `${field.label} · ${t(`workflow.dataType_${typeId}`)} (${t('workflow.optionalPort')})`
+        const circle = socket(id, port, 'input')
+        expect(circle.parentElement!.querySelector('.node-port-label-in')!.childNodes[1].textContent).toBe(label)
+        expect(circle.parentElement!.querySelector('.node-port-label-in title')!.textContent).toBe(label)
+        expect(circle.getAttribute('aria-label')).toBe(t('workflow.inputPort', { port: `${label} · ${port}` }))
+        expect(circle.querySelector('title')!.textContent).toBe(circle.getAttribute('aria-label'))
+      }
+      expect(node('text_output').textContent).toContain(language === 'en' ? 'Format · String (optional)' : '格式 · 字符串 (可选)')
+      expect(node('audio_output').textContent).toContain(`Extension count · ${t('workflow.dataType_number')}`)
+      expect(JSON.stringify(store.draft)).toBe(snapshot)
+    }
+  })
+
+  it('drags parameter sockets, preserves fallback values on cancel, rewire and detach, and retains locale state', async () => {
+    const { store, source, other, target } = await parameterNodes()
+    expect(store.draft.nodes.filter((entry) => store.registry?.kind(entry.type)?.isSource)).toHaveLength(1)
+    expect(node('string_value').textContent).toContain('字符串值')
+    const control = () => node('asr').querySelector<HTMLInputElement>('[data-field="language"]')!
+    control().value = 'ja-JP'; control().dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    pointer(socket(source.id, 'string', 'output'), 'pointerdown')
+    pointer(socket(target.id, 'language', 'input'), 'pointerup'); await settle()
+    expect(control().disabled).toBe(true); expect(control().value).toBe('ja-JP')
+    expect(target.config.language).toBe('ja-JP')
+    expect(node('asr').textContent).toContain(`${source.id} · string`)
+    const before = JSON.stringify(store.draft)
+    for (const language of ['en', 'zh-CN']) {
+      setLocale(language); store.selectNode('input'); await settle()
+      expect(control().value).toBe('ja-JP'); expect(control().disabled).toBe(true)
+      expect(JSON.stringify(store.draft)).toBe(before)
+    }
+    pointer(socket(target.id, 'language', 'input'), 'pointerdown')
+    pointer(root!.querySelector('.workflow-svg')!, 'pointerup'); await settle()
+    expect(JSON.stringify(store.draft)).toBe(before)
+    expect(store.connect(other.id, target.id, 'string', 'language')).toBe(true); await settle()
+    expect(node('asr').textContent).toContain(`${other.id} · string`)
+    store.disconnect(store.draft.edges.find((edge) => edge.target === target.id)!.id); await settle()
+    expect(control().disabled).toBe(false); expect(control().value).toBe('ja-JP')
+    expect(target.config.language).toBe('ja-JP')
+    expect(store.draft.edges).toContainEqual(expect.objectContaining({ target: 'output', target_port: 'audio' }))
+  })
+
+  it('keeps incomplete wired fallback input dirty and invalid, and uses inherited types for extension mappings', async () => {
+    const { store } = await parameterNodes()
+    const integer = store.draft.nodes.find((entry) => entry.type === 'integer_value')!
+    const control = () => node('audio_output').querySelector<HTMLInputElement>('[data-field="count"]')!
+    control().value = '-'; control().dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(true); await settle()
+    expect(control().value).toBe('-'); expect(control().disabled).toBe(true)
+    expect(control().getAttribute('aria-invalid')).toBe('true')
+    expect(store.dirty).toBe(true)
+    const calls = fetchMock.mock.calls.length
+    await store.save(); await store.validate()
+    expect(fetchMock.mock.calls.length).toBe(calls)
+    setLocale('en'); await settle()
+    expect(control().value).toBe('-')
+    store.disconnect(store.draft.edges.find((edge) => edge.target_port === 'count_parameter')!.id); await settle()
+    expect(control().value).toBe('-'); expect(control().disabled).toBe(false)
+    expect(store.draft.nodes.find((entry) => entry.id === 'output')!.config.count).toBe('-')
+  })
+})
+
 describe('catalog-driven multiple input and output ports', () => {
   async function multiNodes() {
     const catalog = structuredClone(testCapabilities) as any

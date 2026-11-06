@@ -27,11 +27,15 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=TEXT_OUTPUT_NODE_TYPE,
         label="文本输出",
-        input_ports=(TRANSCRIPT_PORT,),
+        input_ports=(TRANSCRIPT_PORT, "filename_stem", "text_format"),
+        required_input_ports=(TRANSCRIPT_PORT,),
         output_ports=(),
         terminal=True,
         config_kind="text_output",
-        fields=fields_from_model(TextOutputConfig),
+        fields=fields_from_model(
+            TextOutputConfig,
+            input_ports={"filename_stem": "filename_stem", "format": "text_format"},
+        ),
         normalize_config=normalize,
         validate_config=normalize,
         execute=execute,

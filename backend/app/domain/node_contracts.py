@@ -23,6 +23,7 @@ class CapabilityField(BaseModel):
     pattern: str | None = None
     description: str | None = None
     validator: str | None = None
+    input_port: str | None = None
     options: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -54,6 +55,7 @@ class NodeDefinition:
     execute: ExecuteCallable | None = None
     presentation: dict[str, object] | None = None
     required_input_ports: tuple[str, ...] | None = None
+    is_parameter_source: bool = False
 
     @property
     def required_ports(self) -> tuple[str, ...]:
@@ -100,6 +102,7 @@ def fields_from_model(
     *,
     widgets: dict[str, tuple[str, list[dict[str, object]] | None]] | None = None,
     excluded: set[str] | None = None,
+    input_ports: dict[str, str] | None = None,
 ) -> tuple[CapabilityField, ...]:
     schema = model.model_json_schema()
     required = set(schema.get("required", ()))
@@ -132,6 +135,7 @@ def fields_from_model(
                 pattern=spec.get("pattern"),
                 description=spec.get("description"),
                 validator="safe_filename_stem" if key == "filename_stem" else None,
+                input_port=(input_ports or {}).get(key),
                 options=options or [],
             )
         )

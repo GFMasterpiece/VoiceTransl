@@ -14,8 +14,8 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.4"
-    assert body["workflow"]["ports"] == [
+    assert body["workflow"]["schema_version"] == "1.5"
+    assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
             "id": "transcript",
@@ -25,7 +25,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         },
         {"id": "text", "type_id": "text", "label": "文本产物", "capability_requirements": []},
     ]
-    assert body["workflow"]["data_types"] == [
+    assert body["workflow"]["data_types"][:3] == [
         {"id": "audio", "label": "音频", "parent_type_id": None, "capabilities": []},
         {"id": "transcript", "label": "转写结果", "parent_type_id": None, "capabilities": []},
         {"id": "text", "label": "文本产物", "parent_type_id": None, "capabilities": []},
@@ -40,6 +40,10 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         "audio_output",
         "audio_preview",
         "text_preview",
+        "string_value",
+        "integer_value",
+        "number_value",
+        "boolean_value",
     }
     assert body["workflow"]["constraints"] == WORKFLOW_GRAPH_CONSTRAINTS
     assert {node_type: node["is_source"] for node_type, node in nodes.items()} == {
@@ -86,6 +90,21 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     assert all(
         node["is_source"] is (node_type == "audio_input") for node_type, node in nodes.items()
     )
+    assert all(
+        node["is_parameter_source"] is (node_type.endswith("_value"))
+        for node_type, node in nodes.items()
+    )
+    assert all(
+        "input_port" in field for node in nodes.values() for field in node["config"]["fields"]
+    )
+    ports = {port["id"]: port for port in body["workflow"]["ports"]}
+    for name in ("language", "filename_stem", "text_format", "string"):
+        assert ports[name]["type_id"] == "string"
+    types = {item["id"]: item for item in body["workflow"]["data_types"]}
+    assert types["integer"]["parent_type_id"] == "number"
+    assert asr_language["input_port"] == "language"
+    assert output_stem["input_port"] == "filename_stem"
+    assert text_format["input_port"] == "text_format"
     lowered = response.text.lower()
     assert "crispasr" not in lowered and "ffmpeg" not in lowered
 

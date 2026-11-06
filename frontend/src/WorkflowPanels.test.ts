@@ -69,6 +69,68 @@ afterEach(() => {
 })
 
 describe('canvas run panels', () => {
+  it('preserves valid parameter records through API loading and rejects malformed new fields without dropping the selected run', async () => {
+    const { store } = mount()
+    const current = runBody({ nodes: [{ ...nodeRecord(), artifact: null, effective_config: { value: false }, parameter_sources: { value: { kind: 'config' } } }] })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(current)))
+    await store.loadRun(current.id)
+    expect(store.run?.nodes[0].effective_config).toEqual({ value: false })
+    expect(store.run?.nodes[0].parameter_sources).toEqual({ value: { kind: 'config' } })
+    const snapshot = JSON.stringify(store.run)
+    for (const fields of [
+      { effective_config: [] }, { effective_config: false }, { parameter_sources: [] },
+      { parameter_sources: { value: { kind: 'unknown' } } },
+      { parameter_sources: { value: { kind: 'connection', source_node_id: 'value-1' } } },
+    ]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(runBody({ id: 'bad-run', nodes: [{ ...nodeRecord(), ...fields } as WorkflowNodeRun] }))))
+      await store.loadRun('bad-run')
+      expect(store.runError).toBe(t('workflow.invalidRun'))
+      expect(JSON.stringify(store.run)).toBe(snapshot)
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(runBody({ nodes: [{ ...nodeRecord(), artifact: null }] }))))
+    await store.loadRun(current.id)
+    expect(store.runError).toBe('')
+    expect(store.run?.nodes[0].effective_config).toBeUndefined()
+  })
+
+  it('shows recorded parameter sources and actual values safely in run details and logs across locales', async () => {
+    const { props, store } = mount()
+    const node = { ...nodeRecord(), config: { language: 'fallback' }, effective_config: { language: '<img src=x onerror=alert(1)>', enabled: false, count: 0 }, parameter_sources: {
+      language: { kind: 'connection' as const, edge_id: 'parameter-edge', source_node_id: 'string-1', source_port: 'string', target_port: 'language' },
+      enabled: { kind: 'config' as const }, count: { kind: 'config' as const },
+    } }
+    store.run = runBody({ nodes: [node] })
+    const snapshot = JSON.stringify(store.run)
+    await settle()
+    for (const panel of ['run', 'logs'] as const) {
+      props.panel = panel
+      for (const language of ['en', 'zh-CN']) {
+        setLocale(language); await settle()
+        const text = root!.querySelector('.run-parameters')!.textContent
+        expect(text).toContain('string-1'); expect(text).toContain('language'); expect(text).toContain('parameter-edge')
+        expect(text).toContain('<img src=x onerror=alert(1)>'); expect(text).toContain('false'); expect(text).toContain('0')
+        expect(text).not.toContain('fallback')
+        expect(root!.querySelector('img')).toBeNull()
+      }
+    }
+    expect(JSON.stringify(store.run)).toBe(snapshot)
+  })
+
+  it('distinguishes historical missing fields from unresolved frozen parameters and never fills current defaults', async () => {
+    const { props, store } = mount()
+    store.run = runBody({ nodes: [nodeRecord('historical'), { ...nodeRecord('queued'), status: 'pending', effective_config: null, parameter_sources: { filename_stem: { kind: 'config' } } }] })
+    for (const panel of ['run', 'logs'] as const) {
+      props.panel = panel; await settle()
+      const views = root!.querySelectorAll('.run-parameters')
+      expect(views[0].textContent).toContain(t('workflow.notRecorded'))
+      expect(views[0].textContent).not.toContain(t('workflow.parameterUnresolved'))
+      expect(views[1].textContent).toContain(t('workflow.parameterUnresolved'))
+      expect(views[1].textContent).toContain(t('workflow.parameterManual'))
+    }
+    expect(store.run.nodes[0].effective_config).toBeUndefined()
+    expect(store.run.nodes[1].effective_config).toBeNull()
+  })
+
   it('retains save-first and resource-busy guards and starts only the saved graph', async () => {
     const { store } = mount()
     const start = vi.spyOn(store, 'startRun').mockResolvedValue(null)
@@ -225,7 +287,7 @@ describe('persisted run record ordering', () => {
     const snapshot = JSON.stringify(run)
     const records = runRecords(run)
     expect(records.slice(0, 4).map((record) => record.id)).toEqual(['run-created', 'node:first:started', 'node:second:started', 'node:second:finished'])
-    expect(records.filter((record) => !record.timestamp).map((record) => record.id)).toEqual(['run-started', 'run-finished', 'run-status', 'node:second:status', 'node:first:finished', 'node:first:status'])
+    expect(records.filter((record) => !record.timestamp).map((record) => record.id)).toEqual(['run-started', 'run-finished', 'run-status', 'node:second:status', 'node:second:parameters', 'node:first:finished', 'node:first:status', 'node:first:parameters'])
     expect(JSON.stringify(run)).toBe(snapshot)
   })
 })

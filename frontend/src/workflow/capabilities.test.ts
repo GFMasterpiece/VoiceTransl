@@ -39,6 +39,82 @@ const livePayload = {
 }
 
 describe('capabilities parser', () => {
+  function parameterCatalog(): any {
+    const payload = structuredClone(livePayload) as any
+    payload.workflow.schema_version = '1.5'
+    for (const node of payload.workflow.nodes) {
+      node.required_input_ports = [...node.input_ports]
+      node.is_parameter_source = false
+      for (const field of node.config.fields) field.input_port = null
+    }
+    payload.workflow.data_types.push(
+      { id: 'string', label: 'String', parent_type_id: null, capabilities: [] },
+      { id: 'number', label: 'Number', parent_type_id: null, capabilities: [] },
+      { id: 'integer', label: 'Integer', parent_type_id: 'number', capabilities: [] },
+    )
+    payload.workflow.ports.push({ id: 'custom_parameter', type_id: 'integer', label: 'Plugin parameter' })
+    payload.workflow.nodes.push({
+      type: 'extension', label: 'Plugin node', input_ports: ['audio', 'custom_parameter'], output_ports: ['audio'],
+      required_input_ports: ['audio'], required_inbound: 1, is_parameter_source: false,
+      config: { kind: 'extension', fields: [{ key: 'strength', type: 'number', default: 2, input_port: 'custom_parameter' }] },
+    })
+    return payload
+  }
+
+  it('uses generic 1.5 field-to-port mappings and inherited primitive types without a node whitelist', () => {
+    const payload = parameterCatalog()
+    const registry = createNodeRegistry(readCapabilities(payload))
+    expect(registry.kind('extension')?.fields[0].inputPort).toBe('custom_parameter')
+    expect(registry.kind('extension')?.isParameterSource).toBe(false)
+    expect(registry.validateConfig('extension', { strength: 2.5 })).toEqual([])
+    expect(registry.validateConfig('extension', { strength: true })).not.toEqual([])
+    for (const version of ['1.2', '1.3', '1.4']) {
+      payload.workflow.schema_version = version
+      expect(readCapabilities(payload).nodes[3]?.fields[0].inputPort).toBeNull()
+    }
+  })
+
+  it('requires explicit 1.5 parameter metadata and retains strict named input checks', () => {
+    for (const invalid of [undefined, null, 'false', 0]) {
+      const payload = parameterCatalog()
+      payload.workflow.nodes[0].is_parameter_source = invalid
+      expect(() => readCapabilities(payload)).toThrow('参数绑定')
+    }
+    for (const invalid of [undefined, '', 0, false, [], {}]) {
+      const payload = parameterCatalog()
+      payload.workflow.nodes[1].config.fields[0].input_port = invalid
+      expect(() => readCapabilities(payload)).toThrow('参数绑定')
+    }
+    const missing = parameterCatalog()
+    delete missing.workflow.nodes[0].required_input_ports
+    expect(() => readCapabilities(missing)).toThrow('入边约束')
+  })
+
+  it('rejects inconsistent mappings, mismatched types, resource bindings, and false parameter roots', () => {
+    const mutations: Array<(payload: any) => void> = [
+      (p) => { p.workflow.nodes.at(-1).config.fields[0].input_port = 'undeclared' },
+      (p) => { p.workflow.nodes.at(-1).config.fields[0].input_port = 'audio' },
+      (p) => { p.workflow.nodes.at(-1).config.fields.push({ key: 'other', type: 'number', input_port: 'custom_parameter' }) },
+      (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'string' },
+      (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'json' },
+      (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'select' },
+      (p) => { p.workflow.nodes.at(-1).is_parameter_source = true },
+      (p) => { p.workflow.nodes[0].is_parameter_source = true },
+      (p) => {
+        p.workflow.ports.at(-1).type_id = 'string'
+        p.workflow.nodes.at(-1).config.fields[0].type = 'string'
+        p.workflow.nodes.at(-1).presentation = { resource_input: { resource_type: 'audio', config_key: 'strength' } }
+      },
+    ]
+    for (const mutate of mutations) {
+      const payload = parameterCatalog(); mutate(payload)
+      expect(() => readCapabilities(payload)).toThrow('参数绑定')
+    }
+    const valid = parameterCatalog()
+    valid.workflow.nodes.push({ type: 'future_value', label: 'Future root', input_ports: [], output_ports: ['custom_parameter'], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { fields: [] } })
+    expect(readCapabilities(valid).nodes[4]?.isParameterSource).toBe(true)
+  })
+
   it('reads named required inputs from a multi-port 1.4 catalog and rejects inconsistent declarations', () => {
     const payload = structuredClone(livePayload) as any
     payload.workflow.schema_version = '1.4'
@@ -150,6 +226,8 @@ describe('capabilities parser', () => {
     expect(() => readCapabilities(unsupportedWorkflowSchema)).toThrow('workflow.schema_version')
 
     unsupportedWorkflowSchema.workflow.schema_version = null
+    expect(() => readCapabilities(unsupportedWorkflowSchema)).toThrow('workflow.schema_version')
+    unsupportedWorkflowSchema.workflow.schema_version = 1.5
     expect(() => readCapabilities(unsupportedWorkflowSchema)).toThrow('workflow.schema_version')
   })
 

@@ -14,6 +14,7 @@ from ..domain.workflow import (
     WorkflowRunStatus,
     validate_workflow_graph,
     validate_workflow_resources,
+    workflow_parameter_sources,
     workflow_snapshot,
 )
 from .workflow_runner import execute_workflow_run
@@ -117,6 +118,7 @@ class JobManager:
                             node_id=node.id,
                             node_type=node.type,
                             config=node.config,
+                            parameter_sources=workflow_parameter_sources(node, snapshot.edges),
                         )
                         for node in document.nodes
                     ],

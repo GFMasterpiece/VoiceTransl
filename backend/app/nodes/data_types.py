@@ -1,5 +1,7 @@
 """Built-in runtime data contracts, registered at composition time."""
 
+import math
+
 from ..domain.node_constants import AUDIO_PORT, TEXT_PORT, TRANSCRIPT_PORT
 
 
@@ -35,3 +37,19 @@ def register_builtin_types(register_type, register_port):
     register_port(AUDIO_PORT, type_id=AUDIO_PORT)
     register_port(TRANSCRIPT_PORT, type_id=TRANSCRIPT_PORT)
     register_port(TEXT_PORT, type_id=TEXT_PORT)
+    register_type("string", label="字符串", validator=lambda value: isinstance(value, str))
+    register_type(
+        "number",
+        label="数字",
+        validator=lambda value: (
+            type(value) in (int, float) and (type(value) is int or math.isfinite(value))
+        ),
+    )
+    register_type(
+        "integer", label="整数", parent_type_id="number", validator=lambda value: type(value) is int
+    )
+    register_type("boolean", label="布尔值", validator=lambda value: type(value) is bool)
+    for port in ("string", "number", "integer", "boolean"):
+        register_port(port, type_id=port)
+    for port in ("language", "filename_stem", "text_format"):
+        register_port(port, type_id="string")

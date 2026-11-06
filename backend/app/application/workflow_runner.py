@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from ..domain import (
@@ -23,6 +25,7 @@ from ..domain.node_registry import (
     validate_node_result,
     validate_port_value,
 )
+from ..domain.workflow import WorkflowNodeRecord
 from .workflow_media import (
     WorkflowRunCancelled as WorkflowRunCancelled,
 )
@@ -85,6 +88,32 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
         if not isinstance(result.preview, WorkflowPreview) or result.artifact is None:
             raise TypeError("node preview requires a descriptor and persistent artifact")
     return result
+
+
+def _execution_node(node, definition, inputs, record: WorkflowNodeRecord):
+    """Resolve into a separate node, preserving manual settings and graph snapshots."""
+    config = deepcopy(node.config)
+    for item in definition.fields:
+        if item.input_port is not None and item.input_port in inputs:
+            config[item.key] = deepcopy(inputs[item.input_port].value)
+    try:
+        json.dumps(config, allow_nan=False)
+        record.effective_config = deepcopy(config)
+        if definition.validate_config is not None:
+            definition.validate_config(config)
+        if definition.normalize_config is not None:
+            config = definition.normalize_config(config)
+            if not isinstance(config, dict):
+                raise ValueError("normalized configuration must be an object")
+        if definition.validate_config is not None:
+            definition.validate_config(config)
+        json.dumps(config, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise NodeExecutionError(
+            "INVALID_NODE_CONFIG", f"{node.type} 执行配置无效: {error}"
+        ) from error
+    record.effective_config = deepcopy(config)
+    return node.model_copy(update={"config": config}, deep=True)
 
 
 async def execute_workflow_run(
@@ -177,11 +206,13 @@ async def execute_workflow_run(
             record.started_at = now()
             store.save_workflow_run(run)
             try:
+                execution_node = _execution_node(node, definition, inputs, record)
+                store.save_workflow_run(run)
                 result = await _run_registered_node(
                     NodeExecutionContext(
                         store=store,
                         run=run,
-                        node=node,
+                        node=execution_node,
                         inputs=inputs,
                         project=project,
                         cancel_event=cancel_event,

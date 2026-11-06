@@ -1,4 +1,4 @@
-import type { WorkflowError, WorkflowRun } from '../stores/workflow'
+import type { WorkflowError, WorkflowRun, WorkflowNodeRun } from '../stores/workflow'
 
 export interface RunRecord {
   id: string
@@ -7,6 +7,7 @@ export interface RunRecord {
   timestamp: string | null
   status?: string
   error?: WorkflowError
+  parameters?: WorkflowNodeRun
 }
 
 /** Only fields persisted in the selected run are represented; untimed facts stay untimed. */
@@ -24,6 +25,7 @@ export function runRecords(run: WorkflowRun): RunRecord[] {
       { id: `node:${node.node_id}:started`, nodeId: node.node_id, labelKey: 'panelStartedAt', timestamp: node.started_at },
       { id: `node:${node.node_id}:finished`, nodeId: node.node_id, labelKey: 'panelFinishedAt', timestamp: node.finished_at },
       { id: `node:${node.node_id}:status`, nodeId: node.node_id, labelKey: 'panelStatus', timestamp: null, status: node.status },
+      { id: `node:${node.node_id}:parameters`, nodeId: node.node_id, labelKey: 'panelParameters', timestamp: null, parameters: node },
     )
     if (node.error) records.push({ id: `node:${node.node_id}:error`, nodeId: node.node_id, labelKey: 'panelError', timestamp: null, error: node.error })
   }

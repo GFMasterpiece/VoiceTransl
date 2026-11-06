@@ -66,8 +66,16 @@ const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
 function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value) : 0 }
 function inputPortLabel(node: WorkflowNode, port: string) {
-  const label = portLabel(port)
+  const field = kind(node)?.fields.find((field) => field.inputPort === port)
+  const typeId = registry.value?.port(port)?.typeId
+  const type = registry.value?.capabilities.dataTypes.find((type) => type.id === typeId)
+  const typeKey = `workflow.dataType_${typeId}`
+  const typeLabel = hasMessage(typeKey) ? t(typeKey) : type?.label || portLabel(port)
+  const label = field ? t('workflow.parameterPortLabel', { field: field.label, type: typeLabel }) : portLabel(port)
   return kind(node)?.requiredInputPorts.includes(port) ? label : `${label} (${t('workflow.optionalPort')})`
+}
+function inputPortDescription(node: WorkflowNode, port: string) {
+  return t('workflow.inputPort', { port: `${inputPortLabel(node, port)} · ${port}` })
 }
 
 function previewRecord(node: WorkflowNode) { return store.run?.nodes.find((record) => record.node_id === node.id && record.node_type === node.type) }
@@ -664,7 +672,7 @@ onUnmounted(() => {
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
                 <foreignObject v-if="registry && (fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview)" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
                   <div class="node-body" :style="bodyStyle(node)">
-                    <div v-if="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
+                    <div v-if="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
                       <NodeResourceInput :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                     </div>
@@ -674,7 +682,7 @@ onUnmounted(() => {
                 <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
                 <g v-for="port in inputPortsForNode(node.type)" :key="`input-${port}`">
-                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :class="`node-port-${port}`" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="t('workflow.inputPort', { port })" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.inputPort', { port }) }}</title></circle>
+                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :class="`node-port-${port}`" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>
                   <text class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY(node, port, 'input')! + 3" aria-hidden="true"><title>{{ inputPortLabel(node, port) }}</title>{{ inputPortLabel(node, port) }}</text>
                 </g>
                 <g v-for="port in outputPortsForNode(node.type)" :key="`output-${port}`">

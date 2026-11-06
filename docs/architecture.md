@@ -20,15 +20,16 @@
 | --- | --- | --- |
 | `audio_input` | 无 → `audio` | 可选 `audio_id` 绑定项目内资源；节点内上传或选择音频，不能填写本机路径；旧 `{}` 使用运行音频上下文 |
 | `preprocess` | `audio` → `audio` | 仅 `provider=mock`，复制直接上游原字节，不转换采样率/声道 |
-| `asr` | `audio` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
-| `audio_output` | `audio` → 终端 | 安全的 `filename_stem`（默认 `audio-copy`），复制直接上游字节 |
-| `text_output` | `transcript` → 终端 | 安全的 `filename_stem`（默认 `transcript`）和 `format`（TXT/SRT/VTT/LRC），导出 Mock 文本 |
+| `asr` | `audio`、可选 `language` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
+| `audio_output` | `audio`、可选 `filename_stem` → 终端 | 安全的 `filename_stem`（默认 `audio-copy`），复制直接上游字节 |
+| `text_output` | `transcript`、可选 `filename_stem/text_format` → 终端 | 安全的 `filename_stem`（默认 `transcript`）和 `format`（TXT/SRT/VTT/LRC），导出 Mock 文本 |
 | `audio_preview` | `audio` → 终端 | 无配置，保存该次输入的预览副本，供节点内播放器读取 |
 | `text_preview` | `transcript` → 终端 | 无配置，保存转写文本表示，供节点内纯文本展示 |
+| `string_value` / `integer_value` / `number_value` / `boolean_value` | 无 → 对应基础值类型 | 参数来源节点，保存 `{value: ...}`；字符串不是 `text` 文件产物，整数可满足数字类型，布尔值不冒充整数或数字 |
 
 Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示例文本。真实模型、后端、VAD、分段、Provider Profile、采样率、声道及“删除源文件”均不属于当前节点配置。未知字段和非 Mock Provider 明确拒绝，不能静默回退。
 
-图要求一个源、至少一个终端节点（预览或导出）。节点可声明多个输入/输出；每个必填输入恰好一条类型兼容连接，可选输入零或一条；一个输出可连接多个下游，同一节点对允许连接不同端口的多条边。内置终端不声明输出端口。允许分支、串联和汇合，拒绝环、孤岛、无效端口、未知节点及危险配置；节点与边各最多 64 个。输入直连输出或预览均合法，不要求存在处理节点或文件导出节点。
+图要求恰好一个音频资源源、至少一个终端节点（预览或导出）；额外的显式参数根不计入资源源数量。可达性从资源源和参数根的并集计算，所有节点仍须能到达终端，普通零输入节点不能自行成为合法根。节点可声明多个输入/输出；每个必填输入恰好一条类型兼容连接，可选输入零或一条；一个输出可连接多个下游，同一节点对允许连接不同端口的多条边。内置终端不声明输出端口。允许分支、串联和汇合，拒绝环、孤岛、无效端口、未知节点及危险配置；节点与边各最多 64 个。输入直连输出或预览均合法，不要求存在处理节点或文件导出节点。
 
 ## 3. 保存、运行与产物
 
@@ -36,6 +37,8 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 - 节点可选 `size={width,height}` 保存用户布局尺寸；旧节点缺失或为 `null` 时由前端按内容决定尺寸，读取不补写旧文件。宽高必须为有限正数且不超过 1,000,000；尺寸随图保存及运行快照保留，但不进入执行语义摘要。仅调整尺寸增加文档修订，不改变 `workflow_revision` 或使已有结果失效。
 - 没有已保存图时返回版本 0 的默认直通图，不因此落盘或改写旧 Job。首次保存建立版本 1。
 - 运行绑定一个音频、图版本及不可变节点配置快照。后来编辑图不能修改已提交或排队的运行。
+- 节点配置字段以 `input_port` 声明可连线覆盖。首批允许 ASR `language`、两类输出的 `filename_stem`、文本输出 `format`；固定 Mock `provider` 和资源绑定 `audio_id` 不开放参数线。手填配置始终作为合法后备保留在图与节点记录中；执行时合入上游值、完整校验/规范化，再把节点副本传给执行器，不改写运行图快照。
+- 新运行排队时按自身快照冻结 `parameter_sources`，实际取得上游结果后保存 `effective_config`。来源按字段区分手填与连接，连接包含边 ID 和源/目标端口；未解析实际值为 `null`。候选参数非法时明确失败而不回退手填值；缺失或失败上游阻断依赖，无关分支仍可继续。旧记录缺少新字段时保持未记录，不使用当前默认值推断，也不补写历史文件。
 - 输入显式指定 `audio_id` 时，校验及保存检查项目资源归属，启动时检查其与运行路由音频一致；不一致返回 `INPUT_AUDIO_MISMATCH`。旧 `{}` 输入继续使用该次运行的音频，不在读取旧图时补写绑定。
 - 主音频的运行存于项目根 `workflow-runs/{rid}/`，其他音频存于 `audios/{aid}/workflow-runs/{rid}/`。包含 `run.json` 与 `nodes/{node_id}/{filename}`。
 - 成功节点立即保存状态和独立产物。artifact 包含 `artifact_id`、`port`、`filename`、`media_type`、`size_bytes`、`sha256`、`download_url`，不暴露本机绝对路径。
@@ -64,11 +67,11 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.4`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。节点的可空 `presentation` 通过 `resource_input={resource_type,config_key}` 和 `preview={renderer}` 声明资源选择及预览展示入口，前端不按节点类型名称特判。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。持久化 schema 仍为 `1.0`，新字段可选，旧数据不自动改写；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 capability API schema version 保持 `1.0`；`workflow.schema_version` 独立标记工作流 capability 契约，当前为 `1.5`，字段 shape 改变时必须提升该版本，客户端严格拒绝未知版本。配置字段的数值/字符串边界和描述从其 Pydantic schema 派生；后端复杂语义校验以 validator id 描述，不交由前端复制安全规则。前端据此生成添加入口、默认配置和通用字段表单。目录 `1.5` 每个字段显式提供 `input_port`（不支持连线时为 `null`），每个节点提供 `is_parameter_source`，同时保留严格命名必填输入数组。字段绑定端口必须存在、唯一、类型兼容且不是强制连线端口；前端拒绝不一致目录。节点的可空 `presentation` 通过 `resource_input={resource_type,config_key}` 和 `preview={renderer}` 声明资源选择及预览展示入口，前端不按节点类型名称特判。图的节点/边数及源/终端数量约束与后端校验共用同一权威值。持久化 schema 仍为 `1.0`，新字段可选，旧数据不自动改写；前端的本地校验仅用于即时反馈，服务端仍执行最终验证。
 
 `domain/node_contracts.py` 定义自描述契约，`domain/node_registry_core.py` 管理通用实时注册与目录派生，`domain/node_registry.py` 保留旧导入入口并显式组合内置类型与节点。各 `nodes/` 模块拥有配置、声明和执行入口；输出配置不再由目录按 `config_kind` 特判。节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称；边端口 ID 与注册规则保持一致，最多 64 字符。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。节点使用通用 `NodeExecutionError(code,message)` 报告可展示的失败，完成资源清理后通过 `NodeExecutionCancelled` 报告取消；调度器不依赖 ASR 等节点专用异常。`required_input_ports` 逐名声明必填输入，目录中的 `required_inbound` 为其长度；旧未声明命名要求的定义继续将旧计数 0 解释为全可选，其余按全部输入必填派生。调度按每条边的 `source_port → target_port` 组装命名输入，同时校验输入与全部已声明输出的运行时类型。未连接的可选输入不传入；连接了失败上游的可选输入也会阻断当前节点。文件复制、源音频定位与原子发布集中到 `application/workflow_media.py`，调度器不特判内置节点类型。新增已有数据类型的节点通过独立模块与组合入口注册接入，无需修改通用调度器。不能让客户端提交任意导入路径或代码。
 
-本轮仍为单源、单项目音频运行，当前只提供音频源；多端口扩展不等同于多音频处理、混音或新增真实节点。每次节点结果仍至多保存一份 artifact 和一份 preview，多份持久导出结果使用独立输出节点。参数转连线、动态字段、选定输出执行、持久缓存重跑、事件和子图分别细化，不作为当前能力；范围与验收见[节点模块化与多端口](../spec/node-modularity.md)。新数据源、视频及真实云端 Provider 需要先确认独立规格。全局 Profile CRUD 的留存不代表云端调用可用，见[Profile 兼容边界](provider_profiles.md)。
+本轮仍为单源、单项目音频运行，当前只提供音频源；多端口扩展不等同于多音频处理、混音或新增真实节点。每次节点结果仍至多保存一份 artifact 和一份 preview，多份持久导出结果使用独立输出节点。参数转连线与基础值节点见[参数规格](../spec/node-parameters.md)；动态字段、选定输出执行、持久缓存重跑、事件和子图仍分别细化，不作为当前能力；范围与验收见[节点模块化与多端口](../spec/node-modularity.md)。新数据源、视频及真实云端 Provider 需要先确认独立规格。全局 Profile CRUD 的留存不代表云端调用可用，见[Profile 兼容边界](provider_profiles.md)。
 
 ## 7. 前端语言边界
 

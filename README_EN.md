@@ -13,6 +13,7 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - A project-level workflow canvas with independent node settings, typed-port validation, saved revisions, and conflict detection. The backend capability API supplies the node catalog and settings.
 - A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
 - Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.
+- String, integer, number, and boolean value nodes. Backend-declared parameter inputs initially cover ASR language, export filenames, and text format. Connections preserve manual fallback values, while run details record parameter sources and effective values.
 - Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
 
 Real cloud/local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.

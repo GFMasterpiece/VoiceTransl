@@ -31,13 +31,15 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=ASR_NODE_TYPE,
         label="语音识别",
-        input_ports=(AUDIO_PORT,),
+        input_ports=(AUDIO_PORT, "language"),
+        required_input_ports=(AUDIO_PORT,),
         output_ports=(TRANSCRIPT_PORT,),
         terminal=False,
         config_kind="asr",
         fields=fields_from_model(
             MockASRNodeConfig,
             widgets={"provider": ("select", [{"value": "mock", "label": "Mock"}])},
+            input_ports={"language": "language"},
         ),
         normalize_config=normalize,
         validate_config=normalize,

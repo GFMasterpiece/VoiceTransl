@@ -27,7 +27,9 @@ export function workflowPortY(type: NodeType, port: PortName, direction: 'input'
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
 export const WORKFLOW_NODE_FIELD_HEIGHT = 44
-export function workflowFieldHeight(field: { type: string }): number { return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT }
+export function workflowFieldHeight(field: { type: string; inputPort?: string | null }): number {
+  return (field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT) + (field.inputPort ? 30 : 0)
+}
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
 export const WORKFLOW_PREVIEW_HEIGHT = 190
@@ -118,10 +120,16 @@ export interface WorkflowError {
   message: string
 }
 
+export type WorkflowParameterSource = { kind: 'config' } | {
+  kind: 'connection'; edge_id: string; source_node_id: string; source_port: string; target_port: string
+}
+
 export interface WorkflowNodeRun {
   node_id: string
   node_type: NodeType
   config: Record<string, unknown>
+  effective_config?: Record<string, unknown> | null
+  parameter_sources?: Record<string, WorkflowParameterSource> | null
   status: NodeStatus
   started_at: string | null
   finished_at: string | null
@@ -297,6 +305,15 @@ function readRun(value: unknown): WorkflowRun {
       throw message('workflow.invalidRun')
     }
     readArtifact(node.artifact)
+    const recordObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+    if (node.effective_config != null && !recordObject(node.effective_config)) throw message('workflow.invalidRun')
+    if (node.parameter_sources != null) {
+      if (!recordObject(node.parameter_sources)) throw message('workflow.invalidRun')
+      for (const source of Object.values(node.parameter_sources)) {
+        if (!recordObject(source) || (source.kind !== 'config' && source.kind !== 'connection')) throw message('workflow.invalidRun')
+        if (source.kind === 'connection' && !(['edge_id', 'source_node_id', 'source_port', 'target_port'] as const).every((key) => typeof source[key] === 'string' && source[key])) throw message('workflow.invalidRun')
+      }
+    }
     if (node.preview != null && (typeof node.preview.renderer !== 'string' || typeof node.preview.content_url !== 'string' || typeof node.preview.media_type !== 'string')) throw message('workflow.invalidPreview')
   }
   return run
@@ -666,7 +683,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const boundAudioId = computed(() => {
     for (const node of draft.value.nodes) {
-      const resource = registry.value?.kind(node.type)?.resourceInput
+      const definition = registry.value?.kind(node.type)
+      const resource = definition?.isSource ? definition.resourceInput : null
       if (resource?.resourceType === 'audio') {
         const id = node.config[resource.configKey]
         if (typeof id === 'string' && id) return id

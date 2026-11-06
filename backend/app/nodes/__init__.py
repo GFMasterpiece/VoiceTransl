@@ -1,6 +1,6 @@
 """Built-in node composition. Modules own contracts and execution entry points."""
 
-from . import asr, audio_input, audio_output, preprocess, preview, text_output
+from . import asr, audio_input, audio_output, preprocess, preview, text_output, values
 
 
 def builtin_definitions():
@@ -11,4 +11,5 @@ def builtin_definitions():
         text_output.definition(),
         audio_output.definition(),
         *preview.definitions(),
+        *values.definitions(),
     )

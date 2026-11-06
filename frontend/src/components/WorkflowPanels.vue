@@ -4,6 +4,7 @@ import { hasMessage, locale, message, t } from '../i18n'
 import { resolveArtifactUrl, useWorkflowStore, workflowErrorLabel, type WorkflowNodeRun } from '../stores/workflow'
 import { runRecords } from '../workflow/runRecords'
 import CanvasDialog from './CanvasDialog.vue'
+import NodeRunParameters from './NodeRunParameters.vue'
 
 const props = defineProps<{ panel: 'run' | 'artifacts' | 'logs' | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -82,6 +83,7 @@ async function retryOutputs() {
             <article v-for="node in store.run.nodes" :key="node.node_id" class="workflow-run-node">
               <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span></div>
               <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>
+              <NodeRunParameters :node="node" />
             </article>
           </div>
           <div class="workflow-history">
@@ -122,7 +124,7 @@ async function retryOutputs() {
         <ol v-else class="workflow-records">
           <li v-for="record in records" :key="record.id" class="workflow-record" :data-record="record.id">
             <time class="workflow-record-time" :datetime="record.timestamp || undefined">{{ dateLabel(record.timestamp) }}</time>
-            <div><strong>{{ record.nodeId || t('workflow.panelRunScope') }}</strong><span>{{ t(`workflow.${record.labelKey}`) }}<template v-if="record.status"> · {{ statusLabel(record.status, !!record.nodeId) }}</template></span><p v-if="record.error" class="workflow-record-error">{{ workflowErrorLabel(record.error) }}</p></div>
+            <div><strong>{{ record.nodeId || t('workflow.panelRunScope') }}</strong><span>{{ t(`workflow.${record.labelKey}`) }}<template v-if="record.status"> · {{ statusLabel(record.status, !!record.nodeId) }}</template></span><p v-if="record.error" class="workflow-record-error">{{ workflowErrorLabel(record.error) }}</p><NodeRunParameters v-if="record.parameters" :node="record.parameters" /></div>
           </li>
         </ol>
       </template>
