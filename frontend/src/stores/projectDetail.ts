@@ -96,13 +96,13 @@ export const useProjectDetailStore = defineStore('projectDetail', () => {
     return true
   }
 
-  function registerAudio(audio: Audio) {
+  function registerAudio(audio: Audio, select = true) {
     if (!project.value) return
     const index = audios.value.findIndex((item) => item.id === audio.id)
     if (index < 0) audios.value.push(audio)
     else audios.value[index] = { ...audios.value[index], ...audio }
     project.value = { ...project.value, audios: audios.value.map(({ id, source }) => ({ id, source })) }
-    selectAudio(audio.id)
+    if (select) selectAudio(audio.id)
   }
 
   function stop() {

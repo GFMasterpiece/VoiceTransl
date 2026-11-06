@@ -69,11 +69,12 @@ async function retryOutputs() {
           <div class="workflow-run-heading">
             <div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3>{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div>
             <div class="workflow-run-actions">
-              <button v-if="store.activeRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelRun">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button>
+              <button v-if="store.activeSingleRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelRun">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button>
               <button v-else class="primary-button" type="button" :disabled="!canRun" @click="startRun">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button>
             </div>
           </div>
           <p v-if="store.dirty" class="inspector-help">{{ t('workflow.saveFirst') }}</p>
+          <p v-if="store.activeRun && store.run?.batch_id" class="inspector-help">{{ t('batch.childRun') }}</p>
           <p v-if="store.error" class="workflow-run-error" role="alert">{{ store.error }}</p>
           <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ statusLabel(store.run?.status) }}</span><span>{{ summary }}</span></div>
           <div v-if="store.runLoading" class="workflow-loading small" role="status">{{ t('workflow.loadingRun') }}</div>

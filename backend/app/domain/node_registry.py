@@ -6,6 +6,7 @@ import this facade. Existing callers retain the populated public registry.
 
 from ..nodes import builtin_definitions
 from ..nodes.data_types import register_builtin_types
+from ..nodes.source_info import PORT_LABELS as SOURCE_INFO_PORT_LABELS
 from .node_constants import (
     ASR_NODE_TYPE as ASR_NODE_TYPE,
 )
@@ -122,6 +123,8 @@ from .node_registry_core import (
 )
 
 register_builtin_types(register_type, register_port)
+for _port, _label in SOURCE_INFO_PORT_LABELS.items():
+    register_port(_port, type_id="string", label=_label)
 for _definition in builtin_definitions():
     register_node(_definition)
 

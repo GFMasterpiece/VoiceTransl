@@ -2733,3 +2733,200 @@ describe('catalog-driven multiple input and output ports', () => {
     }
   })
 })
+
+describe('batch processing editor session', () => {
+  const uploadedAudio = { id: 'batch-audio', source: { original_name: '录音.wav', language: 'ja', size_bytes: 4 } }
+  const batch = { id: 'batch-1', project_id: 'p1', status: 'queued', workflow_revision: 1, created_at: '2026-11-06T00:00:00Z', started_at: null, finished_at: null,
+    cancel_requested: false, retry_of: null, total: 1, counts: { queued: 1, running: 0, completed: 0, partial: 0, failed: 0, cancelled: 0, interrupted: 0 }, error: null }
+  function batchSetup(properties: Record<string, unknown> = {}, upload?: Promise<Response>) {
+    setup((path, init) => {
+      if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
+      if (path.includes('/batches?')) return Promise.resolve(response({ items: [], total: 0, limit: 20, offset: 0 }))
+      if (path.endsWith('/batches') && init?.method === 'POST') return Promise.resolve(response(batch, 202))
+      if (path.endsWith('/batches/batch-1')) return Promise.resolve(response({ ...batch, workflow: documentBody() }))
+      if (path.includes('/batches/batch-1/items?')) return Promise.resolve(response({ items: [{ index: 0, audio_id: uploadedAudio.id, audio_name: '录音.wav', source_language: 'ja', origin: null, status: 'queued', run_id: null, started_at: null, finished_at: null, error: null }], total: 1, limit: 20, offset: 0 }))
+      if (path.endsWith('/audios') && init?.method === 'POST') return upload || Promise.resolve(response({ audio: uploadedAudio }, 201))
+      return undefined
+    }, createPinia(), properties)
+  }
+  async function openBatch() { root!.querySelector<HTMLButtonElement>('[data-open-panel=batch]')!.click(); await settle() }
+  async function addLocal() {
+    const language = root!.querySelector<HTMLInputElement>('[data-batch-language]')!
+    language.value = 'ja'; language.dispatchEvent(new Event('input', { bubbles: true })); await nextTick()
+    const picker = root!.querySelector<HTMLInputElement>('[data-batch-file-input]')!
+    Object.defineProperty(picker, 'files', { configurable: true, value: [new File(['RIFF'], '录音.wav')] })
+    picker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+  }
+  it('retains local files, language and validation across close/reopen and interface changes', async () => {
+    batchSetup(); await settle(); await openBatch(); await addLocal()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    expect(root!.querySelectorAll('[data-batch-item]')).toHaveLength(1)
+    root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click(); await settle()
+    expect(root!.querySelector('[role=dialog]')).toBeNull()
+    setLocale('en'); await openBatch()
+    expect(root!.querySelectorAll('[data-batch-item]')).toHaveLength(1)
+    expect(root!.querySelector<HTMLInputElement>('[data-batch-language]')!.value).toBe('ja')
+    expect(root!.textContent).toContain('录音.wav')
+    expect(app!._instance!.exposed!.hasOpenDialog()).toBe(true)
+  })
+
+  it('uploads without binding a particular audio, then submits the saved revision through one batch endpoint', async () => {
+    const uploaded = vi.fn()
+    batchSetup({ onBatchUploaded: uploaded }); await settle(); await openBatch(); await addLocal()
+    root!.querySelector<HTMLButtonElement>('[data-batch-upload]')!.click(); await settle()
+    const store = useWorkflowStore()
+    expect(uploaded).toHaveBeenCalledTimes(1)
+    expect(store.draft.nodes[0]!.config).toEqual({})
+    expect(root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.disabled).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.click(); await settle()
+    const posts = fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/batches') && init?.method === 'POST')
+    expect(posts).toHaveLength(1)
+    expect(JSON.parse(posts[0]![1]!.body as string)).toEqual({ workflow_revision: 1, audio_ids: ['batch-audio'], request_id: expect.any(String) })
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/workflow-runs') && init?.method === 'POST')).toBe(false)
+    root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click(); await settle()
+    expect(store.updateNode('output', { config: { filename_stem: 'edited-later' } })).not.toBe(false)
+    expect(store.dirty).toBe(true)
+  })
+
+  it('disables batch start for a dirty workflow and guards navigation with one confirmation modal', async () => {
+    batchSetup(); await settle()
+    useWorkflowStore().updateNode('output', { config: { filename_stem: 'new-name' } })
+    await openBatch(); await addLocal()
+    expect(root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.disabled).toBe(true)
+    expect(root!.querySelector('[data-batch-start-reason]')!.textContent).toContain('保存')
+    const leave = vi.fn()
+    expect(app!._instance!.exposed!.requestClose(leave)).toBe('pending'); await settle()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    expect(root!.textContent).toContain(t('batch.leaveFiles'))
+    button(t('workflow.discardChanges'))!.click(); await settle()
+    expect(leave).toHaveBeenCalledTimes(1)
+    expect(app!._instance!.exposed!.needsLeaveConfirmation()).toBe(false)
+  })
+
+  it('protects unuploaded local files even when the workflow is clean, and permits closing the upload panel', async () => {
+    const pending = deferred<Response>()
+    batchSetup({}, pending.promise); await settle(); await openBatch(); await addLocal()
+    expect(app!._instance!.exposed!.needsLeaveConfirmation()).toBe(true)
+    root!.querySelector<HTMLButtonElement>('[data-batch-upload]')!.click(); await settle()
+    expect(app!._instance!.exposed!.requestClose(vi.fn())).toBe('blocked')
+    root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click(); await settle()
+    expect(root!.querySelector('[role=dialog]')).toBeNull()
+    expect(useWorkflowStore().resourceUploading).toBe(true)
+    pending.resolve(response({ audio: uploadedAudio }, 201)); await settle()
+    expect(useWorkflowStore().resourceUploading).toBe(false)
+    expect(app!._instance!.exposed!.needsLeaveConfirmation()).toBe(false)
+  })
+
+  it('selects existing resources after refresh without reuploading them', async () => {
+    batchSetup({ audios: [uploadedAudio] }); await settle(); await openBatch()
+    const select = root!.querySelector<HTMLSelectElement>('.batch-fields select')!
+    select.value = uploadedAudio.id; select.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+    button(t('batch.addExisting'))!.click(); await settle()
+    expect(root!.querySelector<HTMLInputElement>('[data-batch-item] input[type=text]')!.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.disabled).toBe(false)
+    expect(app!._instance!.exposed!.needsLeaveConfirmation()).toBe(false)
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/audios') && init?.method === 'POST')).toBe(false)
+  })
+
+  it('keeps a running batch child editable and navigable after reloading its audio history', async () => {
+    setup((path) => {
+      if (path.includes('/batches?')) return Promise.resolve(response({ items: [batch], total: 1, limit: 20, offset: 0 }))
+      if (path.endsWith('/audios/a1/workflow-runs?limit=30&offset=0')) return Promise.resolve(response({ items: [summaryBody({ status: 'running' })], total: 1, limit: 30, offset: 0 }))
+      if (path.endsWith('/workflow-runs/run-1')) return Promise.resolve(response(runBody({ status: 'running', batch_id: 'bat_12345678901234567890123456789012' })))
+      return undefined
+    })
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.activeRun).toBe(true)
+    expect(store.activeSingleRun).toBe(false)
+    expect(app!._instance!.exposed!.requestClose(vi.fn())).toBe('completed')
+    store.updateNode('output', { config: { filename_stem: 'new-template' } })
+    expect(store.draft.nodes.find((node) => node.id === 'output')!.config.filename_stem).toBe('new-template')
+    expect(await store.save()).not.toBeNull()
+    expect(await store.setAudioContext('other-audio')).toBe(true)
+    expect(store.audioId).toBe('other-audio')
+  })
+
+  it('retains ordinary single-run locks even when a separate batch is active', async () => {
+    batchSetup(); await settle()
+    const store = useWorkflowStore()
+    store.batchRunning = true
+    store.run = runBody({ status: 'running' })
+    expect(store.activeSingleRun).toBe(true)
+    store.updateNode('output', { config: { filename_stem: 'blocked-template' } })
+    expect(store.draft.nodes.find((node) => node.id === 'output')!.config.filename_stem).toBe('audio-copy')
+    expect(app!._instance!.exposed!.requestClose(vi.fn())).toBe('blocked')
+    expect(await store.setAudioContext('other-audio')).toBe(false)
+  })
+
+  it('allows a single run on another audio while a batch is active and still respects server audio reservations', async () => {
+    batchSetup(); await settle()
+    const store = useWorkflowStore()
+    store.batchRunning = true
+    expect(await store.startRun()).not.toBeNull()
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/workflow-runs') && init?.method === 'POST')).toBe(true)
+  })
+
+  it('protects unconfirmed requests on leave and reload, then restores the original request ID', async () => {
+    setup((path, init) => {
+      if (path.includes('/batches?')) return Promise.resolve(response({ items: [], total: 0, limit: 20, offset: 0 }))
+      if (path.endsWith('/batches') && init?.method === 'POST') return Promise.reject(new TypeError('Failed to fetch'))
+      return undefined
+    }, createPinia(), { audios: [uploadedAudio] })
+    await settle(); await openBatch()
+    const select = root!.querySelector<HTMLSelectElement>('.batch-fields select')!
+    select.value = uploadedAudio.id; select.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+    button(t('batch.addExisting'))!.click(); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.click(); await settle()
+    expect(root!.querySelector('[data-batch-retry-request]')).not.toBeNull()
+    const original = JSON.parse(fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/batches') && init?.method === 'POST')![1]!.body as string)
+    root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click(); await settle()
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+    const leave = vi.fn()
+    expect(app!._instance!.exposed!.requestClose(leave)).toBe('pending'); await settle()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    expect(root!.textContent).toContain(t('batch.leavePending'))
+    button(t('workflow.discardChanges'))!.click(); await settle()
+    expect(leave).toHaveBeenCalledTimes(1)
+    app!.unmount(); root!.remove()
+    batchSetup(); await settle(); await openBatch()
+    root!.querySelector<HTMLButtonElement>('[data-batch-retry-request]')!.click(); await settle()
+    const repeated = JSON.parse(fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/batches') && init?.method === 'POST')![1]!.body as string)
+    expect(repeated).toEqual(original)
+  })
+
+  it('disables a saved explicitly bound input without changing its configuration', async () => {
+    const catalog = structuredClone(testCapabilities)
+    const source = catalog.workflow.nodes.find((node: any) => node.type === 'audio_input')
+    source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id' } }
+    source.config.fields = [{ key: 'audio_id', label: 'Audio', type: 'string', required: false, default: null }]
+    const document = documentBody(); document.nodes[0]!.config = { audio_id: 'a1' }
+    setup((path) => {
+      if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog))
+      if (path.endsWith('/workflow')) return Promise.resolve(response(document))
+      if (path.includes('/batches?')) return Promise.resolve(response({ items: [], total: 0, limit: 20, offset: 0 }))
+      return undefined
+    })
+    await settle(); await openBatch()
+    expect(root!.querySelector<HTMLButtonElement>('[data-batch-start]')!.disabled).toBe(true)
+    expect(root!.querySelector('[data-batch-start-reason]')!.textContent).toBe(t('batch.binding'))
+    expect(useWorkflowStore().draft.nodes[0]!.config).toEqual({ audio_id: 'a1' })
+    expect(useWorkflowStore().dirty).toBe(false)
+  })
+
+  it('paginates the local manifest without losing selections on other pages', async () => {
+    batchSetup(); await settle(); await openBatch()
+    const picker = root!.querySelector<HTMLInputElement>('[data-batch-file-input]')!
+    Object.defineProperty(picker, 'files', { configurable: true, value: Array.from({ length: 25 }, (_, index) => new File(['RIFF'], `${index}.wav`)) })
+    picker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(root!.querySelectorAll('[data-batch-item]')).toHaveLength(20)
+    const first = root!.querySelector<HTMLInputElement>('[data-batch-item] input[type=checkbox]')!
+    first.click(); await settle()
+    const nav = root!.querySelector(`nav[aria-label="${t('batch.manifestList')}"]`)!
+    nav.querySelectorAll<HTMLButtonElement>('button')[1]!.click(); await settle()
+    expect(root!.querySelectorAll('[data-batch-item]')).toHaveLength(5)
+    nav.querySelectorAll<HTMLButtonElement>('button')[0]!.click(); await settle()
+    expect(root!.querySelector<HTMLInputElement>('[data-batch-item] input[type=checkbox]')!.checked).toBe(false)
+  })
+})

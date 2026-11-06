@@ -374,6 +374,29 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 @media (max-width: 640px) { .workflow-toolbar { top: 8px; right: 8px; left: 8px; padding: 8px; gap: 8px; }.workflow-workspace-header { width: 100%; }.workflow-toolbar-actions { width: 100%; margin: 0; }.workflow-toolbar-actions button { flex: none; }.workspace-project-title { max-width: 150px; }.workflow-workspace-header .workflow-audio-picker { display: flex; flex: 1 0 100%; width: 100%; min-width: 0; flex-direction: row; }.workflow-workspace-header .workflow-audio-picker > span { flex: 0 0 auto; white-space: nowrap; }.workflow-workspace-header .workflow-audio-picker select { flex: 1 1 0; width: 0; min-width: 0; max-width: 100%; }.workflow-workspace-header .workspace-header-actions { max-width: 100%; flex-wrap: wrap; }.workflow-workspace-header .workspace-language-control { max-width: 100%; }.canvas-dialog-backdrop { padding: 8px; }.canvas-dialog { max-height: calc(100dvh - 16px); }.canvas-dialog-body { padding: 16px; }.canvas-dialog-header { padding: 12px 16px; }.workflow-record { grid-template-columns: 1fr; gap: 4px; }.node-workflow-alert, .workspace-alert { top: 160px; }.canvas-caption { font-size: 9px; } }
 
 .project-create-modal .canvas-dialog { width: min(480px, 100%); }
+.batch-dialog .canvas-dialog { width: min(1120px, 100%); }
+.batch-panel { display: grid; gap: 20px; min-width: 0; }
+.batch-panel section { min-width: 0; }
+.batch-actions, .batch-fields { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
+.batch-actions h3 { margin: 0; }
+.batch-fields { align-items: end; }
+.batch-fields label { display: grid; gap: 6px; flex: 1 1 180px; min-width: 0; }
+.batch-fields input, .batch-fields select, .batch-table input[type="text"] { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 7px; background: var(--paper); color: inherit; }
+.batch-check { display: inline-flex; align-items: center; gap: 7px; }
+.batch-table-scroll { overflow: auto; max-height: 420px; border: 1px solid var(--line); border-radius: 8px; }
+.batch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.batch-table th, .batch-table td { text-align: left; vertical-align: top; padding: 9px; border-bottom: 1px solid var(--line); }
+.batch-table th { position: sticky; top: 0; background: var(--paper); z-index: 1; }
+.batch-table td:nth-child(2) { min-width: 150px; max-width: 280px; overflow-wrap: anywhere; }
+.batch-table td:nth-child(3) { max-width: 180px; overflow-wrap: anywhere; }
+.batch-table td:nth-child(4) { min-width: 105px; }
+.batch-table small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.batch-excluded { opacity: .55; }
+.batch-record, .batch-pending { padding: 12px; margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.batch-record p { margin: 7px 0; }
+.batch-record progress { width: 100%; accent-color: var(--teal); }
+.batch-history, .batch-detail { border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 640px) { .batch-fields > button { width: 100%; }.batch-actions { align-items: flex-start; }.batch-table { font-size: 11px; }.batch-table th, .batch-table td { padding: 6px; } }
 .project-create-modal .create-form { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .project-create-modal .text-input { margin-bottom: 0; }
 .project-create-modal .form-actions { margin-top: 24px; }

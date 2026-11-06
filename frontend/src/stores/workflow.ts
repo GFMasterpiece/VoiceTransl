@@ -147,6 +147,7 @@ export interface WorkflowRun {
   id: string
   project_id: string
   audio_id: string
+  batch_id?: string | null
   workflow_revision: number
   status: RunStatus
   created_at: string
@@ -300,6 +301,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
 function readRun(value: unknown): WorkflowRun {
   const run = value as WorkflowRun
   if (!run || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
+    || (run.batch_id != null && (typeof run.batch_id !== 'string' || !run.batch_id))
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
     || !run.workflow || !Array.isArray(run.workflow.nodes) || !Array.isArray(run.workflow.edges)) {
     throw message('workflow.invalidRun')
@@ -419,10 +421,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const loading = ref(false)
   const saving = ref(false)
   const resourceUploading = ref(false)
+  const batchSubmitting = ref(false)
+  const batchRunning = ref(false)
   const validating = ref(false)
   const starting = ref(false)
   const cancelling = ref(false)
-  const actionLoading = computed(() => starting.value || cancelling.value)
+  const actionLoading = computed(() => starting.value || cancelling.value || batchSubmitting.value)
   const errorState = messageRef()
   const error = errorState.text
   const noticeState = messageRef()
@@ -469,8 +473,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     || savedLayoutSignature.value !== layoutSignature(draft.value))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
+  const activeSingleRun = computed(() => !!activeRun.value && !run.value?.batch_id)
   const editLocked = computed(() => stopped.value || loading.value || capabilitiesLoading.value || saving.value || validating.value
-    || resourceUploading.value || actionLoading.value || !!activeRun.value || !registry.value)
+    || resourceUploading.value || actionLoading.value || activeSingleRun.value || !registry.value)
   const canUndo = computed(() => !editLocked.value && !transaction.value && undoSteps.value.length > 0)
   const canRedo = computed(() => !editLocked.value && !transaction.value && redoSteps.value.length > 0)
   const historyTransactionActive = computed(() => !!transaction.value)
@@ -668,7 +673,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function validate(): Promise<WorkflowIssue[]> {
     const { id, audioId: aid } = currentKey()
-    if (!id || stopped.value || loading.value || saving.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || transaction.value) return []
+    if (!id || stopped.value || loading.value || saving.value || validating.value || resourceUploading.value || actionLoading.value || activeSingleRun.value || transaction.value) return []
     const localIssues = localConfigIssues()
     if (localIssues.length) return localIssues
     const token = sessionGeneration
@@ -767,7 +772,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function save() {
     const { id, audioId: aid } = currentKey()
-    if (!id || stopped.value || saving.value || loading.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || transaction.value) return null
+    if (!id || stopped.value || saving.value || loading.value || validating.value || resourceUploading.value || actionLoading.value || activeSingleRun.value || transaction.value) return null
     closeHistoryGroup()
     const token = sessionGeneration
     if (localConfigIssues().length) return null
@@ -824,7 +829,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   })
   async function setAudioContext(aid: string | null) {
     if (aid === audioId.value) return true
-    if (activeRun.value || saving.value || validating.value || starting.value || resourceUploading.value || loading.value || stopped.value) return false
+    if (activeSingleRun.value || saving.value || validating.value || actionLoading.value || resourceUploading.value || loading.value || stopped.value) return false
     sessionGeneration += 1
     historySequence += 1
     runDetailSequence += 1
@@ -837,6 +842,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function startRun() {
+    if (batchSubmitting.value) { errorState.set(message('batch.busy')); return null }
     if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
     if (!dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
     const { id, audioId: aid } = currentKey()
@@ -1302,8 +1308,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, actionLoading, error, notice,
-    validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun,
+    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
+    validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, setAudioContext,
     runMatchesDraft, nodeMinimums, setNodeMinimum, getNodeSize,
     setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,

@@ -758,3 +758,15 @@ describe('workflow navigation guards', () => {
     expect(root!.querySelector('.node-workflow')).not.toBeNull()
   })
 })
+
+describe('batch dialog navigation', () => {
+  it('prevents a global new-project dialog from opening over the batch dialog', async () => {
+    await mount(false)
+    await app!._instance!.exposed!.openProject(project.id); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-open-panel=batch]')!.click(); await settle()
+    app!._instance!.exposed!.showCreate(); await settle()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    expect(root!.querySelector('[data-batch-panel]')).not.toBeNull()
+    expect(root!.querySelector('.project-create-modal [role=dialog]')).toBeNull()
+  })
+})

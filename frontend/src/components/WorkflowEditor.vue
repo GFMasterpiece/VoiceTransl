@@ -13,6 +13,8 @@ import {
 
 import NodeConfigFields from './NodeConfigFields.vue'
 import CanvasDialog from './CanvasDialog.vue'
+import BatchPanel from './BatchPanel.vue'
+import { useBatchSession } from '../composables/useBatchSession'
 import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
@@ -22,11 +24,12 @@ import type { Audio, Project } from '../stores/projects'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
-const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio] }>()
+const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
+const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio))
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
 const store = useWorkflowStore()
-watch(resourceBusy, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
+watch(() => resourceBusy.value || batch.manifest.uploading.value, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
 const drag = ref<{ nodeId: string; moved: boolean; startX: number; startY: number; positions: Array<{ id: string; x: number; y: number }> } | null>(null)
@@ -37,17 +40,20 @@ const panning = ref<{ startX: number; startY: number; x: number; y: number; move
 type PortDirection = 'input' | 'output'
 const connectionStart = ref<{ nodeId: string; port: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
-const activePanel = ref<'run' | 'artifacts' | 'logs' | null>(null)
+const activePanel = ref<'run' | 'artifacts' | 'logs' | 'batch' | null>(null)
+watch(activePanel, (panel) => { batch.batches.setVisible(panel === 'batch'); if (panel === 'batch' && !batch.manifest.policy.value) void batch.manifest.loadPolicy() })
 const contextMenu = ref<{ x: number; y: number; world: { x: number; y: number }; nodeId?: string } | null>(null)
 const menuElement = ref<HTMLElement | null>(null)
 const menuSearch = ref('')
 let menuTrigger: Element | null = null
 const discardPrompt = ref(false)
+let acknowledgedPending: unknown = null
+function pendingNeedsConfirmation() { return !!batch.batches.pending.value && batch.batches.pending.value !== acknowledgedPending }
 const editMenuOpen = ref(false)
 const editMenuElement = ref<HTMLElement | null>(null)
 const editMenuButton = ref<HTMLButtonElement | null>(null)
 let pendingClose: (() => void) | null = null
-const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
+const controlsLocked = computed(() => store.saving || store.validating || store.activeSingleRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
 const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading && !drag.value && !resizing.value && !readingImport.value && !pendingImport.value)
 const commands = useEditorCommands(store, {
   stage,
@@ -117,7 +123,7 @@ function inputPortsForNode(type: string) { return registry.value?.inputPortsForN
 function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value) : null }
 function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value) : WORKFLOW_NODE_FIELDS_Y }
 function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node.type).length, outputPortsForNode(node.type).length, 1) }
-function portLabel(id: string | null) { return id ? registry.value?.port(id)?.label || id : '' }
+function portLabel(id: string | null) { return id ? (hasMessage(`batch.sourcePort_${id}`) ? t(`batch.sourcePort_${id}`) : registry.value?.port(id)?.label || id) : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
 const inputAudioName = computed(() => store.boundAudioId
   ? props.audios?.find((audio) => audio.id === store.boundAudioId)?.source.original_name || t('workflow.resourceMissing')
@@ -162,7 +168,7 @@ async function uploadedResource(node: WorkflowNode, audio: Audio) {
 watch(() => props.audioId, (id) => { void store.setAudioContext(id) })
 watch(() => store.audioId, (id) => { if (id && id !== props.audioId) emit('selectAudio', id) })
 function guardUnload(event: BeforeUnloadEvent) {
-  if (resourceBusy.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
+  if (resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
 }
 
 const filteredKinds = computed(() => nodeKinds.value.filter((entry) => `${entry.label} ${entry.addLabel} ${entry.type}`.toLocaleLowerCase().includes(menuSearch.value.trim().toLocaleLowerCase())))
@@ -638,7 +644,7 @@ function finishConnection(event: PointerEvent) {
 }
 
 function removeEdge(edgeId: string) {
-  if (store.activeRun) return
+  if (store.activeSingleRun) return
   store.disconnect(edgeId)
 }
 
@@ -664,9 +670,10 @@ async function reloadCapabilities() {
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
+  if (batch.manifest.uploading.value || batch.batches.submitting.value) { store.setError(message('batch.uploadBusy')); return 'blocked' }
   if (readingImport.value || pendingImport.value || clipboardBusy.value) { store.setError(message('workflow.editorImportPending')); return 'blocked' }
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
-  if (store.activeRun) {
+  if (store.activeSingleRun) {
     store.setError(message('workflow.leaveActive'))
     return 'blocked'
   }
@@ -674,9 +681,10 @@ function requestClose(action: () => void): CloseRequestResult {
     store.setError(message('workflow.leaveSaving'))
     return 'blocked'
   }
-  if (store.dirty) {
+  if (store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation()) {
     pendingClose = action
-    discardPrompt.value = true
+    if (activePanel.value) { activePanel.value = null; void nextTick(() => { discardPrompt.value = true }) }
+    else discardPrompt.value = true
     return 'pending'
   }
   action()
@@ -684,9 +692,11 @@ function requestClose(action: () => void): CloseRequestResult {
 }
 
 function discardAndClose() {
-  if (store.activeRun) return
+  if (store.activeSingleRun) return
   discardPrompt.value = false
   store.discardDraft()
+  batch.manifest.discardLocal()
+  acknowledgedPending = batch.batches.pending.value
   const action = pendingClose
   pendingClose = null
   action?.()
@@ -730,10 +740,11 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
+defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
+  void batch.batches.refreshActivity()
   void document.fonts?.ready.then(scheduleMeasurement)
   window.addEventListener('pointerdown', outsideMenu, true)
   window.addEventListener('beforeunload', guardUnload)
@@ -743,6 +754,7 @@ onMounted(() => {
   window.addEventListener('pointercancel', onWindowPointerUp)
 })
 onUnmounted(() => {
+  batch.dispose()
   measurementDisposed = true
   if (measurementFrame !== null) cancelAnimationFrame(measurementFrame)
   mutationObserver?.disconnect(); resizeObserver?.disconnect()
@@ -782,6 +794,7 @@ onUnmounted(() => {
         <button class="secondary-button compact-button" type="button" @click="fitCanvas">{{ t('workflow.fit') }}</button>
         <button class="secondary-button compact-button" type="button" @click="store.pan = { x: 0, y: 0 }">{{ t('workflow.resetView') }}</button>
         <button v-for="panel in (['run', 'artifacts', 'logs'] as const)" :key="panel" class="secondary-button compact-button" type="button" :data-open-panel="panel" :aria-expanded="activePanel === panel" @click="activePanel = panel">{{ t(`workflow.${panel === 'run' ? 'panelRun' : panel === 'artifacts' ? 'panelArtifacts' : 'panelLogs'}`) }}</button>
+        <button class="secondary-button compact-button" type="button" data-open-panel="batch" :aria-expanded="activePanel === 'batch'" @click="activePanel = 'batch'">{{ t('batch.title') }}</button>
       </div>
     </div>
     <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
@@ -797,7 +810,7 @@ onUnmounted(() => {
       </div>
     </CanvasDialog>
     <CanvasDialog :open="discardPrompt" :title="t('workflow.discardTitle')" @close="discardPrompt = false">
-      <div class="workflow-discard"><p>{{ t('workflow.discardDescription') }}</p><div><button class="secondary-button" type="button" @click="discardPrompt = false">{{ t('workflow.continueEditing') }}</button><button class="primary-button" type="button" @click="discardAndClose">{{ t('workflow.discardChanges') }}</button></div></div>
+      <div class="workflow-discard"><p v-if="store.dirty">{{ t('workflow.discardDescription') }}</p><p v-if="batch.manifest.pendingLocal.value">{{ t('batch.leaveFiles') }}</p><p v-if="batch.batches.pending.value">{{ t(batch.batches.pendingStored.value ? 'batch.leavePending' : 'batch.leavePendingVolatile') }}</p><div><button class="secondary-button" type="button" @click="discardPrompt = false">{{ t('workflow.continueEditing') }}</button><button class="primary-button" type="button" @click="discardAndClose">{{ t('workflow.discardChanges') }}</button></div></div>
     </CanvasDialog>
 
     <div v-if="store.loading" class="workflow-loading" role="status">{{ t('workflow.loading') }}</div>
@@ -867,6 +880,7 @@ onUnmounted(() => {
       </template>
       <button v-else role="menuitem" type="button" data-delete-node :disabled="controlsLocked || registry?.kind(store.selectedNode?.type || '')?.removable === false" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
-    <WorkflowPanels :panel="activePanel" @close="activePanel = null" />
+    <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
+    <BatchPanel :open="activePanel === 'batch'" :manifest="batch.manifest" :batches="batch.batches" :audios="audios || []" :start-reason="batch.startReason.value" :revision="store.document?.workflow_revision" :locked="batch.locked.value" @start="batch.start" @close="activePanel = null" />
   </section>
 </template>

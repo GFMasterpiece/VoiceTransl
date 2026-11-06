@@ -48,6 +48,8 @@ class JobManager:
         self.locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.workflow_cancel_events: dict[tuple[str, str], asyncio.Event] = {}
         self.workflow_runs: dict[tuple[str, str], WorkflowRun] = {}
+        self.reservations: dict[tuple[str, str], str] = {}
+        self.max_concurrent = max_concurrent
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
     def job(self, project_id, audio_id=PRIMARY_AUDIO_ID):
@@ -69,19 +71,32 @@ class JobManager:
     def workflow_run(self, project_id, audio_id=PRIMARY_AUDIO_ID):
         return self.workflow_runs.get((project_id, audio_id))
 
-    async def start_workflow(self, project_id, audio_id, workflow_revision):
+    async def start_workflow_from_snapshot(self, project_id, audio_id, snapshot, owner):
+        return await self.start_workflow(
+            project_id, audio_id, snapshot.workflow_revision, _snapshot=snapshot, _owner=owner
+        )
+
+    def audio_busy(self, project_id, audio_id, owner=None):
+        reservation = self.reservations.get((project_id, audio_id))
+        if reservation is not None and reservation != owner:
+            return True
+        if self.running(project_id, audio_id):
+            return True
+        previous = self.job(project_id, audio_id)
+        return previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
+            previous.status == JobStatus.PENDING and previous.config_snapshot is not None
+        )
+
+    async def start_workflow(
+        self, project_id, audio_id, workflow_revision, *, _snapshot=None, _owner=None
+    ):
         async with self.store.mutation_lock(project_id):
             async with self._lock(project_id, audio_id):
                 key = (project_id, audio_id)
-                if self.running(project_id, audio_id):
+                if self.audio_busy(project_id, audio_id, _owner):
                     raise RuntimeError("AUDIO_BUSY")
                 store = self.store
-                previous = store.scope(project_id, audio_id).load_job(project_id)
-                if previous.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or (
-                    previous.status == JobStatus.PENDING and previous.config_snapshot is not None
-                ):
-                    raise RuntimeError("AUDIO_BUSY")
-                document = self.store.load_workflow(project_id)
+                document = _snapshot or self.store.load_workflow(project_id)
                 if document.workflow_revision != workflow_revision:
                     raise RuntimeError("WORKFLOW_REVISION_CONFLICT")
                 issues = validate_workflow_graph(document.nodes, document.edges)
@@ -105,12 +120,17 @@ class JobManager:
                             raise ValueError("invalid audio binding")
                         if selected != audio_id:
                             raise ValueError("INPUT_AUDIO_MISMATCH")
-                snapshot = workflow_snapshot(document)
+                snapshot = (
+                    _snapshot.model_copy(deep=True)
+                    if _snapshot is not None
+                    else workflow_snapshot(document)
+                )
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",
                     project_id=project_id,
                     audio_id=audio_id,
+                    batch_id=_owner if _snapshot is not None else None,
                     workflow_revision=document.workflow_revision,
                     workflow=snapshot,
                     nodes=[
@@ -153,14 +173,22 @@ class JobManager:
                             WorkflowRunStatus.RUNNING,
                             WorkflowRunStatus.CANCELLING,
                         }:
-                            run.status = WorkflowRunStatus.INTERRUPTED
+                            run.status = (
+                                WorkflowRunStatus.CANCELLED
+                                if event.is_set()
+                                else WorkflowRunStatus.INTERRUPTED
+                            )
                             run.finished_at = datetime.now(timezone.utc)
                             for node in run.nodes:
                                 if node.status in {
                                     WorkflowNodeStatus.PENDING,
                                     WorkflowNodeStatus.RUNNING,
                                 }:
-                                    node.status = WorkflowNodeStatus.INTERRUPTED
+                                    node.status = (
+                                        WorkflowNodeStatus.CANCELLED
+                                        if event.is_set()
+                                        else WorkflowNodeStatus.INTERRUPTED
+                                    )
                                     node.finished_at = run.finished_at
                             store.save_workflow_run(run)
                         raise
@@ -197,10 +225,46 @@ class JobManager:
                         if self.workflow_runs.get(key) is run:
                             self.workflow_runs.pop(key, None)
 
-                self.tasks[key] = asyncio.create_task(work())
+                task = asyncio.create_task(work())
+                self.tasks[key] = task
+
+                def done(completed):
+                    # A task cancelled before its first instruction never enters
+                    # work()'s finally block. Persist and release it here too.
+                    if completed.cancelled() and run.status in {
+                        WorkflowRunStatus.PENDING,
+                        WorkflowRunStatus.RUNNING,
+                        WorkflowRunStatus.CANCELLING,
+                    }:
+                        run.status = (
+                            WorkflowRunStatus.CANCELLED
+                            if event.is_set()
+                            else WorkflowRunStatus.INTERRUPTED
+                        )
+                        run.finished_at = datetime.now(timezone.utc)
+                        for node in run.nodes:
+                            if node.status in {
+                                WorkflowNodeStatus.PENDING,
+                                WorkflowNodeStatus.RUNNING,
+                            }:
+                                node.status = (
+                                    WorkflowNodeStatus.CANCELLED
+                                    if event.is_set()
+                                    else WorkflowNodeStatus.INTERRUPTED
+                                )
+                                node.finished_at = run.finished_at
+                        store.save_workflow_run(run)
+                    if self.tasks.get(key) is completed:
+                        self.tasks.pop(key, None)
+                    if self.workflow_cancel_events.get(key) is event:
+                        self.workflow_cancel_events.pop(key, None)
+                    if self.workflow_runs.get(key) is run:
+                        self.workflow_runs.pop(key, None)
+
+                task.add_done_callback(done)
                 return run
 
-    def cancel_workflow(self, project_id, audio_id, run_id):
+    def cancel_workflow(self, project_id, audio_id, run_id, *, force=False):
         key = (project_id, audio_id)
         run = self.workflow_runs.get(key)
         if run is None or run.id != run_id:
@@ -232,6 +296,10 @@ class JobManager:
         store.save_workflow_run(persisted)
         run.cancel_requested = True
         run.status = WorkflowRunStatus.CANCELLING
+        if force:
+            task = self.tasks.get(key)
+            if task is not None:
+                task.cancel()
         return True
 
     def _lock(self, project_id: str, audio_id=PRIMARY_AUDIO_ID) -> asyncio.Lock:
@@ -241,6 +309,8 @@ class JobManager:
         """Delete a project while serializing against start requests."""
         async with self.store.mutation_lock(project_id):
             for audio in self.store.load_project(project_id).audios:
+                if (project_id, audio.id) in self.reservations:
+                    raise RuntimeError("PROJECT_BUSY")
                 if self.running_workflow(project_id, audio.id):
                     raise RuntimeError("PROJECT_BUSY")
                 job = self.job(project_id, audio.id)

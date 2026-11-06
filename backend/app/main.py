@@ -7,10 +7,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .api.batches import router as batches_router
 from .api.capabilities import router as capabilities_router
 from .api.routes import router
 from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
+from .application.batch_manager import BatchManager
 from .config import load_settings
 from .domain.schema import SCHEMA_VERSION, SchemaVersionError
 from .logging_utils import configure_logging
@@ -36,6 +38,7 @@ def create_app(data_dir=None):
         settings.max_concurrent,
         False,
     )
+    batches = BatchManager(store, jobs)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -43,9 +46,11 @@ def create_app(data_dir=None):
         # tests or tooling must not mark a live job from another server.
         store.mark_interrupted()
         store.mark_workflow_runs_interrupted()
+        batches.store.mark_interrupted()
         try:
             yield
         finally:
+            await batches.shutdown()
             await jobs.shutdown()
 
     app = FastAPI(title="VoiceTransl API", version="0.1.0", lifespan=lifespan)
@@ -117,9 +122,11 @@ def create_app(data_dir=None):
     app.state.store = store
     app.state.events = events
     app.state.jobs = jobs
+    app.state.batches = batches
     app.include_router(router)
     app.include_router(capabilities_router)
     app.include_router(workflow_router)
+    app.include_router(batches_router)
     return app
 
 

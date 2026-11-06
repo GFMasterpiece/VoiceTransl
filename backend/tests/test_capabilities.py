@@ -44,6 +44,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         "integer_value",
         "number_value",
         "boolean_value",
+        "source_info",
     }
     assert body["workflow"]["constraints"] == WORKFLOW_GRAPH_CONSTRAINTS
     assert {node_type: node["is_source"] for node_type, node in nodes.items()} == {
@@ -91,7 +92,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         node["is_source"] is (node_type == "audio_input") for node_type, node in nodes.items()
     )
     assert all(
-        node["is_parameter_source"] is (node_type.endswith("_value"))
+        node["is_parameter_source"] is (node_type.endswith("_value") or node_type == "source_info")
         for node_type, node in nodes.items()
     )
     assert all(

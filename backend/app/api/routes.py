@@ -19,7 +19,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..domain import (
     Job,
@@ -28,7 +28,7 @@ from ..domain import (
     SourceAsset,
 )
 from ..domain.legacy_config import LegacyPipelineConfig, default_legacy_pipeline_config
-from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset
+from ..domain.project import PRIMARY_AUDIO_ID, AudioAsset, SourceOrigin
 from ..domain.schema import SchemaVersionError
 from ..storage import ProjectNotFound, SourceUploadTooLarge
 
@@ -68,6 +68,41 @@ def _language_form(field: str, value: str) -> str:
 
 def source_language_form(source_language: str = Form(...)) -> str:
     return _language_form("source_language", source_language)
+
+
+async def source_origin_form(
+    request: Request,
+    origin_root_id: str | None = Form(None),
+    origin_root_name: str | None = Form(None),
+    origin_relative_path: str | None = Form(None),
+) -> SourceOrigin | None:
+    fields = {
+        "origin_root_id": origin_root_id,
+        "origin_root_name": origin_root_name,
+        "origin_relative_path": origin_relative_path,
+    }
+    form = await request.form()
+    if not any(key in form for key in fields):
+        return None
+    if any(value is None for value in fields.values()):
+        raise _language_error("origin", "来源目录信息必须同时提供三个非空字段")
+    try:
+        origin = SourceOrigin(
+            root_id=origin_root_id,
+            root_name=origin_root_name,
+            relative_path=origin_relative_path,
+        )
+    except ValidationError as error:
+        raise RequestValidationError(
+            [
+                {**item, "loc": ("body", f"origin_{item['loc'][0]}")}
+                for item in error.errors(include_context=False)
+            ]
+        ) from error
+    uploaded = form.get("file")
+    if origin.relative_path.rsplit("/", 1)[-1] != getattr(uploaded, "filename", None):
+        raise _language_error("origin_relative_path", "相对路径的文件名必须与上传文件名一致")
+    return origin
 
 
 def project_languages_form(
@@ -531,6 +566,7 @@ async def append_audio(
     file: UploadFile = File(...),
     source_language: str = Depends(source_language_form),
     name: str | None = Form(None),
+    origin: SourceOrigin | None = Depends(source_origin_form),
 ):
     state = deps(request)
     get_project(state, pid)
@@ -549,6 +585,7 @@ async def append_audio(
             media_type=file.content_type,
             size_bytes=0,
             language=source_language,
+            origin=origin,
         ),
     )
     job = Job(id="job_" + uuid4().hex, project_id=pid, audio_id=aid)

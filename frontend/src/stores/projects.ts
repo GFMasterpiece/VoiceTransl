@@ -13,7 +13,10 @@ export interface AudioSource {
   language: string
   size_bytes: number
   media_type?: string | null
+  origin?: SourceOrigin | null
 }
+
+export interface SourceOrigin { root_id: string; root_name: string; relative_path: string }
 
 export interface ProjectPage {
   items: Project[]

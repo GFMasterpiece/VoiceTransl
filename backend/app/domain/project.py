@@ -1,9 +1,63 @@
+import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .schema import require_schema_version
+
+
+def _validate_origin_component(value: str) -> str:
+    if (
+        not value
+        or len(value) > 255
+        or value != value.strip()
+        or value in {".", ".."}
+        or value.endswith(".")
+        or any(char in '/\\<>:"|?*' or unicodedata.category(char) == "Cc" for char in value)
+        or value.split(".", 1)[0].upper()
+        in {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            *(f"COM{i}" for i in range(1, 10)),
+            *(f"LPT{i}" for i in range(1, 10)),
+        }
+    ):
+        raise ValueError("origin names must be safe single directory or file names")
+    return value
+
+
+class SourceOrigin(BaseModel):
+    """Validated display metadata, never a local filesystem location."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    root_id: str = Field(min_length=1, max_length=128)
+    root_name: str = Field(min_length=1, max_length=255)
+    relative_path: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("root_id")
+    @classmethod
+    def validate_root_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value):
+            raise ValueError("origin root_id must be a safe identifier")
+        return value
+
+    @field_validator("root_name")
+    @classmethod
+    def validate_root_name(cls, value: str) -> str:
+        return _validate_origin_component(value)
+
+    @field_validator("relative_path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        # Split before PurePosixPath can normalize away empty and dot segments.
+        for part in value.split("/"):
+            _validate_origin_component(part)
+        return value
 
 
 class SourceAsset(BaseModel):
@@ -12,6 +66,15 @@ class SourceAsset(BaseModel):
     media_type: str | None = None
     size_bytes: int = Field(ge=0)
     language: str = "ja"
+    origin: SourceOrigin | None = None
+
+    @model_validator(mode="after")
+    def validate_origin_filename(self):
+        if self.origin is not None and (
+            PurePosixPath(self.origin.relative_path).name != self.original_name
+        ):
+            raise ValueError("origin relative_path basename must match original_name")
+        return self
 
     @field_validator("path")
     @classmethod

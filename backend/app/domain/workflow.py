@@ -241,6 +241,7 @@ class WorkflowRun(BaseModel):
     id: str
     project_id: str
     audio_id: str
+    batch_id: str | None = None
     workflow_revision: int = Field(ge=0)
     status: WorkflowRunStatus = WorkflowRunStatus.PENDING
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -251,6 +252,13 @@ class WorkflowRun(BaseModel):
     workflow: WorkflowSnapshot
     nodes: list[WorkflowNodeRecord] = Field(default_factory=list)
     asr_capabilities: ASRCapabilitySnapshot | None = None
+
+    @field_validator("batch_id")
+    @classmethod
+    def validate_batch_id(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"bat_[0-9a-f]{32}", value):
+            raise ValueError("invalid batch id")
+        return value
 
     @field_validator("schema_version")
     @classmethod

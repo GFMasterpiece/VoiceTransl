@@ -7,6 +7,7 @@
 - 一个项目包含零个或多个音频；空项目可以先保存图，每个实际音频有独立输入、工作流运行及产物，不共享时间轴。
 - `Project.source` 是可空的主音频兼容字段，`Project.audios` 包含 `{id, source, name}`。旧项目存在 `source` 时继续构造虚拟 `aud_primary`，不搬迁文件；空项目 `source=null`、`audios=[]`，随后上传只追加真实资源，不捏造主音频。`source_language/target_language` 是可选的旧项目语言元数据；新界面只提交名称，两字段保持 `null`，旧字段或缺少字段的项目均继续可读。
 - 新增音频 ID 由服务端生成，不用用户文件名作路径。不同同名文件可以独立保存。
+- `SourceAsset.origin` 可空；目录导入保存 `{root_id,root_name,relative_path}`，仅作来源和导出组织元数据，不改变实际路径。根名及相对路径必须可跨平台使用，相对路径 basename 与上传文件名一致；旧音频缺失时不补写。
 - 项目级 `workflow.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
 
 ```text
@@ -15,6 +16,7 @@ data/projects/<project-id>/
   source/original.<ext>                    # 主音频
   workflow.json                           # 首次保存后存在
   workflow-revisions/<revision>.json
+  batches/<batch-id>.json                 # 固定图、文件清单与逐项状态
   workflow-runs/<run-id>/                  # 主音频运行
     run.json
     nodes/<node-id>/<filename>
@@ -39,7 +41,7 @@ data/projects/<project-id>/
 | `POST /projects` | 旧上传创建兼容接口：multipart 必填 `file/source_language/target_language`，可选 `name`；201 返回 `{project,job}`，只上传不运行 |
 | `POST /projects/empty` | JSON 仅必填 `name`（去除首尾空白后长度 1–200）；201 返回 `{project,job:null}`。可选 `source_language/target_language` 为旧客户端保留，省略或 `null` 时不猜测默认值 |
 | `GET /projects/{pid}` | 项目与音频成员元数据 |
-| `POST /projects/{pid}/audios` | multipart 必填 `file/source_language`，可选 `name`；201 返回 `{audio,job}`，只追加不运行 |
+| `POST /projects/{pid}/audios` | multipart 必填 `file/source_language`，可选 `name` 及全有或全无的 `origin_root_id/origin_root_name/origin_relative_path`；201 返回 `{audio,job}`，只追加不运行 |
 | `GET /projects/{pid}/audios` | `{items:[{id,source,name,job}]}`，Job 是旧格式只读摘要，不是当前节点运行状态 |
 | `GET /projects/{pid}/audios/{aid}/source` | 按项目资源归属安全读取原音频，inline 响应支持 Range，使用可信 MIME 和 `nosniff` |
 | `DELETE /projects/{pid}` | 删除整个项目，任一音频运行/排队时返回 `409 PROJECT_BUSY` |
@@ -53,10 +55,19 @@ data/projects/<project-id>/
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}` | 校验文件存在后返回结构化 artifact |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/download` | 下载该节点的独立文件 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/content` | 校验归属与文件存在后 inline 读取该节点缓存，供文本或音频预览，支持 Range 和 `nosniff` |
+| `POST /projects/{pid}/batches` | `{workflow_revision,audio_ids,request_id}`，202 返回固定工作流的新批次摘要；相同 key/载荷返回原批次 |
+| `GET /projects/{pid}/batches` | 分页批次历史，默认 20、最大 100 |
+| `GET /projects/{pid}/batches/{bid}` | 批次详情及固定工作流快照 |
+| `GET /projects/{pid}/batches/{bid}/items` | 分页文件任务、状态、运行 ID 及来源 |
+| `POST /projects/{pid}/batches/{bid}/cancel` | 停止派发并请求取消活动运行；终态幂等 |
+| `POST /projects/{pid}/batches/{bid}/retry` | `{request_id,include_cancelled:false}`，以原快照为失败/中断项新建批次，可明确包含取消项 |
+| `GET /projects/{pid}/batches/{bid}/download` | ZIP 及结构化结果清单，按来源/文件任务/节点隔离命名 |
 
 空项目创建不要求语言；旧客户端显式提供的语言字符串仍不能空白、有首尾空白或控制字符，长度最多 32，两者均提供时大小写不敏感不能相同。旧上传创建接口仍必填两种语言；追加音频只要求该资源的源语言，不要求项目目标语言。区域语言代码可用，不猜测默认语言。`preset` 不再是创建参数或执行选择。
 
 上传规则来自 `GET /upload-policy`。文件先进入临时目录，文件与元数据完整后发布；追加失败不删除成功音频或父项目。追加和删除在项目锁下串行化。
+
+批次使用已上传的项目资源，清单 1–10000 个不同音频，首版同项目只有一个活动批次。资源输入必须使用当前运行上下文，显式音频绑定返回 `BATCH_EXPLICIT_AUDIO_BINDING`。批次预留全部排队音频，冲突单运行返回 `AUDIO_BUSY`，删除项目仍返回 `PROJECT_BUSY`。批次快照不随公共图变化，失败重试创建新批次而不修改原运行；服务重启标记中断，不自动重发。完整字段、错误及状态见[批处理规格](../spec/batch-processing.md)。
 
 图校验业务错误由 validate 返回 200/`valid=false`；无效请求或保存图返回 422，版本冲突返回 `409 WORKFLOW_REVISION_CONFLICT`，音频重复运行返回 `409 AUDIO_BUSY`。统一错误结构为 `{error:{code,message,details?}}`。
 
@@ -81,4 +92,4 @@ data/projects/<project-id>/
 
 同一音频最多一个运行/排队任务，其他音频独立排队并共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等执行资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
 
-当前没有批量图运行 API、音频删除/重排、跨音频上下文、合并时间轴、指定节点重跑或历史清理。验证需覆盖多音频上传与重试、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录只读且不迁移。
+当前没有音频删除/重排、跨音频上下文、合并时间轴、指定节点重跑或历史清理。验证覆盖多音频上传与重试、固定快照批次、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录只读且不迁移；目录规模的性能限制见批处理规格。

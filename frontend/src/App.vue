@@ -29,9 +29,9 @@ const pageSubtitle = computed(() => {
   return t('app.subtitle.list')
 })
 const currentError = computed(() => view.value === 'detail' ? detail.error || (!detail.project || detail.loading ? workflowStore.error : '') : store.error)
-const audioContextLocked = computed(() => !!workflowStore.activeRun || workflowStore.saving || workflowStore.validating || workflowStore.actionLoading || workflowStore.resourceUploading || workflowStore.loading)
+const audioContextLocked = computed(() => workflowStore.activeSingleRun || workflowStore.saving || workflowStore.validating || workflowStore.actionLoading || workflowStore.resourceUploading || workflowStore.loading)
 const workflowLeaveError = computed(() => {
-  if (workflowStore.activeRun) return message('app.errors.activeRun')
+  if (workflowStore.activeSingleRun) return message('app.errors.activeRun')
   return ''
 })
 
@@ -65,7 +65,7 @@ async function submitProject() {
   createPreparing.value = true
   if (view.value === 'detail' && workflowEditor.value) {
     // Release this dialog before the editor can show its discard confirmation.
-    const needsConfirmation = workflowStore.dirty && !audioContextLocked.value
+    const needsConfirmation = workflowEditor.value.needsLeaveConfirmation() && !audioContextLocked.value
     if (needsConfirmation) { createOpen.value = false; await nextTick() }
     const result = workflowEditor.value?.requestClose(() => { void performCreate(name) })
     if (result === 'blocked') {
@@ -236,7 +236,7 @@ onUnmounted(() => {
       </section>
 
       <section v-else class="workspace" :aria-label="t('app.workspace.canvas')">
-        <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded">
+        <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded" @batch-uploaded="detail.registerAudio($event, false)">
           <template #workspace-header>
             <button class="back-button workspace-header-back" type="button" @click="showList">{{ t('app.workspace.back') }}</button>
             <h1 class="workspace-project-title" :title="detail.project.name">{{ detail.project.name }}</h1>
