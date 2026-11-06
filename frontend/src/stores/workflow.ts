@@ -6,6 +6,7 @@ import { computed as vueComputed } from 'vue'
 import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
+import { TransferError, validateTransferGraph } from '../workflow/editorTransfer'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = string
@@ -427,7 +428,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const noticeState = messageRef()
   const notice = noticeState.text
   const validationIssues = ref<WorkflowIssue[]>([])
-  const selectedNodeId = ref<string | null>(null)
+  const selectedPrimaryId = ref<string | null>(null)
+  const selectedNodeIds = ref<string[]>([])
+  const selectedNodeId = computed({
+    get: () => selectedPrimaryId.value,
+    set: (id: string | null) => setSelection(id ? [id] : []),
+  })
   const activeRunId = ref<string | null>(null)
   const run = ref<WorkflowRun | null>(null)
   const history = ref<WorkflowRunSummary[]>([])
@@ -450,12 +456,24 @@ export const useWorkflowStore = defineStore('workflow', () => {
   let cancelSequence = 0
   let outputSequence = 0
   let pollTimer: ReturnType<typeof setTimeout> | null = null
-  let stopped = true
+  const stopped = ref(true)
+
+  interface EditorSnapshot { graph: WorkflowDocumentInput; selection: string[]; primary: string | null }
+  interface EditorStep { before: EditorSnapshot; after: EditorSnapshot; mergeKey?: string; menuAddedNodeId?: string; time: number }
+  const undoSteps = ref<EditorStep[]>([])
+  const redoSteps = ref<EditorStep[]>([])
+  const transaction = ref<EditorSnapshot | null>(null)
+  let mergeGroup: string | undefined
 
   const dirty = computed(() => savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
     || savedLayoutSignature.value !== layoutSignature(draft.value))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
+  const editLocked = computed(() => stopped.value || loading.value || capabilitiesLoading.value || saving.value || validating.value
+    || resourceUploading.value || actionLoading.value || !!activeRun.value || !registry.value)
+  const canUndo = computed(() => !editLocked.value && !transaction.value && undoSteps.value.length > 0)
+  const canRedo = computed(() => !editLocked.value && !transaction.value && redoSteps.value.length > 0)
+  const historyTransactionActive = computed(() => !!transaction.value)
   const currentOutputNode = computed(() => selectedNode.value && registry.value && isTerminalNode(selectedNode.value.type, registry.value) ? selectedNode.value : null)
   const runOutputs = computed(() => (run.value?.nodes || []).filter((node) => !!node.artifact))
   const runMatchesDraft = computed(() => !!run.value && !!registry.value
@@ -463,7 +481,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   function currentKey() { return { id: projectId.value, audioId: audioId.value } }
   function isCurrent(id: string | null, aid: string | null, token: number) {
-    return !stopped && id === projectId.value && aid === audioId.value && token === sessionGeneration
+    return !stopped.value && id === projectId.value && aid === audioId.value && token === sessionGeneration
   }
   function endpoint(path: string) { return `${API_BASE_URL}${path}` }
   function projectPath(id: string) { return `/projects/${encodeURIComponent(id)}/workflow` }
@@ -499,13 +517,119 @@ export const useWorkflowStore = defineStore('workflow', () => {
     pollTimer = null
   }
 
-  function selectNode(id: string | null) {
-    selectedNodeId.value = id && draft.value.nodes.some((node) => node.id === id) ? id : null
+  function closeHistoryGroup() { mergeGroup = undefined }
+
+  function setSelection(ids: readonly string[]) {
+    const existing = new Set(draft.value.nodes.map((node) => node.id))
+    const next = [...new Set(ids)].filter((id) => existing.has(id))
+    if (next.join('\0') !== selectedNodeIds.value.join('\0')) closeHistoryGroup()
+    selectedNodeIds.value = next
+    selectedPrimaryId.value = next[next.length - 1] || null
+  }
+
+  function selectNode(id: string | null, mode: 'replace' | 'toggle' | 'add' = 'replace') {
+    if (!id) { setSelection([]); return }
+    const current = selectedNodeIds.value
+    setSelection(mode === 'replace' ? [id] : mode === 'add' ? [...current, id]
+      : current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
+  }
+
+  function editorSnapshot(): EditorSnapshot {
+    return { graph: cloneDocument(draft.value), selection: [...selectedNodeIds.value], primary: selectedNodeId.value }
+  }
+
+  function sameGraph(left: WorkflowDocumentInput, right: WorkflowDocumentInput) {
+    return JSON.stringify(stableObject(left)) === JSON.stringify(stableObject(right))
+  }
+
+  function restoreEditor(snapshot: EditorSnapshot) {
+    draft.value = cloneDocument(snapshot.graph)
+    setSelection(snapshot.selection)
+    selectedPrimaryId.value = snapshot.primary && draft.value.nodes.some((node) => node.id === snapshot.primary)
+      ? snapshot.primary : selectedNodeIds.value[selectedNodeIds.value.length - 1] || null
+    markDirty()
+  }
+
+  function recordEdit(before: EditorSnapshot, key?: string, menuAddedNodeId?: string) {
+    markDirty()
+    if (transaction.value || sameGraph(before.graph, draft.value)) return
+    const after = editorSnapshot()
+    const time = Date.now()
+    const previous = undoSteps.value[undoSteps.value.length - 1]
+    if (key && key === mergeGroup && previous?.mergeKey === key && time - previous.time < 600 && !redoSteps.value.length) {
+      previous.after = after
+      previous.time = time
+      if (sameGraph(previous.before.graph, after.graph)) undoSteps.value.pop()
+    } else {
+      undoSteps.value.push({ before, after, mergeKey: key, menuAddedNodeId, time })
+      if (undoSteps.value.length > 50) undoSteps.value.shift()
+    }
+    redoSteps.value = []
+    mergeGroup = key
+  }
+
+  function resetEditorHistory() {
+    undoSteps.value = []
+    redoSteps.value = []
+    transaction.value = null
+    closeHistoryGroup()
+  }
+
+  function beginHistoryTransaction() {
+    if (editLocked.value || transaction.value) return false
+    closeHistoryGroup()
+    transaction.value = editorSnapshot()
+    return true
+  }
+
+  function commitHistoryTransaction() {
+    if (!transaction.value) return false
+    const before = transaction.value
+    transaction.value = null
+    if (editLocked.value) { restoreEditor(before); return false }
+    recordEdit(before)
+    return !sameGraph(before.graph, draft.value)
+  }
+
+  function cancelHistoryTransaction() {
+    if (!transaction.value) return false
+    const before = transaction.value
+    transaction.value = null
+    restoreEditor(before)
+    closeHistoryGroup()
+    return true
+  }
+
+  function undo() {
+    if (!canUndo.value) return false
+    const step = undoSteps.value.pop()!
+    // Restoring an insertion must preserve its recorded layout, including on redo.
+    step.menuAddedNodeId = undefined
+    redoSteps.value.push(step)
+    restoreEditor(step.before)
+    closeHistoryGroup()
+    return true
+  }
+
+  function redo() {
+    if (!canRedo.value) return false
+    const step = redoSteps.value.pop()!
+    undoSteps.value.push(step)
+    restoreEditor(step.after)
+    closeHistoryGroup()
+    return true
+  }
+
+  function assignDraft(value: WorkflowDocumentInput) {
+    draft.value = cloneDocument(value)
+    setSelection(selectedNodeIds.value.filter((id) => draft.value.nodes.some((node) => node.id === id)))
   }
 
   function setDraft(value: WorkflowDocumentInput) {
-    draft.value = cloneDocument(value)
-    if (selectedNodeId.value && !draft.value.nodes.some((node) => node.id === selectedNodeId.value)) selectedNodeId.value = draft.value.nodes[0]?.id || null
+    if (editLocked.value) return
+    const before = editorSnapshot()
+    assignDraft(value)
+    recordEdit(before)
   }
 
   function setNodeMinimum(id: string, size: WorkflowNodeSize) {
@@ -528,9 +652,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function setCleanBaseline(value: WorkflowDocumentInput) {
-    setDraft(value)
+    assignDraft(value)
     savedSignature.value = executionSignature(value, registry.value || undefined)
     savedLayoutSignature.value = layoutSignature(value)
+    closeHistoryGroup()
   }
 
   function localConfigIssues(): WorkflowIssue[] {
@@ -543,7 +668,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function validate(): Promise<WorkflowIssue[]> {
     const { id, audioId: aid } = currentKey()
-    if (!id || stopped || saving.value || validating.value || resourceUploading.value || activeRun.value) return []
+    if (!id || stopped.value || loading.value || saving.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || transaction.value) return []
     const localIssues = localConfigIssues()
     if (localIssues.length) return localIssues
     const token = sessionGeneration
@@ -581,7 +706,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     capabilitiesFailure = undefined
     try {
       const value = await fetchCapabilities()
-      if (stopped) return
+      if (stopped.value) return
       capabilities.value = value
     } catch (reason) {
       capabilitiesFailure = reason instanceof Error ? reason : message('workflow.capReadFailed')
@@ -595,7 +720,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     stop()
     projectId.value = id
     audioId.value = aid
-    stopped = false
+    stopped.value = false
     const token = sessionGeneration
     loading.value = false
     saving.value = false
@@ -613,7 +738,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     savedSignature.value = ''
     savedLayoutSignature.value = ''
     nodeMinimums.value = {}
-    selectedNodeId.value = null
+    setSelection([])
     clearHistoryState()
     runErrorState.set('')
     try {
@@ -626,10 +751,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
       if (!isCurrent(id, aid, token)) return
       document.value = value
-      setDraft(value)
+      assignDraft(value)
       savedSignature.value = executionSignature(value, registry.value || undefined)
       savedLayoutSignature.value = layoutSignature(value)
-      selectedNodeId.value = draft.value.nodes[0]?.id || null
+      setSelection(draft.value.nodes[0] ? [draft.value.nodes[0].id] : [])
       zoom.value = 1
       pan.value = { x: 0, y: 0 }
       void loadHistory(id, aid)
@@ -642,7 +767,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function save() {
     const { id, audioId: aid } = currentKey()
-    if (!id || stopped || saving.value || loading.value || validating.value || resourceUploading.value || activeRun.value) return null
+    if (!id || stopped.value || saving.value || loading.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || transaction.value) return null
+    closeHistoryGroup()
     const token = sessionGeneration
     if (localConfigIssues().length) return null
     const sequence = ++saveSequence
@@ -669,7 +795,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
       if (!isCurrent(id, aid, token) || sequence !== saveSequence) return null
       document.value = value
-      setDraft(value)
+      assignDraft(value)
       savedSignature.value = executionSignature(value, registry.value || undefined)
       savedLayoutSignature.value = layoutSignature(value)
       validationIssues.value = []
@@ -698,7 +824,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   })
   async function setAudioContext(aid: string | null) {
     if (aid === audioId.value) return true
-    if (activeRun.value || saving.value || validating.value || starting.value || resourceUploading.value || loading.value || stopped) return false
+    if (activeRun.value || saving.value || validating.value || starting.value || resourceUploading.value || loading.value || stopped.value) return false
     sessionGeneration += 1
     historySequence += 1
     runDetailSequence += 1
@@ -711,10 +837,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function startRun() {
-    if (resourceUploading.value || saving.value || validating.value || loading.value) return null
+    if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
     if (!dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped || starting.value || activeRun.value || !document.value) return null
+    if (!id || !aid || stopped.value || starting.value || activeRun.value || !document.value) return null
     if (dirty.value) {
       errorState.set(message('workflow.saveBeforeRun'))
       return null
@@ -755,7 +881,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   async function cancelRun() {
     const { id, audioId: aid } = currentKey()
     const runId = run.value?.id
-    if (!id || !aid || !runId || stopped || cancelling.value) return
+    if (!id || !aid || !runId || stopped.value || cancelling.value) return
     const token = sessionGeneration
     const sequence = ++cancelSequence
     cancelling.value = true
@@ -788,7 +914,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function loadHistory(id = projectId.value, aid = audioId.value) {
-    if (!id || !aid || stopped || historyLoading.value) return
+    if (!id || !aid || stopped.value || historyLoading.value) return
     const token = sessionGeneration
     const sequence = ++historySequence
     historyLoading.value = true
@@ -815,7 +941,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function loadRun(runId: string) {
     const { id, audioId: aid } = currentKey()
-    if (!id || !aid || stopped) return
+    if (!id || !aid || stopped.value) return
     if (activeRun.value && run.value?.id !== runId) {
       runErrorState.set(message('workflow.activeHistory'))
       return
@@ -878,7 +1004,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function schedulePoll() {
-    if (!run.value || !activeRun.value || stopped) return
+    if (!run.value || !activeRun.value || stopped.value) return
     stopPolling()
     const { id, audioId: aid } = currentKey()
     if (!id || !aid) return
@@ -904,11 +1030,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function beginDraftEditing() {
-    stopped = false
+    stopped.value = false
   }
 
   function leaveEditor() {
-    stopped = true
+    cancelHistoryTransaction()
+    resetEditorHistory()
+    stopped.value = true
     sessionGeneration += 1
     stopPolling()
   }
@@ -946,7 +1074,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
-    if (stopped || loading.value || saving.value || validating.value || resourceUploading.value || actionLoading.value || activeRun.value || !registry.value) return
+    if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
@@ -968,38 +1096,117 @@ export const useWorkflowStore = defineStore('workflow', () => {
       config: registry.value.createDefaultConfig(type),
       position: placed,
     }
+    const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    markDirty()
+    recordEdit(before, undefined, id)
   }
 
   function removeNode(id: string) {
-    if (stopped || activeRun.value) return
+    if (editLocked.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node || registry.value?.kind(node.type)?.removable === false) {
       errorState.set(message('workflow.keepInput'))
       return
     }
+    const before = editorSnapshot()
     draft.value.nodes = draft.value.nodes.filter((item) => item.id !== id)
     delete nodeMinimums.value[id]
     draft.value.edges = draft.value.edges.filter((edge) => edge.source !== id && edge.target !== id)
-    if (selectedNodeId.value === id) selectedNodeId.value = draft.value.nodes[0]?.id || null
-    markDirty()
+    setSelection(selectedNodeIds.value.filter((value) => value !== id))
+    recordEdit(before)
   }
 
   function updateNode(id: string, patch: Partial<Pick<WorkflowNode, 'config' | 'position' | 'size'>>) {
-    if (stopped || saving.value || validating.value || activeRun.value || resourceUploading.value || actionLoading.value) return
+    if (editLocked.value) return
     const node = draft.value.nodes.find((item) => item.id === id)
     if (!node) return
-    if (patch.config !== undefined) node.config = patch.config
-    if (patch.position !== undefined) node.position = patch.position
+    if (patch.position && (!Number.isFinite(patch.position.x) || !Number.isFinite(patch.position.y)
+      || Math.abs(patch.position.x) > 1_000_000 || Math.abs(patch.position.y) > 1_000_000)) return
+    if (patch.size && (!Number.isFinite(patch.size.width) || !Number.isFinite(patch.size.height)
+      || patch.size.width <= 0 || patch.size.height <= 0 || patch.size.width > 1_000_000 || patch.size.height > 1_000_000)) return
+    const before = editorSnapshot()
+    let key: string | undefined
+    if (patch.config !== undefined && patch.position === undefined && patch.size === undefined) {
+      const fields = [...new Set([...Object.keys(node.config), ...Object.keys(patch.config)])]
+        .filter((field) => JSON.stringify(stableObject(node.config[field])) !== JSON.stringify(stableObject(patch.config![field])))
+      const fieldType = registry.value?.kind(node.type)?.fields.find((field) => field.key === fields[0])?.type
+      const resourceKey = registry.value?.kind(node.type)?.resourceInput?.configKey
+      if (fields.length === 1 && fields[0] !== resourceKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
+    }
+    if (patch.config !== undefined) node.config = JSON.parse(JSON.stringify(patch.config))
+    if (patch.position !== undefined) node.position = { ...patch.position }
     if (patch.size !== undefined) node.size = patch.size === null ? null : { ...patch.size }
-    markDirty()
+    recordEdit(before, key)
   }
 
+  function updateNodeConfig(id: string, config: WorkflowNode['config']) { updateNode(id, { config }) }
+  function updateNodeUi(id: string, patch: Partial<Pick<WorkflowNode, 'position' | 'size'>>) { updateNode(id, patch) }
+
+  function canAdjustInsertedNodeUi(id: string) {
+    if (editLocked.value || transaction.value || redoSteps.value.length) return false
+    const step = undoSteps.value[undoSteps.value.length - 1]
+    return !!step && step.menuAddedNodeId === id && !step.before.graph.nodes.some((node) => node.id === id)
+      && step.after.graph.nodes.some((node) => node.id === id) && sameGraph(step.after.graph, draft.value)
+  }
+
+  /** First content measurement completes placement as part of the insertion itself. */
+  function adjustInsertedNodeUi(id: string, patch: Partial<Pick<WorkflowNode, 'position' | 'size'>>) {
+    if (!canAdjustInsertedNodeUi(id)) return false
+    const step = undoSteps.value[undoSteps.value.length - 1]!
+    const before = editorSnapshot()
+    transaction.value = before
+    updateNodeUi(id, patch)
+    transaction.value = null
+    step.after = editorSnapshot()
+    closeHistoryGroup()
+    return !sameGraph(before.graph, draft.value)
+  }
+
+  function deleteSelection() {
+    if (editLocked.value || !registry.value) return false
+    const selected = new Set(selectedNodeIds.value)
+    const protectedNodes = draft.value.nodes.filter((node) => selected.has(node.id) && registry.value!.kind(node.type)?.removable === false)
+    const removable = new Set(draft.value.nodes.filter((node) => selected.has(node.id) && registry.value!.kind(node.type)?.removable !== false).map((node) => node.id))
+    if (protectedNodes.length) errorState.set(message('workflow.protectedSelection', { count: protectedNodes.length }))
+    if (!removable.size) return false
+    const before = editorSnapshot()
+    draft.value = {
+      nodes: draft.value.nodes.filter((node) => !removable.has(node.id)),
+      edges: draft.value.edges.filter((edge) => !removable.has(edge.source) && !removable.has(edge.target)),
+    }
+    for (const id of removable) delete nodeMinimums.value[id]
+    setSelection(selectedNodeIds.value.filter((id) => !removable.has(id)))
+    recordEdit(before)
+    return true
+  }
+
+  function applyGraph(graph: WorkflowDocumentInput, append: boolean) {
+    if (editLocked.value || !registry.value || transaction.value) return false
+    try {
+      const candidate = validateTransferGraph(append
+        ? { nodes: [...draft.value.nodes, ...graph.nodes], edges: [...draft.value.edges, ...graph.edges] }
+        : graph, registry.value)
+      if (sameGraph(candidate, draft.value)) return false
+      const before = editorSnapshot()
+      draft.value = candidate
+      setSelection(graph.nodes.map((node) => node.id))
+      nodeMinimums.value = Object.fromEntries(Object.entries(nodeMinimums.value).filter(([id]) => candidate.nodes.some((node) => node.id === id)))
+      errorState.set('')
+      recordEdit(before)
+      return true
+    } catch (reason) {
+      errorState.set(reason instanceof TransferError ? message(reason.code, reason.params) : reason instanceof Error ? reason : message('workflow.invalidWorkflow'))
+      return false
+    }
+  }
+
+  function applyPastedGraph(graph: WorkflowDocumentInput) { return applyGraph(graph, true) }
+  function replaceGraph(graph: WorkflowDocumentInput) { return applyGraph(graph, false) }
+
   function connect(source: string, target: string, sourcePortId?: PortName, targetPortId?: PortName) {
-    if (stopped || activeRun.value || saving.value || validating.value || actionLoading.value || resourceUploading.value) return false
+    if (editLocked.value) return false
     const from = draft.value.nodes.find((node) => node.id === source)
     const to = draft.value.nodes.find((node) => node.id === target)
     if (!registry.value) return false
@@ -1039,21 +1246,25 @@ export const useWorkflowStore = defineStore('workflow', () => {
       visited.add(nodeId)
       pending.push(...(outgoing.get(nodeId) || []))
     }
+    const before = editorSnapshot()
     draft.value.edges = retained
     draft.value.edges.push({ id: nextEdgeId(draft.value.edges), source, source_port: sourcePort, target, target_port: targetPort })
     errorState.set('')
-    markDirty()
+    recordEdit(before)
     return true
   }
 
   function disconnect(edgeId: string) {
-    if (stopped || activeRun.value) return
+    if (editLocked.value || !draft.value.edges.some((edge) => edge.id === edgeId)) return
+    const before = editorSnapshot()
     draft.value.edges = draft.value.edges.filter((edge) => edge.id !== edgeId)
-    markDirty()
+    recordEdit(before)
   }
 
   function stop() {
-    stopped = true
+    cancelHistoryTransaction()
+    resetEditorHistory()
+    stopped.value = true
     sessionGeneration += 1
     validateSequence += 1
     saveSequence += 1
@@ -1073,8 +1284,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function discardDraft() {
+    resetEditorHistory()
     if (document.value) {
-      setDraft(document.value)
+      assignDraft(document.value)
       savedSignature.value = executionSignature(document.value, registry.value || undefined)
       savedLayoutSignature.value = layoutSignature(document.value)
     }
@@ -1086,16 +1298,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   function discardSelection() {
     const first = document.value?.nodes[0]?.id || null
-    selectedNodeId.value = first
+    setSelection(first ? [first] : [])
   }
 
   return {
-    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, resourceUploading, actionLoading, error, notice,
-    validationIssues, selectedNodeId, selectedNode, currentOutputNode, activeRunId, run, activeRun,
+    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, actionLoading, error, notice,
+    validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, setAudioContext,
     runMatchesDraft, nodeMinimums, setNodeMinimum, getNodeSize,
     setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
-    updateNode, connect, disconnect, selectNode, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
+    updateNode, updateNodeConfig, updateNodeUi, canAdjustInsertedNodeUi, adjustInsertedNodeUi, connect, disconnect, selectNode, setSelection, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,
+    canUndo, canRedo, editLocked, historyTransactionActive, undo, redo, closeHistoryGroup, beginHistoryTransaction, commitHistoryTransaction, cancelHistoryTransaction,
+    deleteSelection, applyPastedGraph, replaceGraph,
     discardDraft,
   }
 })

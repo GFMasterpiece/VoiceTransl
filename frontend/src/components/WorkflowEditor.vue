@@ -17,6 +17,7 @@ import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
 import { measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
+import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
 
 const clipId = useId()
@@ -28,9 +29,11 @@ const store = useWorkflowStore()
 watch(resourceBusy, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
-const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y: number } | null>(null)
+const drag = ref<{ nodeId: string; moved: boolean; startX: number; startY: number; positions: Array<{ id: string; x: number; y: number }> } | null>(null)
+const marquee = ref<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null)
 const resizing = ref<{ nodeId: string; axis: 'right' | 'bottom' | 'corner'; startX: number; startY: number; width: number; height: number } | null>(null)
-const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
+let suppressNodeClick: string | null = null
+const panning = ref<{ startX: number; startY: number; x: number; y: number; moved: boolean } | null>(null)
 type PortDirection = 'input' | 'output'
 const connectionStart = ref<{ nodeId: string; port: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
@@ -40,9 +43,67 @@ const menuElement = ref<HTMLElement | null>(null)
 const menuSearch = ref('')
 let menuTrigger: Element | null = null
 const discardPrompt = ref(false)
+const editMenuOpen = ref(false)
+const editMenuElement = ref<HTMLElement | null>(null)
+const editMenuButton = ref<HTMLButtonElement | null>(null)
 let pendingClose: (() => void) | null = null
 const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
-const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading)
+const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading && !drag.value && !resizing.value && !readingImport.value && !pendingImport.value)
+const commands = useEditorCommands(store, {
+  stage,
+  context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
+  blocked: () => controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value,
+  pastePoint: () => {
+    const bounds = stage.value?.getBoundingClientRect()
+    return bounds && bounds.width > 0 && bounds.height > 0
+      ? canvasPoint({ clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2 } as PointerEvent) : undefined
+  },
+})
+const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
+const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value)
+type EditorCommand = 'undo' | 'redo' | 'select-all' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'import' | 'export'
+const editorCommands: Array<{ id: EditorCommand; shortcut: string }> = [
+  { id: 'undo', shortcut: 'Ctrl/Cmd+Z' }, { id: 'redo', shortcut: 'Ctrl/Cmd+Shift+Z' },
+  { id: 'select-all', shortcut: 'Ctrl/Cmd+A' }, { id: 'copy', shortcut: 'Ctrl/Cmd+C' },
+  { id: 'paste', shortcut: 'Ctrl/Cmd+V' }, { id: 'duplicate', shortcut: 'Ctrl/Cmd+D' },
+  { id: 'delete', shortcut: 'Delete / Backspace' }, { id: 'import', shortcut: '' }, { id: 'export', shortcut: '' },
+]
+function commandDisabled(command: EditorCommand) {
+  if (editingBlocked.value) return true
+  if (command === 'undo') return !store.canUndo
+  if (command === 'redo') return !store.canRedo
+  if (command === 'paste') return clipboardBusy.value
+  return ['copy', 'duplicate', 'delete'].includes(command) && !store.selectedNodeIds.length
+}
+function closeEditMenu(focus = false) { editMenuOpen.value = false; if (focus) commands.focusCanvas() }
+async function toggleEditMenu() {
+  closeMenu(); clearGestures()
+  editMenuOpen.value = !editMenuOpen.value
+  if (editMenuOpen.value) { await nextTick(); editMenuElement.value?.querySelector<HTMLElement>('button:not([disabled])')?.focus() }
+}
+function runEditorCommand(command: EditorCommand) {
+  if (commandDisabled(command)) return
+  closeEditMenu(true)
+  if (command === 'undo') store.undo()
+  else if (command === 'redo') store.redo()
+  else if (command === 'select-all') store.setSelection(store.draft.nodes.map((node) => node.id))
+  else if (command === 'copy') void commands.copySelected()
+  else if (command === 'paste') void commands.pasteClipboard()
+  else if (command === 'duplicate') commands.duplicateSelected()
+  else if (command === 'delete') {
+    if (window.confirm(t('workflow.editorDeleteConfirm', { count: store.selectedNodeIds.length }))) store.deleteSelection()
+  } else if (command === 'import') commands.chooseImport()
+  else commands.exportWorkflow()
+}
+function editorMenuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeEditMenu(true); return }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const items = [...(editMenuElement.value?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || [])]
+  if (!items.length) return
+  event.preventDefault()
+  const index = items.indexOf(document.activeElement as HTMLButtonElement)
+  items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length]?.focus()
+}
 
 const minZoom = .01
 function nodeWidth(node: WorkflowNode) { return store.getNodeSize(node).width }
@@ -120,11 +181,12 @@ function closeMenu(restore = false) {
   menuTrigger = null
 }
 async function showMenu(x: number, y: number, world: { x: number; y: number }, nodeId?: string, trigger?: Element) {
-  if (controlsLocked.value || activePanel.value) return
+  if (editingBlocked.value) return
+  closeEditMenu()
   clearGestures()
   menuTrigger = trigger || stage.value
   menuSearch.value = ''
-  if (nodeId) store.selectNode(nodeId)
+  if (nodeId && !store.selectedNodeIds.includes(nodeId)) store.selectNode(nodeId)
   contextMenu.value = { x, y, world, nodeId }
   await nextTick()
   if (!contextMenu.value || !menuElement.value) return
@@ -172,12 +234,37 @@ function menuKey(event: KeyboardEvent) {
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
   items[index]?.focus()
 }
-function outsideMenu(event: PointerEvent) { if (contextMenu.value && (!(event.target instanceof Node) || !menuElement.value?.contains(event.target))) closeMenu() }
+function outsideMenu(event: PointerEvent) {
+  if (contextMenu.value && (!(event.target instanceof Node) || !menuElement.value?.contains(event.target))) closeMenu()
+  if (editMenuOpen.value && (!(event.target instanceof Node) || (!editMenuElement.value?.contains(event.target) && !editMenuButton.value?.contains(event.target)))) closeEditMenu()
+}
+function nativeEditorTarget(target: EventTarget | null) {
+  return !(target instanceof Element) || !!target.closest('input, textarea, select, button, audio, video, [contenteditable]:not([contenteditable="false"]), [role="dialog"], .node-resize-handle')
+}
 function canvasKeyboard(event: KeyboardEvent) {
-  if ((event.target as Element).closest('.workflow-node, input, textarea, select, audio, video')) return
+  if (event.defaultPrevented || nativeEditorTarget(event.target)) return
+  if (event.key === 'Escape' && (drag.value || resizing.value || marquee.value || connectionStart.value)) { event.preventDefault(); clearGestures(); return }
+  if (editingBlocked.value || contextMenu.value || editMenuOpen.value) return
+  const key = event.key.toLowerCase()
+  if (event.ctrlKey || event.metaKey) {
+    // Native paste dispatches one ClipboardEvent; the menu alone uses readText.
+    if (key === 'v') return
+    const command: EditorCommand | undefined = key === 'z' ? (event.shiftKey ? 'redo' : 'undo')
+      : key === 'y' ? 'redo' : key === 'a' ? 'select-all' : key === 'c' ? 'copy' : key === 'd' ? 'duplicate' : undefined
+    if (command) { event.preventDefault(); event.stopPropagation(); runEditorCommand(command); return }
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (store.selectedNodeIds.length) { event.preventDefault(); event.stopPropagation(); runEditorCommand('delete') }
+    return
+  }
+  if ((event.target as Element).closest('.workflow-node')) return
   if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openAddMenu() }
 }
-watch(() => [store.pan.x, store.pan.y, store.zoom, controlsLocked.value, activePanel.value], () => { closeMenu() }, { flush: 'sync' })
+function canvasPaste(event: ClipboardEvent) {
+  if (nativeEditorTarget(event.target) || editingBlocked.value || contextMenu.value || editMenuOpen.value) return
+  commands.onPaste(event)
+}
+watch(() => [store.pan.x, store.pan.y, store.zoom, controlsLocked.value, activePanel.value, props.projectId], () => { closeMenu(); closeEditMenu() }, { flush: 'sync' })
 
 function nodeStatus(node: WorkflowNode) {
   if (!store.runMatchesDraft) return 'draft'
@@ -235,16 +322,22 @@ function beginPointer(event: PointerEvent, capture: boolean) {
   gesturePointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   if (capture && gesturePointerId.value !== null) stage.value?.setPointerCapture?.(event.pointerId)
 }
-function clearGestures() {
+function clearGestures(commit = false) {
   const pointerId = gesturePointerId.value
   gesturePointerId.value = null
+  if (drag.value || resizing.value) {
+    if (commit) store.commitHistoryTransaction()
+    else store.cancelHistoryTransaction()
+  }
   drag.value = null
   resizing.value = null
+  marquee.value = null
   panning.value = null
   cancelConnection()
   if (pointerId !== null && stage.value?.hasPointerCapture?.(pointerId)) stage.value.releasePointerCapture(pointerId)
 }
-watch(controlsLocked, (locked) => { if (locked) clearGestures() })
+function cancelGestures() { clearGestures() }
+watch(editingBlocked, (locked) => { if (locked) clearGestures() })
 
 function canvasPoint(event: PointerEvent) {
   const bounds = stage.value?.getBoundingClientRect()
@@ -260,8 +353,8 @@ function focusNode(node: WorkflowNode) {
   })
 }
 function editNode(node: WorkflowNode, config: Record<string, unknown>) {
-  if (controlsLocked.value) return
-  store.updateNode(node.id, { config })
+  if (editingBlocked.value) return
+  store.updateNodeConfig(node.id, config)
 }
 
 const contentMinimums = ref<Record<string, NodeContentMinimum>>({})
@@ -270,7 +363,7 @@ let measurementDisposed = false
 let mutationObserver: MutationObserver | null = null
 let resizeObserver: ResizeObserver | null = null
 const observedBodies = new Set<Element>()
-const measuredNodes = new Map<string, WorkflowNode>()
+const measuredNodes = new Set<string>()
 function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
     bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH,
@@ -301,13 +394,13 @@ function measureContent() {
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
-    const firstMeasurement = measuredNodes.get(node.id) !== node
-    measuredNodes.set(node.id, node)
+    const firstMeasurement = !measuredNodes.has(node.id)
+    measuredNodes.add(node.id)
     if (JSON.stringify(contentMinimums.value[node.id]) !== JSON.stringify(minimum)) contentMinimums.value = { ...contentMinimums.value, [node.id]: minimum }
     store.setNodeMinimum(node.id, minimum)
     // A newly inserted kind may reveal a larger intrinsic width on its first
     // paint. Finish placing that new node only; never reflow saved/user nodes.
-    if (firstMeasurement && !store.document?.nodes.some((item) => item.id === node.id) && !controlsLocked.value) {
+    if (firstMeasurement && !store.document?.nodes.some((item) => item.id === node.id) && store.canAdjustInsertedNodeUi(node.id)) {
       const size = store.getNodeSize(node)
       let y = node.position.y
       while (true) {
@@ -321,7 +414,7 @@ function measureContent() {
         y = Math.max(...collisions.map((other) => other.position.y + store.getNodeSize(other).height)) + WORKFLOW_NODE_ROW_GAP
       }
       if (Math.abs(y) > 1_000_000) store.setError(message('workflow.nodePlacementFailed'))
-      else if (y !== node.position.y) store.updateNode(node.id, { position: { ...node.position, y } })
+      else if (y !== node.position.y) store.adjustInsertedNodeUi(node.id, { position: { ...node.position, y } })
     }
     const body = group.querySelector('.node-body')
     if (body && resizeObserver && !observedBodies.has(body)) { resizeObserver.observe(body); observedBodies.add(body) }
@@ -356,9 +449,10 @@ function bodyStyle(node: WorkflowNode) {
 function headerPath(node: WorkflowNode) { return `M 14 0 H ${nodeWidth(node) - 14} Q ${nodeWidth(node)} 0 ${nodeWidth(node)} 14 V 30 H 0 V 14 Q 0 0 14 0 Z` }
 function portClipWidth(node: WorkflowNode) { return inputPortsForNode(node.type).length && outputPortsForNode(node.type).length ? (nodeWidth(node) - 24) / 2 : nodeWidth(node) - 20 }
 function startResize(event: PointerEvent, node: WorkflowNode, axis: 'right' | 'bottom' | 'corner') {
-  if (controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
+  if (editingBlocked.value || event.button !== 0 || event.isPrimary === false) return
   event.preventDefault()
   clearGestures()
+  if (!store.beginHistoryTransaction()) return
   const point = canvasPoint(event)
   resizing.value = { nodeId: node.id, axis, startX: point.x, startY: point.y, ...store.getNodeSize(node) }
   store.selectNode(node.id)
@@ -367,12 +461,12 @@ function startResize(event: PointerEvent, node: WorkflowNode, axis: 'right' | 'b
 function setNodeSize(node: WorkflowNode, width: number, height: number) {
   if (controlsLocked.value) return
   const minimum = store.getNodeSize({ ...node, size: null })
-  store.updateNode(node.id, { size: { width: Math.min(1_000_000, Math.max(minimum.width, Math.round(width))), height: Math.min(1_000_000, Math.max(minimum.height, Math.round(height))) } })
+  store.updateNodeUi(node.id, { size: { width: Math.min(1_000_000, Math.max(minimum.width, Math.round(width))), height: Math.min(1_000_000, Math.max(minimum.height, Math.round(height))) } })
 }
 function resizeKey(event: KeyboardEvent, node: WorkflowNode, axis: 'right' | 'bottom' | 'corner') {
   event.stopPropagation()
   if (controlsLocked.value) return
-  if (event.key === 'Home') { event.preventDefault(); store.updateNode(node.id, { size: null }); return }
+  if (event.key === 'Home') { event.preventDefault(); store.updateNodeUi(node.id, { size: null }); return }
   const step = event.shiftKey ? 50 : 10
   const size = store.getNodeSize(node)
   const dx = axis !== 'bottom' ? (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0) : 0
@@ -381,14 +475,24 @@ function resizeKey(event: KeyboardEvent, node: WorkflowNode, axis: 'right' | 'bo
 }
 
 function onNodePointerDown(event: PointerEvent, node: WorkflowNode) {
-  if (controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
+  if (editingBlocked.value || event.button !== 0 || event.isPrimary === false) return
   const target = event.target as Element
   if (target.closest('button, input, select, textarea, foreignObject, .node-resize-handle') || target.closest('.node-port')) return
   event.preventDefault()
+  clearGestures()
+  stage.value?.focus()
+  suppressNodeClick = event.shiftKey ? node.id : null
+  if (event.shiftKey) { store.selectNode(node.id, 'toggle'); return }
+  if (!store.selectedNodeIds.includes(node.id)) store.selectNode(node.id)
+  if (!store.beginHistoryTransaction()) return
   const point = canvasPoint(event)
-  drag.value = { nodeId: node.id, startX: point.x, startY: point.y, x: node.position.x, y: node.position.y }
-  store.selectNode(node.id)
+  drag.value = { nodeId: node.id, moved: false, startX: point.x, startY: point.y, positions: store.draft.nodes.filter((entry) => store.selectedNodeIds.includes(entry.id)).map((entry) => ({ id: entry.id, ...entry.position })) }
   beginPointer(event, true)
+}
+function onNodeClick(event: MouseEvent, node: WorkflowNode) {
+  if (nativeEditorTarget(event.target)) return
+  if (suppressNodeClick === node.id) { suppressNodeClick = null; return }
+  store.selectNode(node.id, event.shiftKey ? 'toggle' : 'replace')
 }
 
 function onPointerMove(event: PointerEvent) {
@@ -405,18 +509,20 @@ function onPointerMove(event: PointerEvent) {
     connectPointer.value = canvasPoint(event)
     return
   }
+  if (marquee.value) { marquee.value.end = canvasPoint(event); return }
   if (drag.value) {
     const point = canvasPoint(event)
-    const node = store.draft.nodes.find((item) => item.id === drag.value!.nodeId)
-    if (!node) return
-    node.position = {
-      x: Math.max(-1_000_000, Math.min(1_000_000, Math.round(drag.value.x + point.x - drag.value.startX))),
-      y: Math.max(-1_000_000, Math.min(1_000_000, Math.round(drag.value.y + point.y - drag.value.startY))),
+    const positions = drag.value.positions
+    const dx = Math.max(...positions.map((node) => -1_000_000 - node.x), Math.min(Math.round(point.x - drag.value.startX), ...positions.map((node) => 1_000_000 - node.x)))
+    const dy = Math.max(...positions.map((node) => -1_000_000 - node.y), Math.min(Math.round(point.y - drag.value.startY), ...positions.map((node) => 1_000_000 - node.y)))
+    if (dx || dy) { drag.value.moved = true; suppressNodeClick = drag.value.nodeId }
+    for (const node of positions) {
+      store.updateNodeUi(node.id, { position: { x: node.x + dx, y: node.y + dy } })
     }
-    store.markDirty()
     return
   }
   if (panning.value) {
+    if (event.clientX !== panning.value.startX || event.clientY !== panning.value.startY) panning.value.moved = true
     store.pan.x = panning.value.x + event.clientX - panning.value.startX
     store.pan.y = panning.value.y + event.clientY - panning.value.startY
   }
@@ -425,13 +531,31 @@ function onPointerMove(event: PointerEvent) {
 function onPointerUp(event: PointerEvent) {
   if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
   if (connectionStart.value && event.type === 'pointerup') finishConnection(event)
-  else clearGestures()
+  else {
+    if (drag.value && !drag.value.moved && event.type === 'pointerup') store.selectNode(drag.value.nodeId)
+    if (panning.value && !panning.value.moved && event.type === 'pointerup') store.setSelection([])
+    if (marquee.value && event.type === 'pointerup') {
+      marquee.value.end = canvasPoint(event)
+      const box = marqueeBounds.value!
+      store.setSelection(store.draft.nodes.filter((node) => node.position.x < box.x + box.width && node.position.x + nodeWidth(node) > box.x
+        && node.position.y < box.y + box.height && node.position.y + nodeHeight(node) > box.y).map((node) => node.id))
+    }
+    clearGestures(event.type === 'pointerup')
+  }
+  setTimeout(() => { suppressNodeClick = null }, 0)
 }
+const marqueeBounds = computed(() => marquee.value ? {
+  x: Math.min(marquee.value.start.x, marquee.value.end.x), y: Math.min(marquee.value.start.y, marquee.value.end.y),
+  width: Math.abs(marquee.value.end.x - marquee.value.start.x), height: Math.abs(marquee.value.end.y - marquee.value.start.y),
+} : null)
 
 function startPan(event: PointerEvent) {
-  if ((event.target as Element).closest('.workflow-node') || event.button !== 0 || controlsLocked.value || event.isPrimary === false) return
+  if ((event.target as Element).closest('.workflow-node') || event.button !== 0 || editingBlocked.value || event.isPrimary === false) return
   event.preventDefault()
-  panning.value = { startX: event.clientX, startY: event.clientY, x: store.pan.x, y: store.pan.y }
+  clearGestures()
+  stage.value?.focus()
+  if (event.shiftKey) { const point = canvasPoint(event); marquee.value = { start: point, end: point } }
+  else panning.value = { startX: event.clientX, startY: event.clientY, x: store.pan.x, y: store.pan.y, moved: false }
   beginPointer(event, true)
 }
 
@@ -466,7 +590,7 @@ function fitCanvas() {
 }
 
 function startConnection(node: WorkflowNode, direction: PortDirection, port: string, event: PointerEvent) {
-  if (!port || controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
+  if (!port || editingBlocked.value || event.button !== 0 || event.isPrimary === false) return
   if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
   event.preventDefault()
   clearGestures()
@@ -540,6 +664,7 @@ async function reloadCapabilities() {
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
+  if (readingImport.value || pendingImport.value || clipboardBusy.value) { store.setError(message('workflow.editorImportPending')); return 'blocked' }
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
   if (store.activeRun) {
     store.setError(message('workflow.leaveActive'))
@@ -580,10 +705,6 @@ function keyboardSelect(event: KeyboardEvent, node: WorkflowNode) {
     event.preventDefault()
     focusNode(node)
   }
-  if (event.key === 'Delete' && registry.value?.kind(node.type)?.removable !== false && !controlsLocked.value) {
-    event.preventDefault()
-    if (window.confirm(t('workflow.deleteShortConfirm', { name: nodeLabel(node) }))) store.removeNode(node.id)
-  }
 }
 
 function nodeKindLabel(node: WorkflowNode) {
@@ -609,7 +730,7 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, hasOpenDialog: () => !!activePanel.value || discardPrompt.value })
+defineExpose({ requestClose, hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
@@ -617,7 +738,7 @@ onMounted(() => {
   window.addEventListener('pointerdown', outsideMenu, true)
   window.addEventListener('beforeunload', guardUnload)
   window.addEventListener('pointermove', onWindowPointerMove)
-  window.addEventListener('blur', clearGestures)
+  window.addEventListener('blur', cancelGestures)
   window.addEventListener('pointerup', onWindowPointerUp)
   window.addEventListener('pointercancel', onWindowPointerUp)
 })
@@ -632,7 +753,7 @@ onUnmounted(() => {
   window.removeEventListener('pointerdown', outsideMenu, true)
   window.removeEventListener('beforeunload', guardUnload)
   window.removeEventListener('pointermove', onWindowPointerMove)
-  window.removeEventListener('blur', clearGestures)
+  window.removeEventListener('blur', cancelGestures)
   window.removeEventListener('pointerup', onWindowPointerUp)
   window.removeEventListener('pointercancel', onWindowPointerUp)
 })
@@ -644,6 +765,14 @@ onUnmounted(() => {
     <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
       <div class="workflow-workspace-header"><slot name="workspace-header" /></div>
       <div class="workflow-toolbar-actions">
+        <div class="editor-menu-anchor">
+          <button ref="editMenuButton" class="secondary-button compact-button" type="button" data-editor-menu aria-haspopup="menu" :aria-expanded="editMenuOpen" :disabled="editingBlocked" @click="toggleEditMenu">{{ t('workflow.editorMenu') }} ▾</button>
+          <div v-if="editMenuOpen" ref="editMenuElement" class="editor-command-menu" role="menu" :aria-label="t('workflow.editorMenu')" @keydown="editorMenuKey" @pointerdown.stop>
+            <p>{{ t('workflow.editorSelectionCount', { count: store.selectedNodeIds.length }) }}</p>
+            <p>{{ t('workflow.editorSelectionHelp') }}</p>
+            <button v-for="command in editorCommands" :key="command.id" type="button" role="menuitem" :data-editor-command="command.id" :disabled="commandDisabled(command.id)" @click="runEditorCommand(command.id)"><span>{{ t(`workflow.editorCommand_${command.id}`) }}</span><kbd v-if="command.shortcut">{{ command.shortcut }}</kbd></button>
+          </div>
+        </div>
         <button class="secondary-button compact-button" type="button" data-add-node :disabled="controlsLocked || store.loading" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
         <span class="workflow-save-state" role="status">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
@@ -657,6 +786,16 @@ onUnmounted(() => {
     </div>
     <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
     <div v-if="store.notice" class="workflow-notice" role="status">{{ store.notice }}</div>
+    <div v-if="editorNotice" class="workflow-notice" role="status">{{ editorNotice }}</div>
+    <div v-if="readingImport" class="workflow-notice" role="status">{{ t('workflow.editorReadingImport') }}<button class="text-button" type="button" @click="commands.cancelImport">{{ t('workflow.editorCancelImport') }}</button></div>
+    <input ref="fileInput" class="visually-hidden" type="file" accept="application/json,.json" data-workflow-import tabindex="-1" :aria-label="t('workflow.editorCommand_import')" @change="commands.readImport" />
+    <CanvasDialog :open="!!pendingImport" :title="t('workflow.editorImportTitle')" @close="commands.cancelImport">
+      <div v-if="pendingImport" class="workflow-import-confirm">
+        <p>{{ pendingImport.filename }}</p><p>{{ t('workflow.editorImportSummary', { nodes: pendingImport.graph.nodes.length, edges: pendingImport.graph.edges.length }) }}</p>
+        <p>{{ t('workflow.editorImportReplace') }}</p>
+        <div><button class="secondary-button" type="button" data-editor-import-cancel @click="commands.cancelImport">{{ t('workflow.editorCancelImport') }}</button><button class="primary-button" type="button" data-editor-import-apply :disabled="controlsLocked || store.loading" @click="commands.applyImport">{{ t('workflow.editorApplyImport') }}</button></div>
+      </div>
+    </CanvasDialog>
     <CanvasDialog :open="discardPrompt" :title="t('workflow.discardTitle')" @close="discardPrompt = false">
       <div class="workflow-discard"><p>{{ t('workflow.discardDescription') }}</p><div><button class="secondary-button" type="button" @click="discardPrompt = false">{{ t('workflow.continueEditing') }}</button><button class="primary-button" type="button" @click="discardAndClose">{{ t('workflow.discardChanges') }}</button></div></div>
     </CanvasDialog>
@@ -666,13 +805,13 @@ onUnmounted(() => {
       <div class="workflow-main">
         <div ref="canvas" class="workflow-canvas" :style="gridStyle" @wheel="onWheel" @contextmenu="canvasContextMenu">
           <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
-            <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" tabindex="0" :aria-label="t('workflow.canvasAria')" @keydown="canvasKeyboard" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
+            <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" tabindex="0" :aria-label="t('workflow.canvasAria')" @keydown="canvasKeyboard" @paste="canvasPaste" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
 
               <g class="workflow-content" :transform="`translate(${store.pan.x} ${store.pan.y}) scale(${store.zoom})`">
               <path v-for="edge in store.draft.edges" :key="edge.id" class="workflow-edge-hit" :d="edgePath(edge)" @pointerdown.stop @click.stop="!controlsLocked && removeEdge(edge.id)" />
               <path v-for="edge in store.draft.edges" :key="`${edge.id}-line`" class="workflow-edge" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :d="edgePath(edge)" aria-hidden="true" />
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
-              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
+              <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeIds.includes(node.id), 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="onNodeClick($event, node)" @keydown="keyboardSelect($event, node)">
                 <defs>
                   <clipPath :id="`${clipId}-${node.id}-title`"><rect x="22" y="0" :width="nodeWidth(node) - 64" height="30" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-port-in`"><rect x="10" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
@@ -685,7 +824,7 @@ onUnmounted(() => {
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
                 <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
                   <div class="node-body" :style="bodyStyle(node)">
-                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
+                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
                       <NodeResourceInput :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                     </div>
@@ -708,6 +847,7 @@ onUnmounted(() => {
                 <rect class="node-resize-handle is-corner" data-resize="corner" :x="nodeWidth(node) - 16" :y="nodeHeight(node) - 16" width="24" height="24" rx="4" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeNode', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'corner')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'corner')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
                 <path class="node-resize-mark" :d="`M ${nodeWidth(node) - 14} ${nodeHeight(node) - 8} l 6 -6 M ${nodeWidth(node) - 10} ${nodeHeight(node) - 8} l 2 -2`" />
               </g>
+              <rect v-if="marqueeBounds" class="workflow-marquee" :x="marqueeBounds.x" :y="marqueeBounds.y" :width="marqueeBounds.width" :height="marqueeBounds.height" aria-hidden="true" />
               </g>
             </svg>
           <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong><span>{{ t('workflow.emptyCanvasHelp') }}</span></div>

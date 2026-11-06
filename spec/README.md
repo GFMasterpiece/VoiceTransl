@@ -20,6 +20,7 @@
 | [节点资源与独立预览](node-resources-preview.md) | Implemented | 空项目、输入节点音频绑定、独立文本/音频预览及历史隔离 |
 | [节点模块化与多端口](node-modularity.md) | Implemented | 节点模块独立、命名多端口与汇合调度、目录和历史兼容 |
 | [节点参数与连线输入统一](node-parameters.md) | Implemented | 可连线参数、基础值节点、参数来源与实际执行值 |
+| [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 目标方向；当前仅保留音频直通和 Mock 验证能力 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 云端服务商、协议和节点接入范围待确定，尚未实现 |
 

@@ -3,6 +3,7 @@ import { appMessages } from './messages/app'
 import { commonMessages } from './messages/common'
 import { workflowMessages } from './messages/workflow'
 import { workflowPanelMessages } from './messages/workflowPanels'
+import { editorOperationMessages } from './messages/editorOperations'
 
 export type Locale = 'zh-CN' | 'en'
 export type MessageParams = Record<string, string | number>
@@ -16,8 +17,8 @@ export const i18n = createI18n({
   missingWarn: false,
   fallbackWarn: false,
   messages: {
-    'zh-CN': { common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'] } },
-    en: { common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en } },
+    'zh-CN': { common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'] } },
+    en: { common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en } },
   },
 })
 

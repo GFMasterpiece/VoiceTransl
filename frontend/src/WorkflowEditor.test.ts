@@ -12,6 +12,7 @@ import { readCapabilities } from './workflow/capabilities'
 import { createNodeRegistry, type NodeRegistry } from './workflow/nodeRegistry'
 import { setLocale, message, t } from './i18n'
 import { workflowErrorLabel, workflowIssueLabel } from './stores/workflow'
+import { copySelection, serializeWorkflow } from './workflow/editorTransfer'
 
 const testCapabilities: Record<string, any> = {
   schema_version: '1.0',
@@ -2194,6 +2195,260 @@ describe('workflow request isolation and polling', () => {
     await startRun()
     expect(root!.textContent).toContain('历史快照，不映射当前画布状态')
     expect(root!.querySelector('.workflow-node')?.getAttribute('class')).toContain('is-state-draft')
+  })
+})
+
+describe('editor operations UI', () => {
+  function svg() { return root!.querySelector<SVGSVGElement>('.workflow-svg')! }
+  function key(target: EventTarget, value: string, modifiers: KeyboardEventInit = {}) {
+    const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...modifiers })
+    target.dispatchEvent(event); return event
+  }
+  function pointer(target: EventTarget, type: string, x: number, y: number, shiftKey = false) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, shiftKey })
+    Object.defineProperty(event, 'pointerId', { value: 7 }); target.dispatchEvent(event)
+  }
+  async function command(id: string) {
+    root!.querySelector<HTMLButtonElement>('[data-editor-menu]')!.click(); await settle()
+    const item = root!.querySelector<HTMLButtonElement>(`[data-editor-command="${id}"]`)!
+    expect(item).toBeTruthy(); expect(item.disabled).toBe(false)
+    item.click(); await settle()
+  }
+  async function frame() { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); await settle() }
+  function paste(text: string, target: EventTarget = svg()) {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => text } }); target.dispatchEvent(event)
+    return event
+  }
+  async function file(text: string | Promise<string>, name = 'workflow.json', size = 100) {
+    const input = root!.querySelector<HTMLInputElement>('[data-workflow-import]')!
+    const textReader = vi.fn(() => Promise.resolve(text))
+    Object.defineProperty(input, 'files', { configurable: true, value: [{ name, size, text: textReader }] })
+    input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    return textReader
+  }
+
+  it('selects with Shift, moves a group by one bounded delta and undoes or cancels the complete gesture', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    node('audio_input').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    node('audio_output').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })); await settle()
+    expect(store.selectedNodeIds).toEqual(['input', 'output'])
+    expect(root!.querySelectorAll('.workflow-node.is-selected')).toHaveLength(2)
+    expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+    store.zoom = .5; store.pan = { x: 100, y: 50 }
+    const original = cloneDocument(store.draft)
+    pointer(node('audio_input').querySelector('.node-card')!, 'pointerdown', 150, 150)
+    pointer(window, 'pointermove', 170, 160)
+    pointer(window, 'pointermove', 190, 170)
+    pointer(window, 'pointerup', 190, 170); await settle()
+    expect(store.draft.nodes.map((entry) => entry.position)).toEqual(original.nodes.map((entry) => ({ x: entry.position.x + 80, y: entry.position.y + 40 })))
+    expect(store.historyTransactionActive).toBe(false)
+    key(svg(), 'z', { ctrlKey: true }); await settle()
+    expect(store.draft).toEqual(original); expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+    key(svg(), 'Z', { ctrlKey: true, shiftKey: true }); await settle()
+    const moved = cloneDocument(store.draft)
+    pointer(node('audio_input').querySelector('.node-card')!, 'pointerdown', 190, 170)
+    pointer(window, 'pointermove', 220, 200)
+    key(svg(), 'Escape'); await settle()
+    expect(store.draft).toEqual(moved)
+    store.updateNodeUi('input', { position: { x: 999_980, y: 0 } })
+    store.updateNodeUi('output', { position: { x: 999_990, y: 10 } })
+    pointer(node('audio_input').querySelector('.node-card')!, 'pointerdown', 100, 100)
+    pointer(window, 'pointermove', 150, 150)
+    pointer(window, 'pointerup', 150, 150); await settle()
+    expect(store.draft.nodes.map((entry) => entry.position.x)).toEqual([999_990, 1_000_000])
+  })
+
+  it('supports Shift marquee in world coordinates while cancel keeps the prior selection and normal dragging pans', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore(); store.selectNode('output'); store.zoom = .5; store.pan = { x: 100, y: 50 }
+    pointer(svg(), 'pointerdown', 110, 90, true)
+    pointer(window, 'pointermove', 500, 350, true); await settle()
+    expect(root!.querySelector('.workflow-marquee')).not.toBeNull()
+    pointer(window, 'pointercancel', 500, 350, true); await settle()
+    expect(store.selectedNodeIds).toEqual(['output'])
+    pointer(svg(), 'pointerdown', 110, 90, true)
+    pointer(window, 'pointermove', 500, 350, true)
+    pointer(window, 'pointerup', 500, 350, true); await settle()
+    expect(store.selectedNodeIds).toEqual(['input', 'output'])
+    expect(root!.querySelector('.workflow-marquee')).toBeNull()
+    expect(store.dirty).toBe(false)
+    pointer(svg(), 'pointerdown', 110, 90)
+    pointer(window, 'pointermove', 130, 120)
+    pointer(window, 'pointerup', 130, 120)
+    expect(store.pan).toEqual({ x: 120, y: 80 })
+    expect(store.selectedNodeIds).toEqual(['input', 'output'])
+  })
+
+  it('collapses a plain node click on pointerup even when capture redirects the click to the SVG', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    store.setSelection(['input', 'output'])
+    pointer(node('audio_input').querySelector('.node-card')!, 'pointerdown', 100, 100)
+    pointer(svg(), 'pointerup', 100, 100)
+    svg().dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle()
+    expect(store.selectedNodeIds).toEqual(['input'])
+    expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+    pointer(node('audio_output').querySelector('.node-card')!, 'pointerdown', 500, 100, true)
+    pointer(svg(), 'pointerup', 500, 100, true)
+    svg().dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })); await settle()
+    expect(store.selectedNodeIds).toEqual(['input', 'output'])
+    pointer(svg(), 'pointerdown', 50, 50)
+    pointer(svg(), 'pointerup', 50, 50); await settle()
+    expect(store.selectedNodeIds).toEqual([])
+    expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+  })
+
+  it('keeps copy/paste single-entry, uses the app buffer on clipboard failure and preserves pasted group layout after measurement', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    store.addNode('preprocess'); await settle(); await frame()
+    const pre = store.draft.nodes.find((entry) => entry.type === 'preprocess')!
+    store.connect(pre.id, 'output', 'audio', 'audio')
+    store.setSelection([pre.id, 'output'])
+    const selected = copySelection(store.draft, store.selectedNodeIds, store.registry!)
+    const original = cloneDocument(store.draft)
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    const readText = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('navigator', { clipboard: { writeText, readText } })
+    key(svg(), 'c', { ctrlKey: true }); await settle()
+    expect(writeText).toHaveBeenCalledTimes(1); expect(store.draft).toEqual(original)
+    expect(root!.textContent).toContain(t('workflow.editorCopyFallback'))
+    const pasteKey = key(svg(), 'v', { ctrlKey: true }); await settle()
+    expect(pasteKey.defaultPrevented).toBe(false); expect(readText).not.toHaveBeenCalled()
+    const event = paste(selected); await settle(); await frame()
+    expect(event.defaultPrevented).toBe(true)
+    expect(store.draft.nodes).toHaveLength(5)
+    const pasted = store.draft.nodes.filter((entry) => store.selectedNodeIds.includes(entry.id))
+    const before = JSON.parse(selected).nodes as WorkflowNode[]
+    expect(pasted[1].position.x - pasted[0].position.x).toBe(before[1].position.x - before[0].position.x)
+    expect(pasted[1].position.y - pasted[0].position.y).toBe(before[1].position.y - before[0].position.y)
+    expect(store.draft.edges).toContainEqual(expect.objectContaining({ source: pasted.find((entry) => entry.type === 'preprocess')!.id, target: pasted.find((entry) => entry.type === 'audio_output')!.id }))
+    key(svg(), 'z', { ctrlKey: true }); await settle()
+    expect(store.draft).toEqual(original)
+    await command('paste'); await frame()
+    expect(readText).toHaveBeenCalledTimes(1); expect(store.draft.nodes).toHaveLength(5)
+    expect(root!.textContent).toContain(t('workflow.editorPasteFallback'))
+  })
+
+  it('duplicates and deletes by menu or shortcut, keeps protected nodes and never captures native editing or locked commands', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    store.selectNode('output')
+    await command('duplicate')
+    expect(store.draft.nodes).toHaveLength(3)
+    key(svg(), 'z', { metaKey: true }); await settle()
+    expect(store.draft.nodes).toHaveLength(2)
+    const input = node('audio_output').querySelector<HTMLInputElement>('input')!
+    const snapshot = cloneDocument(store.draft)
+    const edit = vi.spyOn(store, 'undo')
+    for (const value of ['z', 'c', 'v', 'a', 'd', 'Delete', 'Backspace']) {
+      expect(key(input, value, { ctrlKey: true }).defaultPrevented).toBe(false)
+    }
+    expect(paste('native text', input).defaultPrevented).toBe(false)
+    for (const tag of ['textarea', 'select', 'div', 'audio', 'video']) {
+      const control = document.createElement(tag)
+      if (tag === 'div') control.setAttribute('contenteditable', 'true')
+      node('audio_output').querySelector('.node-body-fields')!.append(control)
+      for (const value of ['z', 'c', 'v', 'Delete', 'Backspace']) expect(key(control, value, { ctrlKey: true }).defaultPrevented).toBe(false)
+      expect(paste('native text', control).defaultPrevented).toBe(false)
+      control.remove()
+    }
+    expect(edit).not.toHaveBeenCalled(); expect(store.draft).toEqual(snapshot)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    key(svg(), 'a', { ctrlKey: true }); key(svg(), 'Delete'); await settle()
+    expect(store.draft.nodes.map((entry) => entry.id)).toEqual(['input'])
+    expect(root!.textContent).toContain(t('workflow.protectedSelection', { count: 1 }))
+    key(svg(), 'z', { ctrlKey: true }); await settle()
+    expect(store.draft).toEqual(snapshot)
+    store.run = runBody({ status: 'running' }); await settle()
+    key(svg(), 'd', { ctrlKey: true }); key(svg(), 'Delete'); paste('bad')
+    expect(store.draft).toEqual(snapshot)
+    expect(root!.querySelector<HTMLButtonElement>('[data-editor-menu]')!.disabled).toBe(true)
+  })
+
+  it('previews file imports, cancels without mutations, applies one undoable draft and completes unchanged round trips', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    const original = cloneDocument(store.draft)
+    const unchanged = serializeWorkflow(original, store.registry!)
+    await file(unchanged)
+    expect(root!.querySelector('[data-editor-import-apply]')).not.toBeNull()
+    root!.querySelector<HTMLButtonElement>('[data-editor-import-apply]')!.click(); await settle()
+    expect(root!.querySelector('[data-editor-import-apply]')).toBeNull()
+    expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+    const imported = { nodes: [{ ...structuredClone(output), id: 'imported-output', position: { x: 50, y: 60 } }], edges: [] }
+    const text = serializeWorkflow(imported, store.registry!)
+    await file(text, '用户工作流.json')
+    expect(root!.textContent).toContain('用户工作流.json')
+    expect(app!._instance!.exposed!.hasOpenDialog()).toBe(true)
+    root!.querySelector<HTMLButtonElement>('[data-editor-import-cancel]')!.click(); await settle()
+    expect(store.draft).toEqual(original); expect(store.canUndo).toBe(false)
+    await file(text)
+    const requests = fetchMock.mock.calls.length
+    root!.querySelector<HTMLButtonElement>('[data-editor-import-apply]')!.click(); await settle(); await frame()
+    expect(store.draft).toEqual(imported); expect(store.dirty).toBe(true)
+    expect(fetchMock.mock.calls.length).toBe(requests)
+    key(svg(), 'z', { ctrlKey: true }); await settle()
+    expect(store.draft).toEqual(original); expect(store.dirty).toBe(false); expect(store.canUndo).toBe(false)
+  })
+
+  it('rejects oversized or malformed files before mutation and ignores reads completed after cancel, context changes or a run lock', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    const original = cloneDocument(store.draft)
+    const reader = await file('{}', 'large.json', 4 * 1024 * 1024 + 1)
+    expect(reader).not.toHaveBeenCalled(); expect(store.error).toBe(t('workflow.transferTooLarge'))
+    await file('{ broken')
+    expect(store.error).toBe(t('workflow.transferInvalidJson')); expect(store.draft).toEqual(original)
+    const text = serializeWorkflow({ nodes: [], edges: [] }, store.registry!)
+    for (const cancel of ['cancel', 'context', 'lock']) {
+      const pending = deferred<string>()
+      await file(pending.promise)
+      expect(app!._instance!.exposed!.hasOpenDialog()).toBe(true)
+      if (cancel === 'cancel') button(t('workflow.editorCancelImport'))!.click()
+      else if (cancel === 'context') store.projectId = 'p2'
+      else store.run = runBody({ status: 'running' })
+      await settle(); pending.resolve(text); await settle()
+      expect(root!.querySelector('[data-editor-import-apply]')).toBeNull()
+      expect(store.draft).toEqual(original)
+      store.run = null; store.projectId = 'p1'; await settle()
+    }
+  })
+
+  it('keeps overlapping imported nodes near the coordinate boundary without placement errors or measurement edits', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    const original = cloneDocument(store.draft)
+    const graph = { nodes: ['near-one', 'near-two'].map((id) => ({ ...structuredClone(output), id, position: { x: 999_990, y: 999_990 } })), edges: [] }
+    await file(serializeWorkflow(graph, store.registry!))
+    root!.querySelector<HTMLButtonElement>('[data-editor-import-apply]')!.click(); await settle(); await frame()
+    expect(store.draft).toEqual(graph); expect(store.error).toBe('')
+    expect(store.canUndo).toBe(true)
+    key(svg(), 'z', { ctrlKey: true }); await settle(); await frame()
+    expect(store.draft).toEqual(original); expect(store.canUndo).toBe(false)
+    key(svg(), 'y', { ctrlKey: true }); await settle(); await frame()
+    expect(store.draft).toEqual(graph); expect(store.error).toBe('')
+  })
+
+  it('exports the current portable draft without saves, history or selection changes and localizes menu commands', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    const original = cloneDocument(store.draft)
+    const createObjectURL = vi.fn().mockReturnValue('blob:workflow')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const requests = fetchMock.mock.calls.length
+    await command('export')
+    expect(createObjectURL).toHaveBeenCalledTimes(1); expect(click).toHaveBeenCalledTimes(1)
+    expect((click.mock.instances[0] as unknown as HTMLAnchorElement).download).toBe('workflow.json')
+    expect(store.draft).toEqual(original); expect(store.canUndo).toBe(false); expect(store.dirty).toBe(false)
+    expect(fetchMock.mock.calls.length).toBe(requests)
+    setLocale('en'); root!.querySelector<HTMLButtonElement>('[data-editor-menu]')!.click(); await settle()
+    expect(root!.textContent).toContain('Import workflow JSON'); expect(root!.textContent).toContain('Ctrl/Cmd+Z')
+    expect(app!._instance!.exposed!.hasOpenDialog()).toBe(true)
+    key(root!.querySelector('.editor-command-menu')!, 'Escape'); await settle()
+    expect(app!._instance!.exposed!.hasOpenDialog()).toBe(false)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:workflow')
+    delete (URL as any).createObjectURL; delete (URL as any).revokeObjectURL
   })
 })
 
