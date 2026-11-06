@@ -55,8 +55,13 @@ describe('capabilities parser', () => {
     expect(registry.inputPortsForNode('multi')).toEqual(['voice', 'background', 'reference'])
     expect(registry.outputPortsForNode('multi')).toEqual(['dry_audio', 'wet_audio'])
     expect(registry.kind('multi')?.requiredInputPorts).toEqual(['voice', 'background'])
+    expect(registry.kind('audio_input')?.requiredInputPorts).toEqual([])
     expect(registry.inputPortForNode('multi')).toBeNull()
     expect(registry.outputPortForNode('multi')).toBeNull()
+    const optional = structuredClone(payload)
+    optional.workflow.nodes.at(-1).required_inbound = 0
+    optional.workflow.nodes.at(-1).required_input_ports = []
+    expect(createNodeRegistry(readCapabilities(optional)).kind('multi')?.requiredInputPorts).toEqual([])
     for (const invalid of [['missing'], ['voice', 'voice'], ['voice']]) {
       const broken = structuredClone(payload)
       broken.workflow.nodes.at(-1).required_input_ports = invalid
@@ -68,6 +73,26 @@ describe('capabilities parser', () => {
     const duplicate = structuredClone(payload)
     duplicate.workflow.nodes.at(-1).output_ports.push('dry_audio')
     expect(() => readCapabilities(duplicate)).toThrow('节点端口')
+  })
+
+  it.each([0, 1])('requires an explicit required-input array in a 1.4 catalog for node %s', (nodeIndex) => {
+    const payload = structuredClone(livePayload) as any
+    payload.workflow.schema_version = '1.4'
+    for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
+    for (const invalid of [undefined, null, 'audio', {}, false]) {
+      const broken = structuredClone(payload)
+      broken.workflow.nodes[nodeIndex].required_input_ports = invalid
+      expect(() => readCapabilities(broken)).toThrow('入边约束')
+    }
+  })
+
+  it.each(['1.2', '1.3'])('preserves required-input inference for the legacy %s catalog', (version) => {
+    const payload = structuredClone(livePayload) as any
+    payload.workflow.schema_version = version
+    for (const declaration of [undefined, null]) {
+      for (const node of payload.workflow.nodes) node.required_input_ports = declaration
+      expect(readCapabilities(payload).nodes.map((node) => node.requiredInputPorts)).toEqual([[], ['audio'], ['audio']])
+    }
   })
 
   it('reads resource and preview presentation metadata from the 1.3 catalog without node type branches', () => {

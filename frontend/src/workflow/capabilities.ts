@@ -165,7 +165,7 @@ function node(value: unknown, namedInputs = false): CapabilityNode {
   if (new Set(inputPorts).size !== inputPorts.length || new Set(outputPorts).size !== outputPorts.length) fail('workflow.capNodePorts')
   const requiredInbound = item.required_inbound === undefined ? inputPorts.length : item.required_inbound
   if (typeof requiredInbound !== 'number' || !Number.isInteger(requiredInbound) || requiredInbound < 0 || requiredInbound > inputPorts.length) fail('workflow.capInbound')
-  if (namedInputs && item.required_input_ports === undefined) fail('workflow.capInbound')
+  if (namedInputs && !Array.isArray(item.required_input_ports)) fail('workflow.capInbound')
   const requiredInputPorts = item.required_input_ports ?? (requiredInbound ? inputPorts : [])
   if (!Array.isArray(requiredInputPorts) || !requiredInputPorts.every((port) => typeof port === 'string' && inputPorts.includes(port))
     || new Set(requiredInputPorts).size !== requiredInputPorts.length || requiredInputPorts.length !== requiredInbound) fail('workflow.capInbound')
