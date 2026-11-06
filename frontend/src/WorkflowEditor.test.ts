@@ -3,7 +3,7 @@ import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_PORT_Y, workflowNodeHeight,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_PORT_Y, workflowNodeHeight, workflowFieldsHeight,
   cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition,
   resolveArtifactUrl, useWorkflowStore, validateNodeConfig,
   type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
@@ -2278,12 +2278,16 @@ describe('catalog-driven parameter connections', () => {
     pointer(socket(source.id, 'string', 'output'), 'pointerdown')
     pointer(socket(target.id, 'language', 'input'), 'pointerup'); await settle()
     expect(control().disabled).toBe(true); expect(control().value).toBe('ja-JP')
+    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
+    expect(node('asr').querySelectorAll('.node-config-row')).toHaveLength(2)
+    expect((node('asr').querySelector('[data-field="provider"]')!.closest('.node-config-row') as HTMLElement).style.display).not.toBe('none')
     expect(target.config.language).toBe('ja-JP')
     expect(node('asr').textContent).toContain(`${source.id} · string`)
     const before = JSON.stringify(store.draft)
     for (const language of ['en', 'zh-CN']) {
       setLocale(language); store.selectNode('input'); await settle()
       expect(control().value).toBe('ja-JP'); expect(control().disabled).toBe(true)
+      expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
       expect(JSON.stringify(store.draft)).toBe(before)
     }
     pointer(socket(target.id, 'language', 'input'), 'pointerdown')
@@ -2293,6 +2297,7 @@ describe('catalog-driven parameter connections', () => {
     expect(node('asr').textContent).toContain(`${other.id} · string`)
     store.disconnect(store.draft.edges.find((edge) => edge.target === target.id)!.id); await settle()
     expect(control().disabled).toBe(false); expect(control().value).toBe('ja-JP')
+    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
     expect(target.config.language).toBe('ja-JP')
     expect(store.draft.edges).toContainEqual(expect.objectContaining({ target: 'output', target_port: 'audio' }))
   })
@@ -2304,16 +2309,65 @@ describe('catalog-driven parameter connections', () => {
     control().value = '-'; control().dispatchEvent(new Event('input', { bubbles: true })); await settle()
     expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(true); await settle()
     expect(control().value).toBe('-'); expect(control().disabled).toBe(true)
+    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
     expect(control().getAttribute('aria-invalid')).toBe('true')
     expect(store.dirty).toBe(true)
     const calls = fetchMock.mock.calls.length
     await store.save(); await store.validate()
+    await settle()
     expect(fetchMock.mock.calls.length).toBe(calls)
+    expect(store.validationIssues).toContainEqual(expect.objectContaining({ node_id: 'output', field: 'count' }))
+    expect(node('audio_output').querySelector('.node-error-mark')).not.toBeNull()
     setLocale('en'); await settle()
     expect(control().value).toBe('-')
     store.disconnect(store.draft.edges.find((edge) => edge.target_port === 'count_parameter')!.id); await settle()
     expect(control().value).toBe('-'); expect(control().disabled).toBe(false)
     expect(store.draft.nodes.find((entry) => entry.id === 'output')!.config.count).toBe('-')
+  })
+
+  it('collapses every wired row and measured body, retaining raw numeric text, explicit size and clean layout through detach', async () => {
+    const { store, source } = await parameterNodes()
+    const integer = store.draft.nodes.find((entry) => entry.type === 'integer_value')!
+    const output = () => store.draft.nodes.find((entry) => entry.id === 'output')!
+    const control = () => node('audio_output').querySelector<HTMLInputElement>('[data-field="count"]')!
+    const frames = async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); await settle() }
+    control().value = '1e2'; control().dispatchEvent(new Event('input', { bubbles: true })); await settle(); await frames()
+    expect(output().config.count).toBe(100)
+    const originalHeight = Number(node('audio_output').querySelector('.node-card')!.getAttribute('height'))
+    const position = { ...output().position }
+    store.setNodeMinimum('output', { width: 500, height: 500 })
+    expect(store.connect(source.id, 'output', 'string', 'filename_stem')).toBe(true)
+    expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(true)
+    await settle(); await frames()
+    const collapsedHeight = workflowNodeHeight(output().type, store.registry!, 'output', store.draft.edges)
+    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(0)
+    expect(store.getNodeSize(output()).height).toBe(collapsedHeight)
+    expect(collapsedHeight).toBeLessThan(originalHeight)
+    expect(Number(node('audio_output').querySelector('.node-card')!.getAttribute('height'))).toBe(collapsedHeight)
+    expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).toBe('none')
+    expect(node('audio_output').querySelector<HTMLElement>('.node-body-fields')!.style.display).toBe('none')
+    expect(node('audio_output').querySelector('.node-meta')).toBeNull()
+    expect(control().value).toBe('1e2')
+    expect(socket('output', 'count_parameter', 'input').getAttribute('aria-label')).toContain(`${integer.id} · integer`)
+    expect(output().size).toBeUndefined(); expect(output().position).toEqual(position)
+    store.updateNode('output', { size: { width: 800, height: 600 } })
+    store.document = { ...store.document!, ...cloneDocument(store.draft) }
+    store.setCleanBaseline(store.draft)
+    const snapshot = JSON.stringify(store.draft)
+    setLocale('en'); await settle(); await frames()
+    expect(store.dirty).toBe(false); expect(JSON.stringify(store.draft)).toBe(snapshot)
+    expect(store.getNodeSize(output())).toEqual({ width: 800, height: 600 })
+    store.disconnect(store.draft.edges.find((edge) => edge.target_port === 'count_parameter')!.id)
+    await settle(); await frames()
+    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
+    expect(control().value).toBe('1e2'); expect(control().disabled).toBe(false)
+    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(44)
+    expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).not.toBe('none')
+    expect(output().size).toEqual({ width: 800, height: 600 }); expect(output().position).toEqual(position)
+    store.run = runBody({ status: 'running' }); await settle()
+    expect(control().disabled).toBe(true)
+    expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(false)
+    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
   })
 })
 

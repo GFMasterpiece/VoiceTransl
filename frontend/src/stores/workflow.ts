@@ -27,20 +27,24 @@ export function workflowPortY(type: NodeType, port: PortName, direction: 'input'
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
 export const WORKFLOW_NODE_FIELD_HEIGHT = 44
-export function workflowFieldHeight(field: { type: string; inputPort?: string | null }): number {
-  return (field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT) + (field.inputPort ? 30 : 0)
+export function workflowFieldHeight(field: { type: string }): number {
+  return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT
 }
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
 export const WORKFLOW_PREVIEW_HEIGHT = 190
-export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry): number {
-  const kind = registry.kind(type)
-  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey).reduce((height, field) => height + workflowFieldHeight(field), 0)
+export function workflowVisibleFields(node: { type: NodeType; id?: string }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
+  const kind = registry.kind(node.type)
+  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey
+    && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
-export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): number {
+export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
+  return workflowVisibleFields({ type, id: nodeId }, registry, edges).reduce((height, field) => height + workflowFieldHeight(field), 0)
+}
+export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
   const kind = registry.kind(type)
   const bodyY = workflowNodeFieldsY(type, registry)
-  return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry)
+  return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges)
     + (kind?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
@@ -57,12 +61,12 @@ export interface WorkflowNode {
 }
 
 /** Layout dimensions never change the node's configuration or execution identity. */
-export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'>, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize): WorkflowNodeSize {
+export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { id?: string }, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize, edges: readonly WorkflowEdge[] = []): WorkflowNodeSize {
   const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
   return {
     width: Math.max(registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
       dimension(node.size?.width), dimension(measuredMin?.width)),
-    height: Math.max(registry ? workflowNodeHeight(node.type, registry) : WORKFLOW_NODE_HEIGHT,
+    height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges) : WORKFLOW_NODE_HEIGHT,
       dimension(node.size?.height), dimension(measuredMin?.height)),
   }
 }
@@ -355,7 +359,7 @@ export function nodeLabel(node: WorkflowNode, registry: NodeRegistry): string {
   return registry.label(node.type)
 }
 
-export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry, measurements: Record<string, WorkflowNodeSize> = {}, preferred?: WorkflowNode['position']): WorkflowNode['position'] {
+export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry: NodeRegistry, measurements: Record<string, WorkflowNodeSize> = {}, preferred?: WorkflowNode['position'], edges: readonly WorkflowEdge[] = []): WorkflowNode['position'] {
   const sameType = nodes.filter((node) => node.type === type)
   const definition = registry.kind(type)
   const columnX = preferred?.x ?? sameType[0]?.position.x ?? definition?.positionX ?? 500
@@ -364,7 +368,7 @@ export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry
     height: Math.max(size.height, measurements[node.id]?.height || 0),
   }), { width: 0, height: 0 })
   const { width, height } = workflowNodeSize({ type }, registry, minimum)
-  const nodeSize = (node: WorkflowNode) => workflowNodeSize(node, registry, measurements[node.id])
+  const nodeSize = (node: WorkflowNode) => workflowNodeSize(node, registry, measurements[node.id], edges)
   let candidateY = preferred?.y ?? (sameType.length
     ? Math.max(...sameType.map((node) => node.position.y + nodeSize(node).height)) + WORKFLOW_NODE_ROW_GAP
     : nodes.find((node) => registry.kind(node.type)?.isSource)?.position.y ?? 176)
@@ -513,7 +517,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function getNodeSize(node: WorkflowNode): WorkflowNodeSize {
-    return workflowNodeSize(node, registry.value, nodeMinimums.value[node.id])
+    return workflowNodeSize(node, registry.value, nodeMinimums.value[node.id], draft.value.edges)
   }
 
   function markDirty() {
@@ -955,7 +959,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       errorState.set(definition.maxInstances === 1 ? message('workflow.maxOne', { p0: type }) : message('workflow.maxMany', { p0: type, p1: definition.maxInstances }))
       return
     }
-    const placed = nextNodePosition(type, nodes, registry.value, nodeMinimums.value, position ? { x: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.x))), y: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.y))) } : undefined)
+    const placed = nextNodePosition(type, nodes, registry.value, nodeMinimums.value, position ? { x: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.x))), y: Math.max(-1_000_000, Math.min(1_000_000, Math.round(position.y))) } : undefined, draft.value.edges)
     if (!Number.isFinite(placed.x) || !Number.isFinite(placed.y) || Math.abs(placed.x) > 1_000_000 || Math.abs(placed.y) > 1_000_000) { errorState.set(message('workflow.nodePlacementFailed')); return }
     const id = nextNodeId(type, nodes, registry.value)
     const node: WorkflowNode = {

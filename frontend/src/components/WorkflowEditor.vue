@@ -4,7 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'v
 import {
   workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, workflowNodeFieldsY, workflowPortY, workflowNodeHeight,
-  WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight,
+  WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight, workflowVisibleFields,
   executionSignature,
   nodeLabel as registeredNodeLabel,
   useWorkflowStore,
@@ -64,7 +64,8 @@ const inputAudioName = computed(() => store.boundAudioId
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
-function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value) : 0 }
+function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value, node.id, store.draft.edges) : 0 }
+function hasConfigFields(node: WorkflowNode) { return kind(node)?.fields.some((field) => field.key !== kind(node)?.resourceInput?.configKey) }
 function inputPortLabel(node: WorkflowNode, port: string) {
   const field = kind(node)?.fields.find((field) => field.inputPort === port)
   const typeId = registry.value?.port(port)?.typeId
@@ -75,7 +76,10 @@ function inputPortLabel(node: WorkflowNode, port: string) {
   return kind(node)?.requiredInputPorts.includes(port) ? label : `${label} (${t('workflow.optionalPort')})`
 }
 function inputPortDescription(node: WorkflowNode, port: string) {
-  return t('workflow.inputPort', { port: `${inputPortLabel(node, port)} · ${port}` })
+  const description = t('workflow.inputPort', { port: `${inputPortLabel(node, port)} · ${port}` })
+  const edge = kind(node)?.fields.some((field) => field.inputPort === port)
+    ? store.draft.edges.find((edge) => edge.target === node.id && edge.target_port === port) : undefined
+  return edge ? `${description} · ${t('workflow.parameterConnected', { node: edge.source, port: edge.source_port })}` : description
 }
 
 function previewRecord(node: WorkflowNode) { return store.run?.nodes.find((record) => record.node_id === node.id && record.node_type === node.type) }
@@ -270,7 +274,7 @@ const measuredNodes = new Map<string, WorkflowNode>()
 function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
     bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH,
-    height: registry.value ? workflowNodeHeight(node.type, registry.value) : WORKFLOW_NODE_HEIGHT,
+    height: registry.value ? workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges) : WORKFLOW_NODE_HEIGHT,
     fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
     preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
   }
@@ -293,7 +297,7 @@ function measureContent() {
     if (!node) continue
     // Start from catalog minima every time, never from a previous user size or measurement.
     const minimum = measureNodeContent(group, {
-      bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH, height: workflowNodeHeight(node.type, registry.value),
+      bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges),
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
@@ -327,6 +331,15 @@ function scheduleMeasurement() {
   if (measurementDisposed) return
   if (measurementFrame === null) measurementFrame = requestAnimationFrame(measureContent)
 }
+watch(() => new Map(store.draft.nodes.map((node) => [node.id, registry.value
+  ? workflowVisibleFields(node, registry.value, store.draft.edges).map((field) => field.key).join(',') : ''])), (current, previous) => {
+  for (const [id, fields] of current) {
+    if (previous?.get(id) === fields) continue
+    delete contentMinimums.value[id]
+    delete store.nodeMinimums[id]
+  }
+  scheduleMeasurement()
+}, { flush: 'sync' })
 watch(stage, (element) => {
   mutationObserver?.disconnect(); resizeObserver?.disconnect(); observedBodies.clear()
   if (!element) return
@@ -670,16 +683,16 @@ onUnmounted(() => {
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-${node.id}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ nodeLabel(node) }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
-                <foreignObject v-if="registry && (fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview)" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
+                <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
                   <div class="node-body" :style="bodyStyle(node)">
-                    <div v-if="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
+                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
                       <NodeResourceInput :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                     </div>
                     <div v-if="kind(node)?.preview" class="node-body-preview"><NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" /></div>
                   </div>
                 </foreignObject>
-                <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
+                <text v-if="!hasConfigFields(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
                 <g v-for="port in inputPortsForNode(node.type)" :key="`input-${port}`">
                   <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :class="`node-port-${port}`" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>

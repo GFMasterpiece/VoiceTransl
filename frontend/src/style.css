@@ -281,7 +281,6 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .node-config-row.is-json { flex: 1 1 auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: 18px minmax(70px, 1fr) auto; }
 .node-config-row textarea { height: 100%; min-height: 70px; border-radius: 8px; resize: none; overflow: auto; line-height: 1.4; }
 .node-field-error { grid-column: 1 / -1; overflow-wrap: anywhere; white-space: normal; color: var(--danger); font-size: 8px; line-height: 15px; }
-.node-parameter-connection { grid-column: 1 / -1; max-width: 300px; overflow-wrap: anywhere; color: var(--teal); font-size: 9px; line-height: 15px; }
 .run-parameters { margin: 8px 0 0; font-size: 12px; }
 .run-parameters dt { margin-top: 8px; font-weight: 600; }
 .run-parameters dd { margin: 4px 0; }
