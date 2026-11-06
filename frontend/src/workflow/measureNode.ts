@@ -4,6 +4,7 @@ export interface NodeContentMinimum extends WorkflowNodeSize {
   fields: number
   resource: number
   preview: number
+  bodyY?: number
 }
 function textWidth(element: SVGTextElement | null): number {
   if (!element) return 0
@@ -40,13 +41,14 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       resource = height('.node-body-resource', resource)
       preview = height('.node-body-preview', preview)
     }
-    const input = group.querySelector<SVGTextElement>('.node-port-label-in')
-    const output = group.querySelector<SVGTextElement>('.node-port-label-out')
-    const portWidth = input && output ? Math.max(textWidth(input), textWidth(output)) * 2 + 28 : Math.max(textWidth(input), textWidth(output)) + 20
+    const widthOf = (selector: string) => Math.max(0, ...Array.from(group.querySelectorAll<SVGTextElement>(selector), textWidth))
+    const inputWidth = widthOf('.node-port-label-in')
+    const outputWidth = widthOf('.node-port-label-out')
+    const portWidth = inputWidth && outputWidth ? Math.max(inputWidth, outputWidth) * 2 + 28 : Math.max(inputWidth, outputWidth) + 20
     return {
       width: Math.ceil(Math.max(fallback.width, textWidth(group.querySelector('.node-name')) + 64, portWidth, bodyWidth + 16)),
-      height: Math.ceil(Math.max(fallback.height, WORKFLOW_NODE_FIELDS_Y + fields + resource + preview + 10)),
-      fields, resource, preview,
+      height: Math.ceil(Math.max(fallback.height, (fallback.bodyY ?? WORKFLOW_NODE_FIELDS_Y) + fields + resource + preview + 10)),
+      fields, resource, preview, ...(fallback.bodyY === undefined ? {} : { bodyY: fallback.bodyY }),
     }
   } finally { host.remove() }
 }

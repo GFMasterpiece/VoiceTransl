@@ -12,6 +12,19 @@ function fixture() {
 afterEach(() => { group?.remove(); vi.restoreAllMocks() })
 
 describe('node intrinsic content measurement', () => {
+  it('accounts for every port label and places content below all port rows', () => {
+    fixture()
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    label.classList.add('node-port-label-in')
+    label.textContent = 'Long second input port'
+    Object.defineProperty(label, 'getComputedTextLength', { value: () => 300 })
+    group.append(label)
+    const minimum = measureNodeContent(group, { ...fallback, bodyY: 134 })
+    expect(minimum.width).toBe(628)
+    expect(minimum.height).toBe(188)
+    expect(minimum.bodyY).toBe(134)
+  })
+
   it('measures an independent intrinsic clone and strips media and accessibility identities before mounting it', () => {
     fixture()
     const append = document.body.append.bind(document.body)

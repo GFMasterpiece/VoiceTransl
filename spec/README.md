@@ -18,6 +18,7 @@
 | --- | --- | --- |
 | [兼容性与扩展性整改](compatibility-extensibility.md) | Approved | 严格版本、能力/节点单一来源、可取消传输、附加参数、跨平台、语言与命名/分页 |
 | [节点资源与独立预览](node-resources-preview.md) | Implemented | 空项目、输入节点音频绑定、独立文本/音频预览及历史隔离 |
+| [节点模块化与多端口](node-modularity.md) | Implemented | 节点模块独立、命名多端口与汇合调度、目录和历史兼容 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 目标方向；当前仅保留音频直通和 Mock 验证能力 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 云端服务商、协议和节点接入范围待确定，尚未实现 |
 

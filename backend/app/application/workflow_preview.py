@@ -3,7 +3,7 @@
 from ..domain.node_execution import NodeResult
 from ..domain.workflow import WorkflowPreview
 from .workflow_asr import _render_text, _write_bytes
-from .workflow_runner import _artifact, _copy_audio
+from .workflow_media import _artifact, _copy_audio
 
 
 def _result(artifact, renderer):

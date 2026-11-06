@@ -22,17 +22,16 @@ from ..domain import (
     validate_text_output_config,
     validate_workflow_transcript,
 )
+from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..exporters import render_lrc, render_srt, render_vtt
 from ..providers import MockASRProvider
 
 
-class WorkflowASRError(RuntimeError):
-    def __init__(self, code: str, message: str):
-        self.code = code
-        super().__init__(message)
+class WorkflowASRError(NodeExecutionError):
+    pass
 
 
-class WorkflowASRCancelled(Exception):
+class WorkflowASRCancelled(NodeExecutionCancelled):
     pass
 
 

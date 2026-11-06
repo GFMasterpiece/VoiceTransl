@@ -21,6 +21,7 @@ from ..domain.workflow import (
 )
 
 router = APIRouter(prefix="/api/v1")
+WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.4"
 
 
 class WorkflowGraphConstraints(BaseModel):
@@ -40,7 +41,7 @@ class WorkflowDefaultGraph(BaseModel):
 
 class CapabilitiesWorkflow(BaseModel):
     model_config = {"extra": "forbid"}
-    schema_version: str = "1.3"
+    schema_version: str = WORKFLOW_CAPABILITY_SCHEMA_VERSION
     ports: list[dict[str, object]]
     data_types: list[dict[str, object]]
     nodes: list[dict[str, object]]
@@ -95,7 +96,7 @@ async def capabilities():
     return {
         "schema_version": SCHEMA_VERSION,
         "workflow": {
-            "schema_version": "1.3",
+            "schema_version": WORKFLOW_CAPABILITY_SCHEMA_VERSION,
             "ports": port_catalog(),
             "data_types": type_catalog(),
             "nodes": nodes,

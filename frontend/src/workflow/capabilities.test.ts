@@ -39,6 +39,37 @@ const livePayload = {
 }
 
 describe('capabilities parser', () => {
+  it('reads named required inputs from a multi-port 1.4 catalog and rejects inconsistent declarations', () => {
+    const payload = structuredClone(livePayload) as any
+    payload.workflow.schema_version = '1.4'
+    for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
+    for (const id of ['voice', 'background', 'reference', 'dry_audio', 'wet_audio']) {
+      payload.workflow.ports.push({ id, type_id: 'audio', label: id, capability_requirements: [] })
+    }
+    payload.workflow.nodes.push({
+      type: 'multi', label: 'Multi', input_ports: ['voice', 'background', 'reference'],
+      output_ports: ['dry_audio', 'wet_audio'], required_input_ports: ['voice', 'background'], required_inbound: 2,
+      config: { kind: 'none', fields: [] },
+    })
+    const registry = createNodeRegistry(readCapabilities(payload))
+    expect(registry.inputPortsForNode('multi')).toEqual(['voice', 'background', 'reference'])
+    expect(registry.outputPortsForNode('multi')).toEqual(['dry_audio', 'wet_audio'])
+    expect(registry.kind('multi')?.requiredInputPorts).toEqual(['voice', 'background'])
+    expect(registry.inputPortForNode('multi')).toBeNull()
+    expect(registry.outputPortForNode('multi')).toBeNull()
+    for (const invalid of [['missing'], ['voice', 'voice'], ['voice']]) {
+      const broken = structuredClone(payload)
+      broken.workflow.nodes.at(-1).required_input_ports = invalid
+      expect(() => readCapabilities(broken)).toThrow('入边约束')
+    }
+    const missing = structuredClone(payload)
+    delete missing.workflow.nodes[0].required_input_ports
+    expect(() => readCapabilities(missing)).toThrow('入边约束')
+    const duplicate = structuredClone(payload)
+    duplicate.workflow.nodes.at(-1).output_ports.push('dry_audio')
+    expect(() => readCapabilities(duplicate)).toThrow('节点端口')
+  })
+
   it('reads resource and preview presentation metadata from the 1.3 catalog without node type branches', () => {
     const payload = structuredClone(livePayload) as any
     payload.workflow.schema_version = '1.3'

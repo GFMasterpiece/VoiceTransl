@@ -16,6 +16,16 @@ export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_PORT_Y = 45
 export const WORKFLOW_NODE_FIELDS_Y = 62
+export const WORKFLOW_NODE_PORT_ROW_HEIGHT = 24
+export function workflowNodeFieldsY(type: NodeType, registry: NodeRegistry): number {
+  const count = Math.max(registry.inputPortsForNode(type).length, registry.outputPortsForNode(type).length, 1)
+  return WORKFLOW_NODE_FIELDS_Y + (count - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT
+}
+export function workflowPortY(type: NodeType, port: PortName, direction: 'input' | 'output', registry: NodeRegistry): number | null {
+  const ports = direction === 'input' ? registry.inputPortsForNode(type) : registry.outputPortsForNode(type)
+  const index = ports.indexOf(port)
+  return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
+}
 export const WORKFLOW_NODE_FIELD_HEIGHT = 44
 export function workflowFieldHeight(field: { type: string }): number { return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT }
 
@@ -27,7 +37,8 @@ export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry): nu
 }
 export function workflowNodeHeight(type: NodeType, registry: NodeRegistry): number {
   const kind = registry.kind(type)
-  return Math.max(WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y + workflowFieldsHeight(type, registry)
+  const bodyY = workflowNodeFieldsY(type, registry)
+  return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry)
     + (kind?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
@@ -965,14 +976,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     markDirty()
   }
 
-  function connect(source: string, target: string) {
-    if (stopped || activeRun.value) return false
+  function connect(source: string, target: string, sourcePortId?: PortName, targetPortId?: PortName) {
+    if (stopped || activeRun.value || saving.value || validating.value || actionLoading.value || resourceUploading.value) return false
     const from = draft.value.nodes.find((node) => node.id === source)
     const to = draft.value.nodes.find((node) => node.id === target)
     if (!registry.value) return false
-    const sourcePort = from ? outputPortForNode(from.type, registry.value) : null
-    const targetPort = to ? inputPortForNode(to.type, registry.value) : null
-    if (!from || !to || !sourcePort || !targetPort) {
+    const sourcePort = sourcePortId ?? (from ? outputPortForNode(from.type, registry.value) : null)
+    const targetPort = targetPortId ?? (to ? inputPortForNode(to.type, registry.value) : null)
+    if (!from || !to || !sourcePort || !targetPort || !registry.value.outputPortsForNode(from.type).includes(sourcePort) || !registry.value.inputPortsForNode(to.type).includes(targetPort)) {
       errorState.set(message('workflow.noPorts'))
       return false
     }
@@ -984,15 +995,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
       errorState.set(message('workflow.connectSelf'))
       return false
     }
-    const exists = draft.value.edges.some((edge) => edge.source === source && edge.target === target)
+    const exists = draft.value.edges.some((edge) => edge.source === source && edge.source_port === sourcePort && edge.target === target && edge.target_port === targetPort)
     if (exists) return false
     if (!registry.value) { errorState.set(message('workflow.capConnect')); return false }
-    if (draft.value.edges.length >= registry.value.capabilities.constraints.maxEdges) {
+    const retained = draft.value.edges.filter((edge) => edge.target !== target || edge.target_port !== targetPort)
+    if (retained.length >= registry.value.capabilities.constraints.maxEdges) {
       errorState.set(message('workflow.connectLimit', { p0: registry.value.capabilities.constraints.maxEdges }))
       return false
     }
     const outgoing = new Map(draft.value.nodes.map((node) => [node.id, [] as string[]]))
-    for (const edge of draft.value.edges) outgoing.get(edge.source)?.push(edge.target)
+    for (const edge of retained) outgoing.get(edge.source)?.push(edge.target)
     const pending = [target]
     const visited = new Set<string>()
     while (pending.length) {
@@ -1005,7 +1017,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       visited.add(nodeId)
       pending.push(...(outgoing.get(nodeId) || []))
     }
-    draft.value.edges = draft.value.edges.filter((edge) => edge.target !== target)
+    draft.value.edges = retained
     draft.value.edges.push({ id: nextEdgeId(draft.value.edges), source, source_port: sourcePort, target, target_port: targetPort })
     errorState.set('')
     markDirty()

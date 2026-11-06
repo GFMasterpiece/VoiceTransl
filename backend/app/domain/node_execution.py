@@ -9,6 +9,18 @@ if TYPE_CHECKING:
     from .workflow import WorkflowPreview
 
 
+class NodeExecutionError(RuntimeError):
+    """A stable node error code and a message safe for the user interface."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+class NodeExecutionCancelled(Exception):
+    """The node has cancelled its operation and completed resource cleanup."""
+
+
 @dataclass(frozen=True)
 class NodeData:
     port: str
@@ -48,4 +60,10 @@ class NodeExecutionContext:
             raise ValueError(f"missing input port: {port}") from exc
 
 
-__all__ = ["NodeData", "NodeResult", "NodeExecutionContext"]
+__all__ = [
+    "NodeData",
+    "NodeResult",
+    "NodeExecutionContext",
+    "NodeExecutionError",
+    "NodeExecutionCancelled",
+]

@@ -3,14 +3,12 @@ import { t, locale, message, hasMessage } from '../i18n'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import {
   workflowIssueLabel,
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELDS_Y, workflowNodeHeight,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, workflowNodeFieldsY, workflowPortY, workflowNodeHeight,
   WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight,
   executionSignature,
-  inputPortForNode as registeredInputPortForNode,
   nodeLabel as registeredNodeLabel,
-  outputPortForNode as registeredOutputPortForNode,
   useWorkflowStore,
-  type WorkflowNode,
+  type WorkflowNode, type WorkflowEdge,
 } from '../stores/workflow'
 
 import NodeConfigFields from './NodeConfigFields.vue'
@@ -34,7 +32,7 @@ const drag = ref<{ nodeId: string; startX: number; startY: number; x: number; y:
 const resizing = ref<{ nodeId: string; axis: 'right' | 'bottom' | 'corner'; startX: number; startY: number; width: number; height: number } | null>(null)
 const panning = ref<{ startX: number; startY: number; x: number; y: number } | null>(null)
 type PortDirection = 'input' | 'output'
-const connectionStart = ref<{ nodeId: string; direction: PortDirection } | null>(null)
+const connectionStart = ref<{ nodeId: string; port: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
 const activePanel = ref<'run' | 'artifacts' | 'logs' | null>(null)
 const contextMenu = ref<{ x: number; y: number; world: { x: number; y: number }; nodeId?: string } | null>(null)
@@ -49,13 +47,15 @@ const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value &
 const minZoom = .01
 function nodeWidth(node: WorkflowNode) { return store.getNodeSize(node).width }
 function nodeHeight(node: WorkflowNode) { return store.getNodeSize(node).height }
-const portY = WORKFLOW_NODE_PORT_Y
 const registry = computed(() => store.registry)
 const nodeKinds = computed(() => registry.value?.kinds || [])
 const connectPointer = ref<{ x: number; y: number } | null>(null)
 const connectPointerId = ref<number | null>(null)
-function outputPortForNode(type: string) { return registry.value ? registeredOutputPortForNode(type, registry.value) : null }
-function inputPortForNode(type: string) { return registry.value ? registeredInputPortForNode(type, registry.value) : null }
+function outputPortsForNode(type: string) { return registry.value?.outputPortsForNode(type) || [] }
+function inputPortsForNode(type: string) { return registry.value?.inputPortsForNode(type) || [] }
+function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value) : null }
+function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value) : WORKFLOW_NODE_FIELDS_Y }
+function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node.type).length, outputPortsForNode(node.type).length, 1) }
 function portLabel(id: string | null) { return id ? registry.value?.port(id)?.label || id : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
 const inputAudioName = computed(() => store.boundAudioId
@@ -65,6 +65,10 @@ const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => 
 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
 function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value) : 0 }
+function inputPortLabel(node: WorkflowNode, port: string) {
+  const label = portLabel(port)
+  return kind(node)?.requiredInputPorts.includes(port) ? label : `${label} (${t('workflow.optionalPort')})`
+}
 
 function previewRecord(node: WorkflowNode) { return store.run?.nodes.find((record) => record.node_id === node.id && record.node_type === node.type) }
 async function bindResource(node: WorkflowNode, audioId: string | null) {
@@ -176,14 +180,17 @@ function nodeTransform(node: WorkflowNode) {
   return `translate(${node.position.x} ${node.position.y})`
 }
 
-function edgePath(edge: { source: string; target: string }) {
+function edgePath(edge: WorkflowEdge) {
   const source = store.draft.nodes.find((node) => node.id === edge.source)
   const target = store.draft.nodes.find((node) => node.id === edge.target)
   if (!source || !target) return ''
   const sx = source.position.x + nodeWidth(source)
-  const sy = source.position.y + portY
+  const sourceY = portY(source, edge.source_port, 'output')
+  const targetY = portY(target, edge.target_port, 'input')
+  if (sourceY === null || targetY === null) return ''
+  const sy = source.position.y + sourceY
   const tx = target.position.x
-  const ty = target.position.y + portY
+  const ty = target.position.y + targetY
   return connectionPath(sx, sy, tx, ty)
 }
 
@@ -198,9 +205,11 @@ const previewPath = computed(() => {
   if (!start || !pointer) return null
   const node = store.draft.nodes.find((item) => item.id === start.nodeId)
   if (!node) return null
+  const y = portY(node, start.port, start.direction)
+  if (y === null) return null
   return start.direction === 'output'
-    ? connectionPath(node.position.x + nodeWidth(node), node.position.y + portY, pointer.x, pointer.y)
-    : connectionPath(pointer.x, pointer.y, node.position.x, node.position.y + portY)
+    ? connectionPath(node.position.x + nodeWidth(node), node.position.y + y, pointer.x, pointer.y)
+    : connectionPath(pointer.x, pointer.y, node.position.x, node.position.y + y)
 })
 
 // Thin out world-grid lines at low zoom while keeping the same world origin.
@@ -252,7 +261,7 @@ const observedBodies = new Set<Element>()
 const measuredNodes = new Map<string, WorkflowNode>()
 function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
-    width: WORKFLOW_NODE_WIDTH,
+    bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH,
     height: registry.value ? workflowNodeHeight(node.type, registry.value) : WORKFLOW_NODE_HEIGHT,
     fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
     preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
@@ -276,7 +285,7 @@ function measureContent() {
     if (!node) continue
     // Start from catalog minima every time, never from a previous user size or measurement.
     const minimum = measureNodeContent(group, {
-      width: WORKFLOW_NODE_WIDTH, height: workflowNodeHeight(node.type, registry.value),
+      bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH, height: workflowNodeHeight(node.type, registry.value),
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
@@ -324,7 +333,7 @@ function bodyStyle(node: WorkflowNode) {
   return { '--node-fields-min': `${minimum.fields}px`, '--node-resource-min': `${minimum.resource}px`, '--node-preview-min': `${minimum.preview}px` }
 }
 function headerPath(node: WorkflowNode) { return `M 14 0 H ${nodeWidth(node) - 14} Q ${nodeWidth(node)} 0 ${nodeWidth(node)} 14 V 30 H 0 V 14 Q 0 0 14 0 Z` }
-function portClipWidth(node: WorkflowNode) { return inputPortForNode(node.type) && outputPortForNode(node.type) ? (nodeWidth(node) - 24) / 2 : nodeWidth(node) - 20 }
+function portClipWidth(node: WorkflowNode) { return inputPortsForNode(node.type).length && outputPortsForNode(node.type).length ? (nodeWidth(node) - 24) / 2 : nodeWidth(node) - 20 }
 function startResize(event: PointerEvent, node: WorkflowNode, axis: 'right' | 'bottom' | 'corner') {
   if (controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
   event.preventDefault()
@@ -435,14 +444,13 @@ function fitCanvas() {
   }
 }
 
-function startConnection(node: WorkflowNode, direction: PortDirection, event: PointerEvent) {
-  const port = direction === 'output' ? outputPortForNode(node.type) : inputPortForNode(node.type)
+function startConnection(node: WorkflowNode, direction: PortDirection, port: string, event: PointerEvent) {
   if (!port || controlsLocked.value || event.button !== 0 || event.isPrimary === false) return
   if (gesturePointerId.value !== null && gesturePointerId.value !== event.pointerId) return
   event.preventDefault()
   clearGestures()
   beginPointer(event, false)
-  connectionStart.value = { nodeId: node.id, direction }
+  connectionStart.value = { nodeId: node.id, port, direction }
   connectPointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   connectPointer.value = canvasPoint(event)
   store.setError('')
@@ -455,7 +463,7 @@ function cancelConnection() {
   connectPointerId.value = null
 }
 
-function destinationPort(event: PointerEvent): { nodeId: string; direction: PortDirection } | null {
+function destinationPort(event: PointerEvent): { nodeId: string; port: string; direction: PortDirection } | null {
   // Touch and pen implicitly capture pointer events on the starting socket.
   // Hit-test viewport coordinates so releasing over the opposite socket still
   // resolves the actual destination rather than the captured event target.
@@ -466,8 +474,9 @@ function destinationPort(event: PointerEvent): { nodeId: string; direction: Port
   if (!socket || !stage.value?.contains(socket)) return null
   const nodeId = (socket.closest('.workflow-node') as SVGGElement | null)?.dataset.nodeId
   const direction = (socket as SVGElement).dataset.portDirection
-  if (!nodeId || (direction !== 'input' && direction !== 'output')) return null
-  return { nodeId, direction }
+  const port = (socket as SVGElement).dataset.portId
+  if (!nodeId || !port || (direction !== 'input' && direction !== 'output')) return null
+  return { nodeId, port, direction }
 }
 
 function finishConnection(event: PointerEvent) {
@@ -478,7 +487,9 @@ function finishConnection(event: PointerEvent) {
   if (!start || !destination || controlsLocked.value || start.direction === destination.direction) return
   const source = start.direction === 'output' ? start.nodeId : destination.nodeId
   const target = start.direction === 'input' ? start.nodeId : destination.nodeId
-  store.connect(source, target)
+  const sourcePort = start.direction === 'output' ? start.port : destination.port
+  const targetPort = start.direction === 'input' ? start.port : destination.port
+  store.connect(source, target, sourcePort, targetPort)
 }
 
 function removeEdge(edgeId: string) {
@@ -643,15 +654,15 @@ onUnmounted(() => {
               <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeId === node.id, 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="store.selectNode(node.id)" @keydown="keyboardSelect($event, node)">
                 <defs>
                   <clipPath :id="`${clipId}-${node.id}-title`"><rect x="22" y="0" :width="nodeWidth(node) - 64" height="30" /></clipPath>
-                  <clipPath :id="`${clipId}-${node.id}-port-in`"><rect x="10" y="32" :width="portClipWidth(node)" height="26" /></clipPath>
-                  <clipPath :id="`${clipId}-${node.id}-port-out`"><rect :x="nodeWidth(node) - 10 - portClipWidth(node)" y="32" :width="portClipWidth(node)" height="26" /></clipPath>
+                  <clipPath :id="`${clipId}-${node.id}-port-in`"><rect x="10" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
+                  <clipPath :id="`${clipId}-${node.id}-port-out`"><rect :x="nodeWidth(node) - 10 - portClipWidth(node)" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
                 </defs>
                 <rect class="node-card" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
                 <path class="node-header" :d="headerPath(node)" />
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-${node.id}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ nodeLabel(node) }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
-                <foreignObject v-if="registry && (fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview)" @focusin="store.selectNode(node.id)" x="8" :y="WORKFLOW_NODE_FIELDS_Y" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - WORKFLOW_NODE_FIELDS_Y - 10">
+                <foreignObject v-if="registry && (fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview)" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
                   <div class="node-body" :style="bodyStyle(node)">
                     <div v-if="fieldsHeight(node)" class="node-body-fields"><NodeConfigFields :node="node" :registry="registry" :locked="controlsLocked" @update="editNode(node, $event)" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
@@ -660,12 +671,18 @@ onUnmounted(() => {
                     <div v-if="kind(node)?.preview" class="node-body-preview"><NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" /></div>
                   </div>
                 </foreignObject>
-                <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" y="77"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
+                <text v-if="!fieldsHeight(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
-                <circle v-if="inputPortForNode(node.type)" class="node-port node-port-in" data-port-direction="input" :class="`node-port-${inputPortForNode(node.type)}`" cx="0" :cy="portY" r="6" :aria-label="t('workflow.inputPort', { port: inputPortForNode(node.type) || '' })" @pointerdown.stop="startConnection(node, 'input', $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.inputPort', { port: inputPortForNode(node.type) || '' }) }}</title></circle><text v-if="inputPortForNode(node.type)" class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(inputPortForNode(node.type)) }}</title>{{ portLabel(inputPortForNode(node.type)) }}</text>
-                <circle v-if="outputPortForNode(node.type)" class="node-port node-port-out" data-port-direction="output" :class="`node-port-${outputPortForNode(node.type)}`" :cx="nodeWidth(node)" :cy="portY" r="6" :aria-label="t('workflow.outputPort', { port: outputPortForNode(node.type) || '' })" @pointerdown.stop="startConnection(node, 'output', $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port: outputPortForNode(node.type) || '' }) }}</title></circle><text v-if="outputPortForNode(node.type)" class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY + 3" aria-hidden="true"><title>{{ portLabel(outputPortForNode(node.type)) }}</title>{{ portLabel(outputPortForNode(node.type)) }}</text>
+                <g v-for="port in inputPortsForNode(node.type)" :key="`input-${port}`">
+                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :class="`node-port-${port}`" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="t('workflow.inputPort', { port })" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.inputPort', { port }) }}</title></circle>
+                  <text class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY(node, port, 'input')! + 3" aria-hidden="true"><title>{{ inputPortLabel(node, port) }}</title>{{ inputPortLabel(node, port) }}</text>
+                </g>
+                <g v-for="port in outputPortsForNode(node.type)" :key="`output-${port}`">
+                  <circle class="node-port node-port-out" data-port-direction="output" :data-port-id="port" :class="`node-port-${port}`" :cx="nodeWidth(node)" :cy="portY(node, port, 'output')!" r="6" :aria-label="t('workflow.outputPort', { port })" @pointerdown.stop="startConnection(node, 'output', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port }) }}</title></circle>
+                  <text class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY(node, port, 'output')! + 3" aria-hidden="true"><title>{{ portLabel(port) }}</title>{{ portLabel(port) }}</text>
+                </g>
                 <text v-if="nodeIssue(node)" class="node-error-mark" :x="nodeWidth(node) - 28" y="20" aria-hidden="true">!</text>
-                <rect class="node-resize-handle is-right" data-resize="right" :x="nodeWidth(node) - 4" y="58" width="8" :height="Math.max(0, nodeHeight(node) - 70)" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeWidth', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'right')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'right')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
+                <rect class="node-resize-handle is-right" data-resize="right" :x="nodeWidth(node) - 4" :y="fieldsY(node) - 4" width="8" :height="Math.max(0, nodeHeight(node) - fieldsY(node) - 8)" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeWidth', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'right')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'right')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
                 <rect class="node-resize-handle is-bottom" data-resize="bottom" x="8" :y="nodeHeight(node) - 4" :width="nodeWidth(node) - 20" height="8" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeHeight', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'bottom')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'bottom')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
                 <rect class="node-resize-handle is-corner" data-resize="corner" :x="nodeWidth(node) - 16" :y="nodeHeight(node) - 16" width="24" height="24" rx="4" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeNode', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'corner')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'corner')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
                 <path class="node-resize-mark" :d="`M ${nodeWidth(node) - 14} ${nodeHeight(node) - 8} l 6 -6 M ${nodeWidth(node) - 10} ${nodeHeight(node) - 8} l 2 -2`" />

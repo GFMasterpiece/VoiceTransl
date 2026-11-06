@@ -42,6 +42,7 @@ export interface CapabilityNode {
   isSource: boolean
   maxInstances: number | null
   requiredInbound: number
+  requiredInputPorts: readonly string[]
   removable: boolean
   configKind: string
   fields: readonly CapabilityField[]
@@ -155,20 +156,19 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown): CapabilityNode {
+function node(value: unknown, namedInputs = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
   const inputPorts = item.input_ports === undefined ? [] : item.input_ports
   const outputPorts = item.output_ports === undefined ? [] : item.output_ports
   if (!Array.isArray(inputPorts) || !inputPorts.every(safePort) || !Array.isArray(outputPorts) || !outputPorts.every(safePort)) fail('workflow.capNodePorts')
-  // The current canvas renders one input and one output handle per node. The
-  // backend registry enforces the same contract; relax this only with a
-  // corresponding multi-handle canvas implementation.
-  if (inputPorts.length > 1 || outputPorts.length > 1) fail('workflow.capPortLimit')
-  const requiredInbound = item.required_inbound === undefined ? (inputPorts.length ? 1 : 0) : item.required_inbound
-  // required_inbound is currently limited by the same single-input canvas
-  // contract, not a second domain rule owned by the frontend.
-  if (typeof requiredInbound !== 'number' || !Number.isInteger(requiredInbound) || requiredInbound < 0 || requiredInbound > 1) fail('workflow.capInbound')
+  if (new Set(inputPorts).size !== inputPorts.length || new Set(outputPorts).size !== outputPorts.length) fail('workflow.capNodePorts')
+  const requiredInbound = item.required_inbound === undefined ? inputPorts.length : item.required_inbound
+  if (typeof requiredInbound !== 'number' || !Number.isInteger(requiredInbound) || requiredInbound < 0 || requiredInbound > inputPorts.length) fail('workflow.capInbound')
+  if (namedInputs && item.required_input_ports === undefined) fail('workflow.capInbound')
+  const requiredInputPorts = item.required_input_ports ?? (requiredInbound ? inputPorts : [])
+  if (!Array.isArray(requiredInputPorts) || !requiredInputPorts.every((port) => typeof port === 'string' && inputPorts.includes(port))
+    || new Set(requiredInputPorts).size !== requiredInputPorts.length || requiredInputPorts.length !== requiredInbound) fail('workflow.capInbound')
   const maxInstances = item.max_instances === null || item.max_instances === undefined ? null : item.max_instances
   if (maxInstances !== null && (typeof maxInstances !== 'number' || !Number.isInteger(maxInstances) || maxInstances < 1)) fail('workflow.capInstances')
   const config = item.config === undefined ? {} : object(item.config, 'workflow.capConfig')
@@ -194,6 +194,7 @@ function node(value: unknown): CapabilityNode {
     isSource: item.is_source === true,
     maxInstances,
     requiredInbound,
+    requiredInputPorts,
     removable: item.removable !== false,
     configKind: typeof config.kind === 'string' && config.kind.trim() ? config.kind : item.type,
     fields: parsedFields,
@@ -211,9 +212,9 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.2' && workflow.schema_version !== '1.3') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.2' && workflow.schema_version !== '1.3' && workflow.schema_version !== '1.4') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const nodes = workflow.nodes.map(node)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4'))
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
   const ports = workflow.ports === undefined
     ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))].map((id) => ({ id, typeId: id, label: id, capabilityRequirements: [] as string[] }))

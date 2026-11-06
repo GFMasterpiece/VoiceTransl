@@ -1272,10 +1272,10 @@ describe('bidirectional socket drags', () => {
     const positions = store.draft.nodes.map((entry) => ({ ...entry.position }))
     pointer(socket('preprocess', 'input', 1), 'pointerdown')
     pointer(socket('preprocess', 'output', 0), 'pointerup')
-    expect(connect).toHaveBeenLastCalledWith(first.id, second.id)
+    expect(connect).toHaveBeenLastCalledWith(first.id, second.id, 'audio', 'audio')
     pointer(socket('audio_input', 'output'), 'pointerdown')
     pointer(socket('preprocess', 'input', 0), 'pointerup')
-    expect(connect).toHaveBeenLastCalledWith('input', first.id)
+    expect(connect).toHaveBeenLastCalledWith('input', first.id, 'audio', 'audio')
     const calls = connect.mock.calls.length
     pointer(socket('preprocess', 'input', 0), 'pointerdown')
     pointer(socket('preprocess', 'input', 0), 'pointerup')
@@ -1366,7 +1366,7 @@ describe('bidirectional socket drags', () => {
         pointer(start, 'pointerdown', 100, 100, 7, type)
         pointer(start, 'pointerup', 600, 200, 7, type)
         expect(hit).toHaveBeenLastCalledWith(600, 200)
-        expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output')
+        expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output', 'audio', 'audio')
       }
       // Forward completion must also treat an input with the CSS class
       // node-port-out as an input; only its explicit direction is authoritative.
@@ -1375,7 +1375,7 @@ describe('bidirectional socket drags', () => {
       pointer(destination, 'pointerdown', 600, 200, 7, 'touch')
       pointer(destination, 'pointerup', 100, 100, 7, 'touch')
       expect(connect).toHaveBeenCalledTimes(calls + 1)
-      expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output')
+      expect(connect).toHaveBeenLastCalledWith(store.draft.nodes.find((entry) => entry.type === 'preprocess')!.id, 'output', 'audio', 'audio')
       hit.mockReturnValue(null)
       const edges = JSON.stringify(store.draft.edges)
       pointer(start, 'pointerdown', 100, 100, 7, 'touch')
@@ -2194,5 +2194,113 @@ describe('workflow request isolation and polling', () => {
     await startRun()
     expect(root!.textContent).toContain('历史快照，不映射当前画布状态')
     expect(root!.querySelector('.workflow-node')?.getAttribute('class')).toContain('is-state-draft')
+  })
+})
+
+describe('catalog-driven multiple input and output ports', () => {
+  async function multiNodes() {
+    const catalog = structuredClone(testCapabilities) as any
+    catalog.workflow.schema_version = '1.4'
+    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => ({
+      id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities],
+    }))
+    for (const entry of catalog.workflow.nodes) entry.required_input_ports = [...entry.input_ports]
+    for (const id of ['voice', 'background', 'reference', 'dry_audio', 'wet_audio']) {
+      catalog.workflow.ports.push({ id, type_id: 'audio', label: id, capability_requirements: [] })
+    }
+    catalog.workflow.nodes.push({
+      type: 'multi', label: 'Multi port', input_ports: ['voice', 'background', 'reference'],
+      output_ports: ['dry_audio', 'wet_audio'], required_input_ports: ['voice', 'background'], required_inbound: 2,
+      config: { kind: 'multi', fields: [{ key: 'strength', type: 'integer', default: 2 }] },
+    })
+    catalog.workflow.nodes.push({
+      type: 'multi_split', label: 'Split', input_ports: ['audio'], output_ports: ['dry_audio', 'wet_audio'],
+      required_input_ports: ['audio'], required_inbound: 1, config: { kind: 'none', fields: [] },
+    })
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.capabilitiesError).toBe('')
+    store.addNode('multi', { x: 100, y: 200 })
+    store.addNode('multi', { x: 500, y: 300 })
+    await settle()
+    const nodes = store.draft.nodes.filter((entry) => entry.type === 'multi')
+    const socket = (id: string, port: string, direction: 'input' | 'output') => root!.querySelector<SVGElement>(`[data-node-id="${id}"] [data-port-direction="${direction}"][data-port-id="${port}"]`)!
+    return { store, first: nodes[0]!, second: nodes[1]!, socket }
+  }
+  function pointer(target: EventTarget, type: string) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: 400, clientY: 250 })
+    Object.defineProperty(event, 'pointerId', { value: 7 })
+    target.dispatchEvent(event)
+  }
+
+  it('renders every socket in separate rows with settings below the final row', async () => {
+    const { store, first, socket } = await multiNodes()
+    const node = root!.querySelector(`[data-node-id="${first.id}"]`)!
+    expect(node.querySelectorAll('.node-port-in')).toHaveLength(3)
+    expect(node.querySelectorAll('.node-port-out')).toHaveLength(2)
+    expect(['voice', 'background', 'reference'].map((port) => socket(first.id, port, 'input').getAttribute('cy'))).toEqual(['45', '69', '93'])
+    expect(node.querySelector('foreignObject')!.getAttribute('y')).toBe('110')
+    expect(Number(node.querySelector('.node-resize-handle.is-right')!.getAttribute('y'))).toBeGreaterThan(99)
+    expect(Number(node.querySelector('.node-card')!.getAttribute('height'))).toBeGreaterThanOrEqual(164)
+    expect(store.registry!.kind('multi')!.requiredInputPorts).toEqual(['voice', 'background'])
+    expect(node.textContent).toContain('reference (可选)')
+    expect(store.registry!.inputPortForNode('multi')).toBeNull()
+    expect(store.registry!.outputPortForNode('multi')).toBeNull()
+    store.addNode('multi_split')
+    await settle()
+    const split = root!.querySelector('.is-multi_split')!
+    const cardHeight = Number(split.querySelector('.node-card')!.getAttribute('height'))
+    const metaY = Number(split.querySelector('.node-meta')!.getAttribute('y'))
+    expect(cardHeight).toBeGreaterThanOrEqual(metaY + 10)
+    expect(Number(split.querySelector('.node-resize-handle.is-right')!.getAttribute('y'))).toBeGreaterThan(75)
+  })
+
+  it('normalizes either drag direction using exact socket IDs and keeps other inputs connected', async () => {
+    const { store, first, second, socket } = await multiNodes()
+    pointer(socket(first.id, 'dry_audio', 'output'), 'pointerdown')
+    pointer(socket(second.id, 'voice', 'input'), 'pointerup')
+    pointer(socket(second.id, 'background', 'input'), 'pointerdown')
+    pointer(socket(first.id, 'wet_audio', 'output'), 'pointerup')
+    await settle()
+    expect(store.draft.edges.filter((edge) => edge.target === second.id)).toEqual([
+      expect.objectContaining({ source: first.id, source_port: 'dry_audio', target_port: 'voice' }),
+      expect.objectContaining({ source: first.id, source_port: 'wet_audio', target_port: 'background' }),
+    ])
+    const before = JSON.stringify(store.draft.edges)
+    pointer(socket(second.id, 'voice', 'input'), 'pointerdown')
+    pointer(root!.querySelector('.workflow-svg')!, 'pointerup')
+    expect(JSON.stringify(store.draft.edges)).toBe(before)
+    pointer(socket(second.id, 'voice', 'input'), 'pointerdown')
+    pointer(socket('input', 'audio', 'output'), 'pointerup')
+    await settle()
+    const edges = store.draft.edges.filter((edge) => edge.target === second.id)
+    expect(edges).toHaveLength(2)
+    expect(edges).toContainEqual(expect.objectContaining({ source: first.id, source_port: 'wet_audio', target_port: 'background' }))
+    expect(edges).toContainEqual(expect.objectContaining({ source: 'input', source_port: 'audio', target_port: 'voice' }))
+    const from = store.draft.nodes.find((entry) => entry.id === first.id)!
+    const to = store.draft.nodes.find((entry) => entry.id === second.id)!
+    const line = Array.from(root!.querySelectorAll('.workflow-edge')).find((path) => path.getAttribute('d')?.startsWith(`M ${from.position.x + store.getNodeSize(from).width} ${from.position.y + 69}`))
+    expect(line?.getAttribute('d')).toContain(`${to.position.x} ${to.position.y + 69}`)
+  })
+
+  it('requires explicit multi-port choices, preserves parallel edges, and reconnects at the edge limit', async () => {
+    const { store, first, second } = await multiNodes()
+    expect(store.connect(first.id, second.id)).toBe(false)
+    expect(store.connect(first.id, second.id, 'dry_audio', 'voice')).toBe(true)
+    expect(store.connect(first.id, second.id, 'wet_audio', 'background')).toBe(true)
+    store.capabilities!.constraints.maxEdges = store.draft.edges.length
+    expect(store.connect('input', second.id, 'audio', 'voice')).toBe(true)
+    expect(store.draft.edges.filter((edge) => edge.target === second.id)).toHaveLength(2)
+    const before = JSON.stringify(store.draft.edges)
+    expect(store.connect(first.id, second.id, 'voice', 'reference')).toBe(false)
+    expect(store.connect(first.id, second.id, 'dry_audio', 'reference')).toBe(false)
+    expect(store.connect(second.id, first.id, 'dry_audio', 'voice')).toBe(false)
+    expect(JSON.stringify(store.draft.edges)).toBe(before)
+    for (const state of ['saving', 'validating', 'resourceUploading'] as const) {
+      store[state] = true
+      expect(store.connect('input', first.id, 'audio', 'voice')).toBe(false)
+      store[state] = false
+    }
   })
 })

@@ -4,17 +4,25 @@ import math
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import node_registry as _nodes
-from .node_config import MockASRNodeConfig
+from .node_config import (
+    AudioOutputConfig as AudioOutputConfig,
+)
+from .node_config import (
+    TextOutputConfig as TextOutputConfig,
+)
+from .node_config import (
+    validate_asr_config as validate_asr_config,
+)
+from .node_config import (
+    validate_text_output_config as validate_text_output_config,
+)
 from .node_registry import (
     AUDIO_PORT,
     DEFAULT_FILENAME_STEM,
-    DEFAULT_TEXT_FILENAME_STEM,
-    DEFAULT_TEXT_FORMAT,
     PORT_NAME,
     ports_are_compatible,
 )
@@ -45,6 +53,8 @@ AUDIO_OUTPUT_NODE_TYPE = _nodes.AUDIO_OUTPUT_NODE_TYPE
 INPUT_NODE_TYPE = _nodes.INPUT_NODE_TYPE
 PREPROCESS_NODE_TYPE = _nodes.PREPROCESS_NODE_TYPE
 TEXT_OUTPUT_NODE_TYPE = _nodes.TEXT_OUTPUT_NODE_TYPE
+DEFAULT_TEXT_FILENAME_STEM = _nodes.DEFAULT_TEXT_FILENAME_STEM
+DEFAULT_TEXT_FORMAT = _nodes.DEFAULT_TEXT_FORMAT
 ASR_LANGUAGE_MAX_LENGTH = 32
 
 
@@ -98,9 +108,9 @@ class WorkflowEdge(BaseModel):
 
     id: str = Field(max_length=64)
     source: str = Field(max_length=64)
-    source_port: str = Field(default=PORT_NAME, max_length=32)
+    source_port: str = Field(default=PORT_NAME, max_length=64)
     target: str = Field(max_length=64)
-    target_port: str = Field(default=PORT_NAME, max_length=32)
+    target_port: str = Field(default=PORT_NAME, max_length=64)
 
 
 class WorkflowDocument(BaseModel):
@@ -230,48 +240,6 @@ class WorkflowRunList(BaseModel):
     offset: int
 
 
-class AudioOutputConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    filename_stem: str = Field(default=DEFAULT_FILENAME_STEM, min_length=1, max_length=128)
-
-    @model_validator(mode="after")
-    def validate_filename_stem(self):
-        valid, message = _valid_filename_stem(self.filename_stem)
-        if not valid:
-            raise ValueError(message or "filename_stem 无效")
-        return self
-
-
-class TextOutputConfig(AudioOutputConfig):
-    filename_stem: str = Field(default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128)
-    format: Literal["txt", "srt", "vtt", "lrc"] = DEFAULT_TEXT_FORMAT
-
-
-def validate_asr_config(config: object) -> MockASRNodeConfig:
-    """Validate only the mock ASR settings supported by workflow nodes."""
-
-    if not isinstance(config, dict):
-        raise ValueError("asr 配置必须是对象且不能为 null")
-    result = MockASRNodeConfig.model_validate(config, strict=True)
-    # Language is independent from the audio's language, but surrounding
-    # whitespace and control characters are never valid identifiers.
-    if (
-        not result.language
-        or result.language != result.language.strip()
-        or len(result.language) > ASR_LANGUAGE_MAX_LENGTH
-        or any(ord(char) < 32 or ord(char) == 127 for char in result.language)
-    ):
-        raise ValueError("asr.language 必须非空、无首尾空白且不包含控制字符")
-    return result
-
-
-def validate_text_output_config(config: object) -> TextOutputConfig:
-    if not isinstance(config, dict):
-        raise ValueError("text_output 配置必须是对象且不能为 null")
-    return TextOutputConfig.model_validate(config, strict=True)
-
-
 def validate_workflow_transcript(transcript: object) -> None:
     """Validate the common ASR result contract used by text outputs."""
 
@@ -349,32 +317,6 @@ def _issue(
     code: str, message: str, *, node_id: str | None = None, edge_id: str | None = None
 ) -> WorkflowValidationIssue:
     return WorkflowValidationIssue(code=code, message=message, node_id=node_id, edge_id=edge_id)
-
-
-def _valid_filename_stem(value: object) -> tuple[bool, str | None]:
-    if not isinstance(value, str):
-        return False, "filename_stem 必须是字符串"
-    if not value or value != value.strip():
-        return False, "filename_stem 不能为空或包含首尾空白"
-    if len(value) > 128:
-        return False, "filename_stem 不能超过 128 个字符"
-    if value in {".", ".."} or value.endswith("."):
-        return False, "filename_stem 不能是 . 或 ..，也不能以点结尾"
-    windows_basename = value.split(".", 1)[0].upper()
-    if windows_basename in {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        *(f"COM{index}" for index in range(1, 10)),
-        *(f"LPT{index}" for index in range(1, 10)),
-    }:
-        return False, "filename_stem 不能使用 Windows 保留名称"
-    if any(ord(char) < 32 or ord(char) == 127 for char in value):
-        return False, "filename_stem 不能包含控制字符"
-    if any(char in '/\\<>:"|?*' for char in value):
-        return False, "filename_stem 不能包含路径分隔符或危险字符"
-    return True, None
 
 
 def normalize_workflow_graph(
@@ -491,7 +433,7 @@ def validate_workflow_graph(
         <= len(input_nodes)
         <= WORKFLOW_GRAPH_CONSTRAINTS["max_sources"]
     ):
-        issues.append(_issue("INVALID_INPUT_COUNT", "工作流必须恰好包含一个 audio_input 节点"))
+        issues.append(_issue("INVALID_INPUT_COUNT", "工作流必须恰好包含一个源节点"))
     if len(output_nodes) < WORKFLOW_GRAPH_CONSTRAINTS["min_terminals"]:
         issues.append(
             _issue(
@@ -567,33 +509,33 @@ def validate_workflow_graph(
         if target is not None:
             incoming[edge.target].append(edge)
 
-    for node in output_nodes:
-        if node.id in incoming and len(incoming[node.id]) != 1:
-            issues.append(
-                _issue(
-                    "INVALID_OUTPUT_INPUT_COUNT",
-                    f"{node.type} 必须恰好有一条输入连接",
-                    node_id=node.id,
-                )
-            )
     for node in nodes:
         definition = _nodes.NODE_DEFINITIONS.get(node.type)
-        if node.id not in node_by_id or definition is None or definition.required_inbound == 0:
+        if node.id not in node_by_id or definition is None:
             continue
-        if len(incoming[node.id]) != 1:
-            issues.append(
-                _issue(
-                    "INVALID_NODE_INPUT_COUNT",
-                    f"{node.type} 必须恰好有一条输入连接",
-                    node_id=node.id,
+        by_port: dict[str, int] = {}
+        for edge in incoming[node.id]:
+            by_port[edge.target_port] = by_port.get(edge.target_port, 0) + 1
+        for port in definition.input_ports:
+            count = by_port.get(port, 0)
+            if count > 1 or (port in definition.required_ports and count != 1):
+                issues.append(
+                    _issue(
+                        "INVALID_OUTPUT_INPUT_COUNT"
+                        if definition.terminal
+                        else "INVALID_NODE_INPUT_COUNT",
+                        f"{node.type} 的输入端口 {port} 必须恰好有一条连接"
+                        if port in definition.required_ports
+                        else f"{node.type} 的输入端口 {port} 最多允许一条连接",
+                        node_id=node.id,
+                    )
                 )
-            )
     for node in input_nodes:
         if node.id in outgoing and not outgoing[node.id]:
             issues.append(
                 _issue(
                     "UNCONNECTED_NODE",
-                    "audio_input 至少需要连接一个输出节点",
+                    "源节点至少需要连接一个下游节点",
                     node_id=node.id,
                 )
             )
@@ -639,7 +581,7 @@ def validate_workflow_graph(
             issues.append(
                 _issue(
                     "UNREACHABLE_NODE",
-                    "节点必须从唯一 audio_input 可达",
+                    "节点必须从唯一源节点可达",
                     node_id=node.id,
                 )
             )

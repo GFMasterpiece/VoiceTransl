@@ -16,6 +16,8 @@ export interface NodeRegistry {
   kinds: readonly CapabilityNode[]
   kind(type: string): CapabilityNode | null
   has(type: string): boolean
+  outputPortsForNode(type: string): readonly PortName[]
+  inputPortsForNode(type: string): readonly PortName[]
   outputPortForNode(type: string): PortName | null
   inputPortForNode(type: string): PortName | null
   port(id: string): CapabilityPort | null
@@ -81,8 +83,10 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     kinds: nodes,
     kind: (type) => byType.get(type) || null,
     has: (type) => byType.has(type),
-    outputPortForNode: (type) => byType.get(type)?.outputPorts[0] || null,
-    inputPortForNode: (type) => byType.get(type)?.inputPorts[0] || null,
+    outputPortsForNode: (type) => byType.get(type)?.outputPorts || [],
+    inputPortsForNode: (type) => byType.get(type)?.inputPorts || [],
+    outputPortForNode: (type) => { const ports = byType.get(type)?.outputPorts; return ports?.length === 1 ? ports[0]! : null },
+    inputPortForNode: (type) => { const ports = byType.get(type)?.inputPorts; return ports?.length === 1 ? ports[0]! : null },
     port: (id) => byPort.get(id) || null,
     portsCompatible: (sourceId, targetId) => {
       const source = byPort.get(sourceId)

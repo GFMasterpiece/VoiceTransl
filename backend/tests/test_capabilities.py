@@ -14,7 +14,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.3"
+    assert body["workflow"]["schema_version"] == "1.4"
     assert body["workflow"]["ports"] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
