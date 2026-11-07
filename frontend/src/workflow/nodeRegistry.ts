@@ -24,7 +24,7 @@ export interface NodeRegistry {
   portsCompatible(sourceId: string, targetId: string): boolean
   isTerminalNode(type: string): boolean
   label(type: string): string
-  createDefaultConfig(type: string): Record<string, unknown>
+  createDefaultConfig(type: string, creating?: boolean): Record<string, unknown>
   validateConfig(type: string, config: Record<string, unknown>): NodeRegistryIssue[]
 }
 
@@ -57,6 +57,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     fields: entry.fields.map((field) => ({
       ...field,
       get label() { return present(`workflow.field_${entry.type}_${field.key}`, present(`workflow.field_${entry.configKind}_${field.key}`, field.label)) },
+      get description() { return present(`workflow.description_${entry.configKind}_${field.key}`, field.description) },
       options: field.options.map((option) => ({
         ...option,
         get label() { return present(`workflow.option_${entry.configKind}_${field.key}_${option.value}`, option.label) },
@@ -98,9 +99,10 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     },
     isTerminalNode: (type) => byType.get(type)?.terminal === true,
     label: (type) => byType.get(type)?.label || type,
-    createDefaultConfig: (type) => Object.fromEntries((byType.get(type)?.fields || [])
-      .filter((field) => field.default !== null || field.required)
-      .map((field) => [field.key, cloneDefault(field.default)])),
+    createDefaultConfig: (type, creating = false) => Object.fromEntries((byType.get(type)?.fields || [])
+      .map((field) => ({ field, value: creating ? field.creationDefault ?? field.default : field.default }))
+      .filter(({ field, value }) => value !== null || field.required)
+      .map(({ field, value }) => [field.key, cloneDefault(value)])),
     validateConfig: (type, config) => {
       const definition = byType.get(type)
       if (!definition) return [{ code: 'UNKNOWN_NODE_TYPE', ...issueText('workflow.unknownType', { p0: type }) }]
@@ -112,6 +114,13 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
         const value = config?.[field.key]
         if (value === undefined) {
           if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
+          continue
+        }
+        const resource = definition.resourceInput
+        const collection = resource?.collectionKey === field.key
+        if (collection && value !== undefined) {
+          if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !id) || new Set(value).size !== value.length) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: field.key }) })
+          if (config[resource!.configKey] !== undefined) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: resource!.configKey }) })
           continue
         }
         if (!valueMatchesType(field, value)) {

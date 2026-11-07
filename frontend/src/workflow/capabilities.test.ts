@@ -324,3 +324,48 @@ describe('capabilities parser', () => {
     expect((failure as Error).message).toBe('The capability catalog has no node definitions.')
   })
 })
+
+describe('resource collection capability schema 1.6', () => {
+  function payload(): any {
+    const value: any = structuredClone(livePayload)
+    value.workflow.schema_version = '1.6'
+    for (const node of value.workflow.nodes) {
+      node.is_parameter_source = false
+      node.required_input_ports = node.required_inbound ? node.input_ports : []
+      for (const field of node.config.fields) field.input_port = null
+    }
+    const source = value.workflow.nodes[0]
+    source.type = 'input_extension'
+    source.presentation = { resource_input: { resource_type: 'audio', config_key: 'chosen', collection_key: 'chosen_many' } }
+    source.config.fields = [{ key: 'chosen', type: 'string', required: false, default: null, input_port: null }, { key: 'chosen_many', type: 'json', required: false, default: null, input_port: null }]
+    return value
+  }
+  it('derives an extension collection key and validates ordered unique collections without changing defaults', () => {
+    const registry = createNodeRegistry(readCapabilities(payload()))
+    expect(registry.kind('input_extension')!.resourceInput).toEqual({ resourceType: 'audio', configKey: 'chosen', collectionKey: 'chosen_many' })
+    expect(registry.createDefaultConfig('input_extension')).toEqual({})
+    expect(registry.validateConfig('input_extension', { chosen_many: [] })).toEqual([])
+    expect(registry.validateConfig('input_extension', { chosen_many: ['b', 'a'] })).toEqual([])
+    expect(registry.validateConfig('input_extension', { chosen_many: Array.from({ length: 10001 }, (_, index) => `a${index}`) })).toEqual([])
+    expect(registry.validateConfig('input_extension', { chosen_many: ['a', 'a'] })).not.toEqual([])
+    expect(registry.validateConfig('input_extension', { chosen: 'a', chosen_many: ['a'] })).not.toEqual([])
+  })
+  it.each(['missing', 'unknown', 'same', 'parameter', 'type'])('rejects an invalid collection metadata shape: %s', (mutation) => {
+    const value = payload()
+    const source = value.workflow.nodes[0]
+    if (mutation === 'missing') delete source.presentation.resource_input.collection_key
+    if (mutation === 'unknown') source.presentation.resource_input.extra = 'x'
+    if (mutation === 'same') source.presentation.resource_input.collection_key = 'chosen'
+    if (mutation === 'parameter') { source.config.fields[1].input_port = 'audio'; source.input_ports = ['audio'] }
+    if (mutation === 'type') source.config.fields[1].type = 'string'
+    expect(() => readCapabilities(value)).toThrow()
+  })
+  it('separates creation defaults from defaults used by existing graph fields', () => {
+    const value = payload()
+    value.workflow.nodes[2].config.fields = [{ key: 'mode', type: 'select', required: false, default: 'old', creation_default: 'new', input_port: null,
+      options: [{ value: 'old', label: 'Old' }, { value: 'new', label: 'New' }] }]
+    const registry = createNodeRegistry(readCapabilities(value))
+    expect(registry.createDefaultConfig('audio_output')).toEqual({ mode: 'old' })
+    expect(registry.createDefaultConfig('audio_output', true)).toEqual({ mode: 'new' })
+  })
+})

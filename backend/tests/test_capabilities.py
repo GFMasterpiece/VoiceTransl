@@ -14,7 +14,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.5"
+    assert body["workflow"]["schema_version"] == "1.6"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -74,7 +74,19 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         "lrc",
     }
     assert body["export"]["formats"] == expected_formats
-    assert body["export"]["naming_modes"] == []
+    naming_mode = next(
+        field for field in nodes["text_output"]["config"]["fields"] if field["key"] == "naming_mode"
+    )
+    assert body["export"]["naming_modes"] == [
+        {"id": option["value"], "label": option["label"]} for option in naming_mode["options"]
+    ]
+    assert naming_mode["default"] == "exact"
+    assert naming_mode["creation_default"] == "prefix_sequence"
+    assert nodes["audio_input"]["presentation"]["resource_input"] == {
+        "resource_type": "audio",
+        "config_key": "audio_id",
+        "collection_key": "audio_ids",
+    }
     asr_language = next(
         field for field in nodes["asr"]["config"]["fields"] if field["key"] == "language"
     )
@@ -97,6 +109,9 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     )
     assert all(
         "input_port" in field for node in nodes.values() for field in node["config"]["fields"]
+    )
+    assert all(
+        "creation_default" in field for node in nodes.values() for field in node["config"]["fields"]
     )
     ports = {port["id"]: port for port in body["workflow"]["ports"]}
     for name in ("language", "filename_stem", "text_format", "string"):

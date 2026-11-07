@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from . import node_registry as _nodes
+from .limits import MAX_BATCH_AUDIO_ITEMS
 from .node_config import (
     AudioOutputConfig as AudioOutputConfig,
 )
@@ -242,6 +243,9 @@ class WorkflowRun(BaseModel):
     project_id: str
     audio_id: str
     batch_id: str | None = None
+    batch_item_sequence: int | None = Field(
+        default=None, ge=1, le=MAX_BATCH_AUDIO_ITEMS, strict=True
+    )
     workflow_revision: int = Field(ge=0)
     status: WorkflowRunStatus = WorkflowRunStatus.PENDING
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -329,7 +333,7 @@ def default_workflow(project_id: str, updated_at: datetime | None = None) -> Wor
             WorkflowNode(
                 id="output",
                 type="audio_output",
-                config={"filename_stem": DEFAULT_FILENAME_STEM},
+                config={"filename_stem": DEFAULT_FILENAME_STEM, "naming_mode": "prefix_sequence"},
                 position=WorkflowPosition(x=420, y=120),
             ),
         ],
@@ -720,17 +724,82 @@ def workflow_semantic_digest(nodes: list[WorkflowNode], edges: list[WorkflowEdge
     return hashlib.sha256(encoded).hexdigest()
 
 
+def workflow_resource_inputs(nodes):
+    """Read resource bindings from the same declarations exposed in capabilities."""
+    for node in nodes:
+        definition = _nodes.NODE_DEFINITIONS.get(node.type)
+        binding = (definition.presentation or {}).get("resource_input") if definition else None
+        if binding:
+            yield node, binding
+
+
+def validate_workflow_audio_selection(
+    nodes, *, audio_id=None, audio_ids=None, allow_collection_subset=False
+):
+    """Bind one execution or a submitted batch to its frozen resource manifest."""
+    for node, binding in workflow_resource_inputs(nodes):
+        single_key = binding["config_key"]
+        collection_key = binding.get("collection_key")
+        if single_key in node.config:
+            if audio_ids is not None:
+                raise ValueError("BATCH_EXPLICIT_AUDIO_BINDING")
+            if node.config[single_key] != audio_id:
+                raise ValueError("INPUT_AUDIO_MISMATCH")
+        if collection_key is None or collection_key not in node.config:
+            continue
+        selected = node.config[collection_key]
+        if not isinstance(selected, list) or any(not isinstance(aid, str) for aid in selected):
+            raise ValueError("INVALID_WORKFLOW")
+        if not selected:
+            raise ValueError("INPUT_AUDIO_COLLECTION_EMPTY")
+        if audio_ids is not None:
+            matches = (
+                set(audio_ids).issubset(selected)
+                if allow_collection_subset
+                else selected == audio_ids
+            )
+            if not matches:
+                raise ValueError("BATCH_AUDIO_COLLECTION_MISMATCH")
+        else:
+            if len(selected) > 1 and not allow_collection_subset:
+                raise ValueError("INPUT_AUDIO_COLLECTION")
+            if audio_id not in selected:
+                raise ValueError("INPUT_AUDIO_MISMATCH")
+
+
 def validate_workflow_resources(project, nodes) -> list[WorkflowValidationIssue]:
     """Check project-owned resources using registered input metadata."""
     ids = {audio.id for audio in project.audios}
     issues = []
-    for node in nodes:
-        definition = _nodes.NODE_DEFINITIONS.get(node.type)
-        binding = (definition.presentation or {}).get("resource_input") if definition else None
-        if binding and binding["config_key"] in node.config:
+    for node, binding in workflow_resource_inputs(nodes):
+        collection_key = binding.get("collection_key")
+        if (
+            collection_key is not None
+            and collection_key in node.config
+            and binding["config_key"] in node.config
+        ):
+            issues.append(
+                _issue(
+                    "INVALID_NODE_CONFIG", "输入的单项绑定与音频清单不能同时设置", node_id=node.id
+                )
+            )
+        if binding["config_key"] in node.config:
             selected = node.config[binding["config_key"]]
             if not isinstance(selected, str) or selected not in ids:
                 issues.append(
                     _issue("INPUT_AUDIO_NOT_FOUND", "输入绑定的音频不属于当前项目", node_id=node.id)
+                )
+        if collection_key is not None and collection_key in node.config:
+            selected = node.config[collection_key]
+            if (
+                not isinstance(selected, list)
+                or len(selected) > MAX_BATCH_AUDIO_ITEMS
+                or any(not isinstance(aid, str) or aid not in ids for aid in selected)
+                or len(set(selected)) != len(selected)
+            ):
+                issues.append(
+                    _issue(
+                        "INPUT_AUDIO_NOT_FOUND", "输入清单中的音频不属于当前项目", node_id=node.id
+                    )
                 )
     return issues

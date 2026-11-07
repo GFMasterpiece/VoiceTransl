@@ -11,6 +11,7 @@ def normalize(config):
 
 
 async def execute(context: NodeExecutionContext) -> NodeResult:
+    from ..application.output_naming import output_filename
     from ..application.workflow_media import write_audio_artifact
 
     config = AudioOutputConfig.model_validate(context.node.config, strict=True)
@@ -21,7 +22,12 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
         context.node.id,
         audio,
         context.cancel_event,
-        f"{config.filename_stem}{audio.suffix}",
+        output_filename(
+            config,
+            audio.suffix,
+            batch_id=getattr(context.run, "batch_id", None),
+            batch_item_sequence=getattr(context.run, "batch_item_sequence", None),
+        ),
     )
     return NodeResult(artifact=artifact)
 

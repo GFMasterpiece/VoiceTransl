@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t, locale, message, hasMessage } from '../i18n'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, useId, watch } from 'vue'
 import {
   workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, workflowNodeFieldsY, workflowPortY, workflowNodeHeight,
@@ -15,6 +15,8 @@ import NodeConfigFields from './NodeConfigFields.vue'
 import CanvasDialog from './CanvasDialog.vue'
 import BatchPanel from './BatchPanel.vue'
 import { useBatchSession } from '../composables/useBatchSession'
+import { workflowExecutionKey } from '../composables/workflowExecution'
+import NodeAudioCollection from './NodeAudioCollection.vue'
 import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
@@ -25,7 +27,8 @@ import type { Audio, Project } from '../stores/projects'
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
-const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio))
+const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive)
+provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
 const store = useWorkflowStore()
@@ -41,7 +44,8 @@ type PortDirection = 'input' | 'output'
 const connectionStart = ref<{ nodeId: string; port: string; direction: PortDirection } | null>(null)
 const gesturePointerId = ref<number | null>(null)
 const activePanel = ref<'run' | 'artifacts' | 'logs' | 'batch' | null>(null)
-watch(activePanel, (panel) => { batch.batches.setVisible(panel === 'batch'); if (panel === 'batch' && !batch.manifest.policy.value) void batch.manifest.loadPolicy() })
+watch(activePanel, (panel) => { batch.batches.setVisible(panel === 'batch') })
+watch(batch.collection.mode, (mode) => { if (mode === 'collection' && !batch.manifest.policy.value) void batch.manifest.loadPolicy() })
 const contextMenu = ref<{ x: number; y: number; world: { x: number; y: number }; nodeId?: string } | null>(null)
 const menuElement = ref<HTMLElement | null>(null)
 const menuSearch = ref('')
@@ -132,7 +136,7 @@ const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => 
 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
 function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value, node.id, store.draft.edges) : 0 }
-function hasConfigFields(node: WorkflowNode) { return kind(node)?.fields.some((field) => field.key !== kind(node)?.resourceInput?.configKey) }
+function hasConfigFields(node: WorkflowNode) { return kind(node)?.fields.some((field) => field.key !== kind(node)?.resourceInput?.configKey && field.key !== kind(node)?.resourceInput?.collectionKey) }
 function inputPortLabel(node: WorkflowNode, port: string) {
   const field = kind(node)?.fields.find((field) => field.inputPort === port)
   const typeId = registry.value?.port(port)?.typeId
@@ -155,6 +159,7 @@ async function bindResource(node: WorkflowNode, audioId: string | null) {
   const resource = kind(node)?.resourceInput
   if (!resource) return
   const config = { ...node.config }
+  if (resource.collectionKey) delete config[resource.collectionKey]
   if (audioId) config[resource.configKey] = audioId
   else delete config[resource.configKey]
   store.updateNode(node.id, { config })
@@ -663,6 +668,15 @@ async function validateAndSave() {
   }
 }
 
+async function runWorkflow() {
+  if (batch.startReason.value) return
+  const multiple = (store.boundAudioIds?.length || 0) > 1
+  const result = await batch.start()
+  if (multiple) activePanel.value = 'batch'
+  else if (result) activePanel.value = 'run'
+  return result
+}
+
 async function reloadCapabilities() {
   store.capabilities = null
   await store.load(props.projectId, props.audioId)
@@ -788,6 +802,7 @@ onUnmounted(() => {
         <button class="secondary-button compact-button" type="button" data-add-node :disabled="controlsLocked || store.loading" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
         <span class="workflow-save-state" role="status">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
+        <button class="primary-button compact-button" type="button" data-run-workflow :disabled="!!batch.startReason.value" :title="batch.startReason.value || t('workflow.runWorkflow')" @click="runWorkflow">{{ t('workflow.runWorkflow') }}</button>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= minZoom" @click="setZoom(store.zoom - .1)">−</button>
         <span class="zoom-value" aria-live="polite">{{ percentLabel(store.zoom) }}</span>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomIn')" :disabled="store.zoom >= 1.8" @click="setZoom(store.zoom + .1)">+</button>
@@ -839,7 +854,8 @@ onUnmounted(() => {
                   <div class="node-body" :style="bodyStyle(node)">
                     <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
-                      <NodeResourceInput :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
+                      <NodeAudioCollection v-if="kind(node)!.resourceInput!.collectionKey && kind(node)!.resourceInput!.resourceType === 'audio'" :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" :manifest="batch.manifest" :mode="batch.collection.mode.value" @mode="batch.collection.setMode($event)" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
+                      <NodeResourceInput v-else :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                     </div>
                     <div v-if="kind(node)?.preview" class="node-body-preview"><NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" /></div>
                   </div>
@@ -881,6 +897,6 @@ onUnmounted(() => {
       <button v-else role="menuitem" type="button" data-delete-node :disabled="controlsLocked || registry?.kind(store.selectedNode?.type || '')?.removable === false" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
     <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
-    <BatchPanel :open="activePanel === 'batch'" :manifest="batch.manifest" :batches="batch.batches" :audios="audios || []" :start-reason="batch.startReason.value" :revision="store.document?.workflow_revision" :locked="batch.locked.value" @start="batch.start" @close="activePanel = null" />
+    <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" :locked="batch.locked.value" @close="activePanel = null" />
   </section>
 </template>

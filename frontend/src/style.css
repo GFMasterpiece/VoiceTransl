@@ -396,6 +396,30 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .batch-record p { margin: 7px 0; }
 .batch-record progress { width: 100%; accent-color: var(--teal); }
 .batch-history, .batch-detail { border-top: 1px solid var(--line); padding-top: 16px; }
+.node-audio-collection { width: 424px; max-width: 100%; padding: 3px; font-size: 11px; box-sizing: border-box; }
+.node-audio-collection .collection-mode { display: grid; gap: 5px; }
+.node-audio-collection .collection-mode select { box-sizing: border-box; width: 100%; min-height: 26px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
+.node-audio-collection .collection-mode select:focus-visible { outline: 2px solid var(--teal); outline-offset: -1px; }
+.node-audio-collection .node-resource-input { height: auto; overflow: visible; }
+.node-measure-host .node-audio-collection .node-resource-input { width: 100%; }
+.node-audio-collection select { max-width: 100%; min-width: 0; }
+.node-audio-collection .inspector-help { font-size: 10px; line-height: 1.45; }
+.node-audio-collection .batch-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.node-audio-collection .batch-actions { gap: 5px; margin: 7px 0; }
+.node-audio-collection .batch-actions button, .node-audio-collection .batch-fields button { padding: 5px 7px; min-height: 28px; font-size: 10px; }
+.node-audio-collection .batch-table-scroll { max-height: 150px; width: 100%; }
+.node-audio-collection .batch-manifest details { margin: 5px 0; color: var(--muted); }
+.node-audio-collection .batch-table th, .node-audio-collection .batch-table td { padding: 5px; font-size: 10px; }
+.node-audio-collection .manifest-table { table-layout: fixed; min-width: 390px; }
+.node-audio-collection .manifest-table th:first-child { width: 32px; }
+.node-audio-collection .manifest-table th:nth-child(3) { width: 70px; }
+.node-audio-collection .manifest-table th:nth-child(4) { width: 84px; }
+.node-audio-collection .manifest-table th:last-child { width: 24px; }
+.node-audio-collection .manifest-table td:nth-child(2) { min-width: 0; max-width: none; overflow-wrap: anywhere; }
+.node-audio-collection .manifest-table td:nth-child(3), .node-audio-collection .manifest-table td:nth-child(4) { min-width: 0; max-width: none; }
+.node-audio-collection .manifest-status, .node-audio-collection .manifest-table th { white-space: nowrap; }
+.node-audio-collection .manifest-table td:nth-child(2) small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.node-field-description { display: block; grid-column: 1 / -1; max-width: 280px; white-space: normal; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; }
 @media (max-width: 640px) { .batch-fields > button { width: 100%; }.batch-actions { align-items: flex-start; }.batch-table { font-size: 11px; }.batch-table th, .batch-table td { padding: 6px; } }
 .project-create-modal .create-form { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .project-create-modal .text-input { margin-bottom: 0; }

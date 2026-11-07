@@ -8,7 +8,7 @@ const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: 
 const emit = defineEmits<{ update: [config: Record<string, unknown>] }>()
 const id = useId()
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
-const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey))
+const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey))
 const visibleKeys = computed(() => new Set(workflowVisibleFields(props.node, props.registry, props.edges).map((field) => field.key)))
 type Field = (typeof fields.value)[number]
 function connection(field: Field) { return field.inputPort ? props.edges?.find((edge) => edge.target === props.node.id && edge.target_port === field.inputPort) : undefined }
@@ -56,6 +56,7 @@ function error(field: Field) {
       <textarea v-else-if="field.type === 'json'" :data-field="field.key" :value="text(field)" :disabled="disabled(field)" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" spellcheck="false" @input="edit(field, $event)" />
       <input v-else type="text" :inputmode="field.type === 'number' || field.type === 'integer' ? 'decimal' : undefined" :data-field="field.key" :value="text(field)" :disabled="disabled(field)" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :step="field.type === 'integer' ? 1 : undefined" @input="edit(field, $event)" />
       <small v-if="error(field)" :id="`${id}-${field.key}-error`" class="node-field-error" :title="error(field)">{{ error(field) }}</small>
+      <small v-if="field.description" class="node-field-description">{{ field.description }}</small>
     </label>
   </div>
 </template>

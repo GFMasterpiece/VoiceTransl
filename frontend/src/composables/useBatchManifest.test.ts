@@ -130,4 +130,12 @@ describe('batch manifest', () => {
     expect(manifest.ready.value).toBe(true)
     manifest.dispose()
   })
+
+  it('leaves the selection size limit to the server while checking upload readiness', () => {
+    const { manifest } = setup()
+    manifest.items.value = Array.from({ length: 10001 }, (_, index) => ({ id: String(index), audioId: `a${index}`, name: `${index}.wav`, language: 'ja',
+      sizeBytes: 2, origin: null, selected: true, status: 'uploaded' }))
+    expect(manifest.ready.value).toBe(true)
+    manifest.dispose()
+  })
 })

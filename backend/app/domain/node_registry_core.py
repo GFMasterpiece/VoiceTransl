@@ -173,6 +173,48 @@ def type_catalog() -> list[dict[str, object]]:
     ]
 
 
+def _resource_binding(definition: NodeDefinition):
+    binding = (definition.presentation or {}).get("resource_input")
+    if binding is None:
+        return None
+    if (
+        not isinstance(binding, dict)
+        or set(binding) - {"resource_type", "config_key", "collection_key"}
+        or any(
+            not isinstance(binding.get(key), str) or not binding[key]
+            for key in ("resource_type", "config_key")
+        )
+    ):
+        raise ValueError("invalid resource input declaration")
+    collection_key = binding.get("collection_key")
+    if collection_key is not None and (
+        not isinstance(collection_key, str)
+        or not collection_key
+        or collection_key == binding["config_key"]
+    ):
+        raise ValueError("invalid resource collection key")
+    fields = {item.key: item for item in definition.fields}
+    single = fields.get(binding["config_key"])
+    collection = fields.get(collection_key) if collection_key is not None else None
+    if (
+        single is None
+        or single.type != "string"
+        or (collection_key is not None and (collection is None or collection.type != "json"))
+    ):
+        raise ValueError("resource bindings require declared string/json fields")
+    return {**binding, "collection_key": collection_key}
+
+
+def _catalog_presentation(definition):
+    if definition.presentation is None:
+        return None
+    presentation = dict(definition.presentation)
+    binding = _resource_binding(definition)
+    if binding is not None:
+        presentation["resource_input"] = binding
+    return presentation
+
+
 def validate_node_definition(definition: NodeDefinition) -> None:
     if not re.fullmatch(NODE_TYPE_PATTERN, definition.type):
         raise ValueError("node type must be a lowercase identifier")
@@ -203,12 +245,18 @@ def validate_node_definition(definition: NodeDefinition) -> None:
     field_keys = [item.key for item in definition.fields]
     if len(set(field_keys)) != len(field_keys):
         raise ValueError("configuration field keys must be unique")
+    resource_input = _resource_binding(definition)
     bound_ports = [item.input_port for item in definition.fields if item.input_port is not None]
     if len(set(bound_ports)) != len(bound_ports):
         raise ValueError("parameter input bindings must be unique")
     for item in definition.fields:
         if item.input_port is None:
             continue
+        if resource_input and item.key in {
+            resource_input["config_key"],
+            resource_input["collection_key"],
+        }:
+            raise ValueError("resource bindings cannot be connected parameters")
         if item.input_port not in definition.input_ports:
             raise ValueError("parameter binding must reference a declared input port")
         if item.input_port in definition.required_ports:
@@ -227,9 +275,6 @@ def validate_node_definition(definition: NodeDefinition) -> None:
             or not type_is_compatible(port.type_id, expected_type)
         ):
             raise ValueError("parameter input type must match its configuration field")
-        resource_input = (definition.presentation or {}).get("resource_input")
-        if resource_input and resource_input.get("config_key") == item.key:
-            raise ValueError("resource bindings cannot be connected parameters")
     if not definition.terminal and not definition.output_ports:
         raise ValueError("non-terminal nodes require at least one output port")
     for port in all_ports:
@@ -284,7 +329,7 @@ def node_catalog() -> list[dict[str, object]]:
             "required_inbound": len(item.required_ports),
             "required_input_ports": list(item.required_ports),
             "removable": item.removable,
-            "presentation": item.presentation,
+            "presentation": _catalog_presentation(item),
             "config": NodeConfigCapability(
                 kind=item.config_kind, fields=list(item.fields)
             ).model_dump(mode="json"),

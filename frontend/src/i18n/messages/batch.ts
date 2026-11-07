@@ -1,5 +1,8 @@
 export const batchMessages = {
   'zh-CN': {
+    inputMode: '音频输入方式', modeContext: '当前音频 / 单个资源', modeSingle: '固定单个资源', modeCollection: '多个文件 / 文件夹清单', inputHint: '每份音频独立执行整条工作流。上传只准备资源，保存后点击画布“运行”。', multiRequiresBatch: '多个音频需通过统一运行入口提交批次。',
+    listHelp: '清单与会话保留说明',
+    error_INPUT_AUDIO_COLLECTION_EMPTY: '音频清单为空，请先添加并准备资源。', error_INPUT_AUDIO_COLLECTION: '多个音频请通过统一运行入口提交批次。', error_INPUT_AUDIO_MISMATCH: '运行音频与保存的输入资源不一致，请重新确认。', error_BATCH_AUDIO_COLLECTION_MISMATCH: '批次清单与保存的输入清单不一致，请重新加载并确认。',
     title: '批处理', files: '添加多个文件', folder: '添加文件夹', recursive: '包含子文件夹', defaultLanguage: '默认源语言', applyLanguage: '应用到待上传项',
     chooseExisting: '添加项目已有资源', addExisting: '添加所选资源', choose: '请选择', selected: '选中', name: '文件 / 相对路径', origin: '来源组', language: '源语言', state: '状态', remove: '移除',
     localHint: '文件清单在此编辑器会话中保留。尚未上传的文件刷新后需重新选择；已上传资源可从项目中再次添加。每次选择目录均保留为独立来源组。',
@@ -9,7 +12,7 @@ export const batchMessages = {
     status_queued: '排队', status_running: '运行中', status_cancelling: '取消中', status_completed: '完成', status_partial: '部分完成', status_cancelled: '已取消', status_interrupted: '已中断',
     status_unknown: '未知状态：{status}', start: '确认并开始批次', confirm: '确认使用已保存的工作流版本 {revision}，按清单顺序运行 {count} 个音频。批次使用固定快照，之后修改画布不影响它。',
     dirty: '请先在画布校验并保存工作流，再开始批次。', binding: '请将音频输入切换为“使用当前音频”并保存，再开始批次。', busy: '请等待单次运行、上传或其他提交完成。',
-    invalidGraph: '请先加载、校验并保存有效的工作流。', unready: '请确保所有已选项通过预检、填写源语言并成功上传。', empty: '请选择 1 至 10000 个不同的音频。',
+    invalidGraph: '请先加载、校验并保存有效的工作流。', unready: '请确保所有已选项通过预检、填写源语言并成功上传。', empty: '请选择至少一个不同的音频。',
     manifestList: '上传清单', history: '批次历史', refresh: '刷新批次记录', noHistory: '尚无批次记录。', previous: '上一页', next: '下一页', pagination: '{from}–{to} / {total}',
     details: '查看明细', cancel: '取消批次', retry: '重试失败 / 中断项', includeCancelled: '重试时包含已取消项', download: '下载 ZIP', snapshot: '工作流快照版本 {revision}',
     progress: '已结束 {done} / {total}', counts: '完成 {completed} · 部分完成 {partial} · 失败 {failed} · 取消 {cancelled} · 中断 {interrupted}',
@@ -24,6 +27,9 @@ export const batchMessages = {
     node_source_info_label: '当前文件信息', node_source_info_add: '当前文件信息', sourcePort_filename: '完整文件名', sourcePort_stem: '不含扩展名的文件名', sourcePort_source_language: '源语言', sourcePort_relative_path: '来源相对路径', sourcePort_root_name: '来源组名称',
   },
   en: {
+    inputMode: 'Audio input mode', modeContext: 'Current audio / one resource', modeSingle: 'One fixed resource', modeCollection: 'Multiple files / folders', inputHint: 'Each audio file runs the whole workflow independently. Upload prepares resources only. Save, then choose Run on the canvas.', multiRequiresBatch: 'Use the shared Run action to process multiple audio files as a batch.',
+    listHelp: 'List and session details',
+    error_INPUT_AUDIO_COLLECTION_EMPTY: 'The input list is empty. Add and prepare audio first.', error_INPUT_AUDIO_COLLECTION: 'Use the shared Run action to process multiple audio files as a batch.', error_INPUT_AUDIO_MISMATCH: 'The run audio does not match the saved input resource. Review it again.', error_BATCH_AUDIO_COLLECTION_MISMATCH: 'The batch list does not match the saved input list. Reload and review it again.',
     title: 'Batch processing', files: 'Add files', folder: 'Add folder', recursive: 'Include subfolders', defaultLanguage: 'Default source language', applyLanguage: 'Apply to pending files',
     chooseExisting: 'Add existing project audio', addExisting: 'Add selected audio', choose: 'Choose audio', selected: 'Selected', name: 'File / relative path', origin: 'Source group', language: 'Source language', state: 'Status', remove: 'Remove',
     localHint: 'The list stays in this editor session. Unuploaded files must be selected again after refresh; uploaded audio can be added from the project. Every folder selection creates a separate source group.',
@@ -33,7 +39,7 @@ export const batchMessages = {
     status_queued: 'Queued', status_running: 'Running', status_cancelling: 'Cancelling', status_completed: 'Completed', status_partial: 'Partial', status_cancelled: 'Cancelled', status_interrupted: 'Interrupted',
     status_unknown: 'Unknown status: {status}', start: 'Confirm and start batch', confirm: 'Run {count} audio files in list order using saved workflow revision {revision}. This batch keeps its snapshot when the canvas changes later.',
     dirty: 'Validate and save the workflow on the canvas before starting a batch.', binding: 'Switch the audio input to “Use current audio” and save before starting a batch.', busy: 'Wait for the single run, upload, or other submission to finish.',
-    invalidGraph: 'Load, validate, and save a valid workflow first.', unready: 'All selected items must pass validation, have a source language, and finish uploading.', empty: 'Select 1 to 10000 distinct audio files.',
+    invalidGraph: 'Load, validate, and save a valid workflow first.', unready: 'All selected items must pass validation, have a source language, and finish uploading.', empty: 'Select at least one distinct audio file.',
     manifestList: 'Upload list', history: 'Batch history', refresh: 'Refresh batches', noHistory: 'No batches yet.', previous: 'Previous', next: 'Next', pagination: '{from}–{to} / {total}',
     details: 'View items', cancel: 'Cancel batch', retry: 'Retry failed / interrupted items', includeCancelled: 'Include cancelled items in retry', download: 'Download ZIP', snapshot: 'Workflow snapshot revision {revision}',
     progress: 'Finished {done} / {total}', counts: 'Completed {completed} · Partial {partial} · Failed {failed} · Cancelled {cancelled} · Interrupted {interrupted}',

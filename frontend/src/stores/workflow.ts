@@ -36,7 +36,7 @@ export const WORKFLOW_RESOURCE_HEIGHT = 236
 export const WORKFLOW_PREVIEW_HEIGHT = 190
 export function workflowVisibleFields(node: { type: NodeType; id?: string }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
   const kind = registry.kind(node.type)
-  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey
+  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey
     && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
 export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
@@ -46,7 +46,7 @@ export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeI
   const kind = registry.kind(type)
   const bodyY = workflowNodeFieldsY(type, registry)
   return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges)
-    + (kind?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
+    + (kind?.resourceInput ? kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNodeSize {
@@ -65,7 +65,7 @@ export interface WorkflowNode {
 export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { id?: string }, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize, edges: readonly WorkflowEdge[] = []): WorkflowNodeSize {
   const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
   return {
-    width: Math.max(registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
+    width: Math.max(registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
       dimension(node.size?.width), dimension(measuredMin?.width)),
     height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges) : WORKFLOW_NODE_HEIGHT,
       dimension(node.size?.height), dimension(measuredMin?.height)),
@@ -148,6 +148,7 @@ export interface WorkflowRun {
   project_id: string
   audio_id: string
   batch_id?: string | null
+  batch_item_sequence?: number | null
   workflow_revision: number
   status: RunStatus
   created_at: string
@@ -206,7 +207,10 @@ export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInp
 }
 
 function canonicalNodeConfig(node: WorkflowNode, registry?: NodeRegistry): Record<string, unknown> {
-  return { ...(registry?.createDefaultConfig(node.type) || {}), ...(node.config || {}) }
+  const defaults = registry?.createDefaultConfig(node.type) || {}
+  const resource = registry?.kind(node.type)?.resourceInput
+  for (const key of [resource?.configKey, resource?.collectionKey]) if (key && !Object.prototype.hasOwnProperty.call(node.config, key)) delete defaults[key]
+  return { ...defaults, ...(node.config || {}) }
 }
 
 export function outputPortForNode(type: NodeType, registry: NodeRegistry): OutputPortName | null {
@@ -301,6 +305,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
 function readRun(value: unknown): WorkflowRun {
   const run = value as WorkflowRun
   if (!run || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
+    || (run.batch_item_sequence != null && (!Number.isInteger(run.batch_item_sequence) || run.batch_item_sequence < 1))
     || (run.batch_id != null && (typeof run.batch_id !== 'string' || !run.batch_id))
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
     || !run.workflow || !Array.isArray(run.workflow.nodes) || !Array.isArray(run.workflow.edges)) {
@@ -816,7 +821,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
+  const boundAudioIds = computed<string[] | null>(() => {
+    for (const node of draft.value.nodes) {
+      const resource = registry.value?.kind(node.type)?.resourceInput
+      if (resource?.resourceType === 'audio' && resource.collectionKey && Object.prototype.hasOwnProperty.call(node.config, resource.collectionKey)) {
+        const value = node.config[resource.collectionKey]
+        return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+      }
+    }
+    return null
+  })
   const boundAudioId = computed(() => {
+    if (boundAudioIds.value !== null) return boundAudioIds.value.length === 1 ? boundAudioIds.value[0]! : null
     for (const node of draft.value.nodes) {
       const definition = registry.value?.kind(node.type)
       const resource = definition?.isSource ? definition.resourceInput : null
@@ -842,6 +858,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function startRun() {
+    if (boundAudioIds.value && boundAudioIds.value.length !== 1) { errorState.set(message(boundAudioIds.value.length ? 'batch.multiRequiresBatch' : 'batch.empty')); return null }
     if (batchSubmitting.value) { errorState.set(message('batch.busy')); return null }
     if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
     if (!dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
@@ -1099,7 +1116,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: registry.value.createDefaultConfig(type),
+      config: registry.value.createDefaultConfig(type, true),
       position: placed,
     }
     const before = editorSnapshot()
@@ -1138,8 +1155,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const fields = [...new Set([...Object.keys(node.config), ...Object.keys(patch.config)])]
         .filter((field) => JSON.stringify(stableObject(node.config[field])) !== JSON.stringify(stableObject(patch.config![field])))
       const fieldType = registry.value?.kind(node.type)?.fields.find((field) => field.key === fields[0])?.type
-      const resourceKey = registry.value?.kind(node.type)?.resourceInput?.configKey
-      if (fields.length === 1 && fields[0] !== resourceKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
+      const resource = registry.value?.kind(node.type)?.resourceInput
+      if (fields.length === 1 && fields[0] !== resource?.configKey && fields[0] !== resource?.collectionKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
     }
     if (patch.config !== undefined) node.config = JSON.parse(JSON.stringify(patch.config))
     if (patch.position !== undefined) node.position = { ...patch.position }
@@ -1310,7 +1327,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   return {
     capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
-    history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, setAudioContext,
+    history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, boundAudioIds, setAudioContext,
     runMatchesDraft, nodeMinimums, setNodeMinimum, getNodeSize,
     setError: errorState.set, load, save, validate, startRun, cancelRun, loadHistory, loadRun, loadOutputs, addNode, removeNode,
     updateNode, updateNodeConfig, updateNodeUi, canAdjustInsertedNodeUi, adjustInsertedNodeUi, connect, disconnect, selectNode, setSelection, setDraft, setCleanBaseline, markDirty, beginDraftEditing, leaveEditor, downloadArtifact, stop, stopPolling,

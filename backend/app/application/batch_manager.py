@@ -13,9 +13,9 @@ from ..domain.batch import (
     item_counts,
     now,
 )
-from ..domain.node_registry import NODE_DEFINITIONS
 from ..domain.workflow import (
     WorkflowRunError,
+    validate_workflow_audio_selection,
     validate_workflow_graph,
     validate_workflow_resources,
     workflow_snapshot,
@@ -91,13 +91,9 @@ class BatchManager:
                 audio_ids = [item.audio_id for item in retry.items if item.status in states]
                 if not audio_ids:
                     raise ValueError("BATCH_NOT_RETRYABLE")
-            for node in snapshot.nodes:
-                definition = NODE_DEFINITIONS.get(node.type)
-                binding = (
-                    (definition.presentation or {}).get("resource_input") if definition else None
-                )
-                if binding and binding["config_key"] in node.config:
-                    raise ValueError("BATCH_EXPLICIT_AUDIO_BINDING")
+            validate_workflow_audio_selection(
+                snapshot.nodes, audio_ids=audio_ids, allow_collection_subset=retry is not None
+            )
             audios = {audio.id: audio for audio in project.audios}
             if any(aid not in audios for aid in audio_ids):
                 raise ValueError("AUDIO_NOT_FOUND")
@@ -114,6 +110,9 @@ class BatchManager:
                 items.append(
                     BatchItem(
                         index=index,
+                        sequence=(old.sequence if old.sequence is not None else old.index + 1)
+                        if old
+                        else index + 1,
                         audio_id=aid,
                         audio_name=old.audio_name if old else audio.source.original_name,
                         source_language=old.source_language if old else audio.source.language,
@@ -206,7 +205,11 @@ class BatchManager:
                 batch.started_at = batch.started_at or now()
                 self.store.save(batch)
                 run = await self.jobs.start_workflow_from_snapshot(
-                    batch.project_id, item.audio_id, batch.workflow, batch.id
+                    batch.project_id,
+                    item.audio_id,
+                    batch.workflow,
+                    batch.id,
+                    sequence=item.sequence if item.sequence is not None else item.index + 1,
                 )
                 task = self.jobs.tasks.get((batch.project_id, item.audio_id))
                 item.run_id = run.id

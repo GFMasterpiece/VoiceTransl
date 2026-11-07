@@ -11,6 +11,7 @@ export interface ManifestItem {
   name: string
   sizeBytes: number
   fileSelection?: boolean
+  missing?: boolean
   language: string
   selected: boolean
   status: 'ready' | 'uploading' | 'uploaded' | 'failed'
@@ -45,12 +46,13 @@ export function useBatchManifest(projectId: string, onUploaded: (audio: Audio) =
   const selected = computed(() => items.value.filter(included))
   const pendingLocal = computed(() => items.value.some((item) => !!item.file && item.status !== 'uploaded'))
   function validation(item: ManifestItem) {
+    if (item.missing) return message('workflow.resourceMissing').message
     if (item.audioId) return ''
     if (item.origin && (!safeOriginPath(item.origin.relative_path) || !safeOriginPath(item.origin.root_name)
       || item.origin.root_name.includes('/') || item.origin.root_name.length > 255 || item.origin.relative_path.split('/').pop() !== item.file?.name)) return message('batch.invalidPath').message
     return validateSourceLanguage(item.language) || (item.file ? validateUpload(item.file, policy.value) : '')
   }
-  const ready = computed(() => selected.value.length > 0 && selected.value.length <= 10000
+  const ready = computed(() => selected.value.length > 0
     && selected.value.every((item) => !!item.audioId && !validation(item)))
 
   async function loadPolicy() {

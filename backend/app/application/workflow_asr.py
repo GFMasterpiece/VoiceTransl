@@ -25,6 +25,7 @@ from ..domain import (
 from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..exporters import render_lrc, render_srt, render_vtt
 from ..providers import MockASRProvider
+from .output_naming import output_filename
 
 
 class WorkflowASRError(NodeExecutionError):
@@ -260,7 +261,12 @@ async def execute_text_output_node(
             "TEXT_OUTPUT_TIMESTAMPS_INVALID",
             f"无法导出 {config.format.upper()}：片段需要完整、有效的时间范围",
         ) from error
-    filename = f"{config.filename_stem}.{config.format}"
+    filename = output_filename(
+        config,
+        f".{config.format}",
+        batch_id=getattr(run, "batch_id", None),
+        batch_item_sequence=getattr(run, "batch_item_sequence", None),
+    )
     target = store.workflow_artifact_path(run.project_id, run.audio_id, run.id, node.id, filename)
     size, digest = await _write_bytes(target, payload, cancel_event)
     return WorkflowArtifact(

@@ -1,6 +1,6 @@
 export const workflowPanelMessages = {
   'zh-CN': {
-    panelRun: '运行',
+    panelRun: '运行记录',
     panelArtifacts: '产物',
     panelLogs: '日志',
     panelArtifactsHelp: '查看所选运行快照中的节点产物。下载前会检查文件是否仍然可用。',
@@ -24,7 +24,7 @@ export const workflowPanelMessages = {
     parameterUnresolved: '尚未解析',
   },
   en: {
-    panelRun: 'Run',
+    panelRun: 'Run history',
     panelArtifacts: 'Artifacts',
     panelLogs: 'Logs',
     panelArtifactsHelp: 'View node artifacts from the selected run snapshot. Files are checked for availability before download.',

@@ -12,6 +12,7 @@ from ..domain.workflow import (
     WorkflowRun,
     WorkflowRunError,
     WorkflowRunStatus,
+    validate_workflow_audio_selection,
     validate_workflow_graph,
     validate_workflow_resources,
     workflow_parameter_sources,
@@ -71,9 +72,16 @@ class JobManager:
     def workflow_run(self, project_id, audio_id=PRIMARY_AUDIO_ID):
         return self.workflow_runs.get((project_id, audio_id))
 
-    async def start_workflow_from_snapshot(self, project_id, audio_id, snapshot, owner):
+    async def start_workflow_from_snapshot(
+        self, project_id, audio_id, snapshot, owner, sequence=None
+    ):
         return await self.start_workflow(
-            project_id, audio_id, snapshot.workflow_revision, _snapshot=snapshot, _owner=owner
+            project_id,
+            audio_id,
+            snapshot.workflow_revision,
+            _snapshot=snapshot,
+            _owner=owner,
+            _sequence=sequence,
         )
 
     def audio_busy(self, project_id, audio_id, owner=None):
@@ -88,7 +96,14 @@ class JobManager:
         )
 
     async def start_workflow(
-        self, project_id, audio_id, workflow_revision, *, _snapshot=None, _owner=None
+        self,
+        project_id,
+        audio_id,
+        workflow_revision,
+        *,
+        _snapshot=None,
+        _owner=None,
+        _sequence=None,
     ):
         async with self.store.mutation_lock(project_id):
             async with self._lock(project_id, audio_id):
@@ -105,21 +120,11 @@ class JobManager:
                 )
                 if issues:
                     raise ValueError("invalid workflow")
-                from ..domain.node_registry import NODE_DEFINITIONS
-
-                for node in document.nodes:
-                    definition = NODE_DEFINITIONS.get(node.type)
-                    binding = (
-                        (definition.presentation or {}).get("resource_input")
-                        if definition
-                        else None
-                    )
-                    if binding and binding["config_key"] in node.config:
-                        selected = node.config[binding["config_key"]]
-                        if not isinstance(selected, str):
-                            raise ValueError("invalid audio binding")
-                        if selected != audio_id:
-                            raise ValueError("INPUT_AUDIO_MISMATCH")
+                validate_workflow_audio_selection(
+                    document.nodes,
+                    audio_id=audio_id,
+                    allow_collection_subset=_snapshot is not None and _owner is not None,
+                )
                 snapshot = (
                     _snapshot.model_copy(deep=True)
                     if _snapshot is not None
@@ -131,6 +136,7 @@ class JobManager:
                     project_id=project_id,
                     audio_id=audio_id,
                     batch_id=_owner if _snapshot is not None else None,
+                    batch_item_sequence=_sequence if _snapshot is not None else None,
                     workflow_revision=document.workflow_revision,
                     workflow=snapshot,
                     nodes=[

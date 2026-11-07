@@ -156,6 +156,16 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
             )
         raise HTTPException(500, detail=_error("INTERNAL_ERROR", "工作流启动失败")) from error
     except ValueError as error:
+        if str(error) in {"INPUT_AUDIO_COLLECTION", "INPUT_AUDIO_COLLECTION_EMPTY"}:
+            raise HTTPException(
+                422,
+                detail=_error(
+                    str(error),
+                    "输入节点包含多个音频，请启动完整批次"
+                    if str(error) == "INPUT_AUDIO_COLLECTION"
+                    else "输入节点尚未选择音频，请先添加音频",
+                ),
+            ) from error
         if str(error) == "INPUT_AUDIO_MISMATCH":
             raise HTTPException(
                 422, detail=_error("INPUT_AUDIO_MISMATCH", "输入节点绑定的音频与运行音频不一致")

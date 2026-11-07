@@ -13,6 +13,7 @@ export interface BatchSummary {
 }
 export interface BatchDetail extends BatchSummary { workflow: WorkflowDocumentInput }
 export interface BatchItem {
+  sequence?: number | null
   index: number; audio_id: string; audio_name: string; source_language: string; origin: SourceOrigin | null
   status: string; run_id: string | null; started_at: string | null; finished_at: string | null; error: { type: string; message: string } | null
 }
@@ -42,6 +43,7 @@ function validOrigin(value: unknown) { return value === null || (!!value && ['ro
 function readItem(value: unknown): BatchItem {
   const item = value as BatchItem
   if (!item || !Number.isInteger(item.index) || item.index < 0 || typeof item.audio_id !== 'string' || typeof item.audio_name !== 'string'
+    || (item.sequence != null && (!Number.isInteger(item.sequence) || item.sequence < 1))
     || typeof item.source_language !== 'string' || typeof item.status !== 'string' || !validOrigin(item.origin) || !validError(item.error)
     || (item.run_id !== null && typeof item.run_id !== 'string')) throw message('batch.invalidResponse')
   return item
@@ -58,7 +60,7 @@ function validPending(value: unknown): value is PendingRequest {
   if (!request || typeof request.path !== 'string' || !request.body || typeof request.body.request_id !== 'string'
     || !request.body.request_id.length || request.body.request_id.length > 128) return false
   if (request.path === '') return Number.isInteger(request.body.workflow_revision) && Number(request.body.workflow_revision) >= 0
-    && Array.isArray(request.body.audio_ids) && request.body.audio_ids.length > 0 && request.body.audio_ids.length <= 10000
+    && Array.isArray(request.body.audio_ids) && request.body.audio_ids.length > 0
     && request.body.audio_ids.every((id) => typeof id === 'string' && !!id) && new Set(request.body.audio_ids).size === request.body.audio_ids.length
   return /^\/[A-Za-z0-9_-]+\/retry$/.test(request.path) && typeof request.body.include_cancelled === 'boolean'
 }

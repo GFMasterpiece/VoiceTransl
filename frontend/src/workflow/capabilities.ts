@@ -22,6 +22,7 @@ export interface CapabilityField {
   type: 'string' | 'boolean' | 'integer' | 'number' | 'select' | 'json'
   required: boolean
   default: CapabilityValue
+  creationDefault?: CapabilityValue
   minimum: number | null
   maximum: number | null
   minLength: number | null
@@ -49,7 +50,7 @@ export interface CapabilityNode {
   configKind: string
   fields: readonly CapabilityField[]
   positionX: number | null
-  resourceInput?: { resourceType: string; configKey: string } | null
+  resourceInput?: { resourceType: string; configKey: string; collectionKey?: string | null } | null
   preview?: { renderer: string } | null
 }
 export interface CapabilityAsr {
@@ -124,6 +125,7 @@ function field(value: unknown, parameters: boolean): CapabilityField {
     type: type as CapabilityField['type'],
     required: item.required === true,
     default: defaultValue,
+    creationDefault: item.creation_default ?? null,
     minimum,
     maximum,
     minLength,
@@ -160,7 +162,7 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown, namedInputs = false, parameters = false): CapabilityNode {
+function node(value: unknown, namedInputs = false, parameters = false, collections = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   if (parameters && typeof item.is_parameter_source !== 'boolean') fail('workflow.capParameter')
   if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
@@ -185,13 +187,16 @@ function node(value: unknown, namedInputs = false, parameters = false): Capabili
   if (new Set(mappedPorts).size !== mappedPorts.length || mappedPorts.some((port) => !inputPorts.includes(port) || requiredInputPorts.includes(port))) fail('workflow.capParameter')
   const presentation = item.presentation == null ? {} : object(item.presentation, 'workflow.capPresentation')
   const resource = presentation.resource_input == null ? null : object(presentation.resource_input, 'workflow.capPresentation')
+  if (collections && resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key'].includes(key))
+    || (resource.collection_key !== null && (!safeIdentifier(resource.collection_key) || resource.collection_key === resource.config_key
+      || !parsedFields.some((field) => field.key === resource.collection_key && field.type === 'json'))))) fail('workflow.capPresentation')
   const preview = presentation.preview == null ? null : object(presentation.preview, 'workflow.capPresentation')
   if (resource && (typeof resource.resource_type !== 'string' || !safeIdentifier(resource.config_key) || !parsedFields.some((field) => field.key === resource.config_key && field.type === 'string'))) fail('workflow.capPresentation')
   if (preview && (typeof preview.renderer !== 'string' || !preview.renderer)) fail('workflow.capPresentation')
-  if (resource && parsedFields.some((field) => field.key === resource.config_key && field.inputPort !== null)) fail('workflow.capParameter')
+  if (resource && parsedFields.some((field) => (field.key === resource.config_key || (collections && field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
   if (parameters && item.is_parameter_source && (item.is_source === true || inputPorts.length || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
   return {
-    resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key) } : null,
+    resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), ...(collections ? { collectionKey: resource.collection_key as string | null } : {}) } : null,
     preview: preview ? { renderer: String(preview.renderer) } : null,
     type: item.type,
     label: item.label,
@@ -222,10 +227,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = workflow.schema_version === '1.5'
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters))
+  const parameters = ['1.5', '1.6'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, workflow.schema_version === '1.6'))
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
   const ports = workflow.ports === undefined
     ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))].map((id) => ({ id, typeId: id, label: id, capabilityRequirements: [] as string[] }))

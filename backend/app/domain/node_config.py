@@ -21,7 +21,14 @@ class MockASRNodeConfig(_ConfigModel):
 class AudioOutputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    filename_stem: str = Field(default=DEFAULT_FILENAME_STEM, min_length=1, max_length=128)
+    filename_stem: str = Field(
+        default=DEFAULT_FILENAME_STEM, min_length=1, max_length=128, description="名称 / 前缀"
+    )
+    naming_mode: Literal["exact", "prefix_sequence"] = Field(
+        default="exact",
+        description="前缀模式附加固定文件序号，例如 prefix_00001；完整名称模式不附加序号",
+        json_schema_extra={"creation_default": "prefix_sequence"},
+    )
 
     @model_validator(mode="after")
     def validate_filename_stem(self):
@@ -32,7 +39,9 @@ class AudioOutputConfig(BaseModel):
 
 
 class TextOutputConfig(AudioOutputConfig):
-    filename_stem: str = Field(default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128)
+    filename_stem: str = Field(
+        default=DEFAULT_TEXT_FILENAME_STEM, min_length=1, max_length=128, description="名称 / 前缀"
+    )
     format: Literal["txt", "srt", "vtt", "lrc"] = DEFAULT_TEXT_FORMAT
 
 
@@ -93,13 +102,26 @@ def normalize_empty_config(config: dict[str, object]) -> dict[str, object]:
 
 
 def normalize_input_config(config: dict[str, object]) -> dict[str, object]:
-    if set(config) - {"audio_id"}:
-        raise ValueError("audio_input 仅接受 audio_id")
-    if "audio_id" in config:
-        from .project import AudioAsset
+    from .limits import MAX_BATCH_AUDIO_ITEMS
+    from .project import AudioAsset
 
+    if set(config) - {"audio_id", "audio_ids"}:
+        raise ValueError("audio_input 仅接受 audio_id 或 audio_ids")
+    if "audio_id" in config and "audio_ids" in config:
+        raise ValueError("audio_id 与 audio_ids 不能同时设置")
+    if "audio_id" in config:
         value = config["audio_id"]
         if not isinstance(value, str):
             raise ValueError("audio_id 必须是字符串")
         AudioAsset.validate_id(value)
+    if "audio_ids" in config:
+        values = config["audio_ids"]
+        if not isinstance(values, list) or len(values) > MAX_BATCH_AUDIO_ITEMS:
+            raise ValueError(f"audio_ids 必须是最多 {MAX_BATCH_AUDIO_ITEMS} 项的数组")
+        for value in values:
+            if not isinstance(value, str):
+                raise ValueError("audio_ids 中每一项必须是字符串")
+            AudioAsset.validate_id(value)
+        if len(set(values)) != len(values):
+            raise ValueError("audio_ids 不能重复")
     return dict(config)

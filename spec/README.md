@@ -22,6 +22,7 @@
 | [节点参数与连线输入统一](node-parameters.md) | Implemented | 可连线参数、基础值节点、参数来源与实际执行值 |
 | [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
 | [文件夹音频批处理](batch-processing.md) | Implemented | 多目录导入、固定快照逐文件调度、取消/重试及批次结果 |
+| [输入节点资源清单与编号输出](node-batch-input.md) | Implemented | 输入节点导入、统一单/批运行、输出前缀与稳定编号 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 目标方向；当前仅保留音频直通和 Mock 验证能力 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 云端服务商、协议和节点接入范围待确定，尚未实现 |
 

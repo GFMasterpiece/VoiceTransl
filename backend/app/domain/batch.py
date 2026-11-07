@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .limits import MAX_BATCH_AUDIO_ITEMS
 from .project import AudioAsset, SourceOrigin
 from .schema import SCHEMA_VERSION, require_schema_version
 from .workflow import WorkflowRunError, WorkflowSnapshot
@@ -32,6 +33,7 @@ def now():
 
 class BatchItem(BaseModel):
     index: int = Field(ge=0)
+    sequence: int | None = Field(default=None, ge=1, le=MAX_BATCH_AUDIO_ITEMS, strict=True)
     audio_id: str
     audio_name: str
     source_language: str
@@ -73,7 +75,7 @@ class BatchSummary(BaseModel):
     finished_at: datetime | None = None
     cancel_requested: bool = False
     retry_of: str | None = None
-    total: int = Field(ge=1, le=10000)
+    total: int = Field(ge=1, le=MAX_BATCH_AUDIO_ITEMS)
     counts: dict[str, int]
     error: WorkflowRunError | None = None
 
@@ -101,6 +103,16 @@ class BatchRecord(BatchDetail):
             raise ValueError("invalid batch indexes")
         if len({item.audio_id for item in self.items}) != self.total:
             raise ValueError("duplicate batch audio")
+        if (
+            len(
+                {
+                    item.sequence if item.sequence is not None else item.index + 1
+                    for item in self.items
+                }
+            )
+            != self.total
+        ):
+            raise ValueError("duplicate batch sequence")
         if self.counts != item_counts(self.items):
             raise ValueError("invalid batch counts")
         if self.workflow_revision != self.workflow.workflow_revision:

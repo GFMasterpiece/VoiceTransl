@@ -16,6 +16,7 @@ class CapabilityField(BaseModel):
     type: str
     required: bool = False
     default: object = None
+    creation_default: object = None
     minimum: float | int | None = None
     maximum: float | int | None = None
     min_length: int | None = None
@@ -128,6 +129,7 @@ def fields_from_model(
                 type=field_type,
                 required=key in required,
                 default=spec.get("default"),
+                creation_default=spec.get("creation_default"),
                 minimum=spec.get("minimum"),
                 maximum=spec.get("maximum"),
                 min_length=spec.get("minLength"),

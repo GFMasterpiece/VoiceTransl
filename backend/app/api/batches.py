@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..domain.batch import BatchDetail, BatchItemList, BatchList, BatchSummary
+from ..domain.limits import MAX_BATCH_AUDIO_ITEMS
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError
 from ..storage import ProjectNotFound
 from .workflow import _error, _project
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/v1/projects/{pid}/batches")
 class BatchCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     workflow_revision: int = Field(ge=0)
-    audio_ids: list[str] = Field(min_length=1, max_length=10000)
+    audio_ids: list[str] = Field(min_length=1, max_length=MAX_BATCH_AUDIO_ITEMS)
     request_id: str = Field(min_length=1, max_length=128)
 
     @field_validator("audio_ids")
@@ -61,6 +62,8 @@ def _creation_error(error):
         "BATCH_NOT_RETRYABLE": "没有可重试的失败或中断项",
         "INVALID_WORKFLOW": "工作流无效，无法运行",
         "AUDIO_NOT_FOUND": "所选音频不存在",
+        "INPUT_AUDIO_COLLECTION_EMPTY": "输入节点尚未选择音频，请先添加音频",
+        "BATCH_AUDIO_COLLECTION_MISMATCH": "批次音频清单及顺序必须与输入节点保存的清单一致",
     }
     status = 409 if isinstance(error, RuntimeError) else 422
     if code not in messages:
@@ -143,18 +146,22 @@ async def retry_batch(pid: str, bid: str, body: BatchRetryRequest, request: Requ
     return batch.summary()
 
 
-def _safe_name(value):
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", str(value)).strip(" .")[:100]
-    if not value or value in {".", ".."}:
-        value = "unnamed"
-    if value.split(".")[0].upper() in {
+def _windows_reserved_name(value):
+    return value.split(".")[0].upper() in {
         "CON",
         "PRN",
         "AUX",
         "NUL",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
-    }:
+    }
+
+
+def _safe_name(value):
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", str(value)).strip(" .")[:100]
+    if not value or value in {".", ".."}:
+        value = "unnamed"
+    if _windows_reserved_name(value):
         value = f"_{value}"
     return value
 
@@ -181,7 +188,8 @@ def _item_directory(item):
     root = _safe_name(origin.get("root_name", "audio"))
     if root_id:
         root += "--" + str(root_id) + "--" + hashlib.sha256(str(root_id).encode()).hexdigest()[:12]
-    return PurePosixPath(root, *parents, f"{item.index + 1:05d}--{_safe_name(item.audio_name)}")
+    sequence = item.sequence if item.sequence is not None else item.index + 1
+    return PurePosixPath(root, *parents, f"{sequence:05d}--{_safe_name(item.audio_name)}")
 
 
 @router.get("/{bid}/download")
@@ -209,6 +217,12 @@ def download_batch(pid: str, bid: str, request: Request):
                         run = store.load_workflow_run(pid, item.audio_id, item.run_id)
                         if run.batch_id is not None and run.batch_id != batch.id:
                             raise ValueError("batch run ownership mismatch")
+                        sequence = item.sequence if item.sequence is not None else item.index + 1
+                        if (
+                            run.batch_item_sequence is not None
+                            and run.batch_item_sequence != sequence
+                        ):
+                            raise ValueError("batch run sequence mismatch")
                         if run.workflow.model_dump() != batch.workflow.model_dump():
                             raise ValueError("batch run snapshot mismatch")
                     except ProjectNotFound:
@@ -224,6 +238,8 @@ def download_batch(pid: str, bid: str, request: Request):
                             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", node.node_id)
                             or re.search(r'[<>:"/\\|?*\x00-\x1f\x7f]', node.artifact.filename)
                             or node.artifact.filename in {"", ".", ".."}
+                            or node.artifact.filename.endswith((".", " "))
+                            or _windows_reserved_name(node.artifact.filename)
                         ):
                             raise ValueError("invalid artifact path")
                         path = store.workflow_artifact_path(
@@ -241,7 +257,7 @@ def download_batch(pid: str, bid: str, request: Request):
                         name = str(
                             directory
                             / f"{index:03d}--{_safe_name(node.node_id)}"
-                            / _safe_name(node.artifact.filename)
+                            / node.artifact.filename
                         )
                         try:
                             archive.write(path, name)

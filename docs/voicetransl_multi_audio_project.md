@@ -67,15 +67,15 @@ data/projects/<project-id>/
 
 上传规则来自 `GET /upload-policy`。文件先进入临时目录，文件与元数据完整后发布；追加失败不删除成功音频或父项目。追加和删除在项目锁下串行化。
 
-批次使用已上传的项目资源，清单 1–10000 个不同音频，首版同项目只有一个活动批次。资源输入必须使用当前运行上下文，显式音频绑定返回 `BATCH_EXPLICIT_AUDIO_BINDING`。批次预留全部排队音频，冲突单运行返回 `AUDIO_BUSY`，删除项目仍返回 `PROJECT_BUSY`。批次快照不随公共图变化，失败重试创建新批次而不修改原运行；服务重启标记中断，不自动重发。完整字段、错误及状态见[批处理规格](../spec/batch-processing.md)。
+批次使用已上传的项目资源，清单 1–10000 个不同音频，首版同项目只有一个活动批次。输入可为旧 `{}` 上下文或显式 `audio_ids` 清单，后者要求首次请求与图内完整清单完全同序，否则 `BATCH_AUDIO_COLLECTION_MISMATCH`；固定 `audio_id` 仍返回 `BATCH_EXPLICIT_AUDIO_BINDING`。批次预留全部排队音频，冲突单运行返回 `AUDIO_BUSY`，删除项目仍返回 `PROJECT_BUSY`。批次快照不随公共图变化，失败重试创建新批次，保留完整图并运行失败子集；服务重启标记中断，不自动重发。新文件任务保存 1-based `sequence`，子运行保存可空 `batch_item_sequence`，重试保留原序号。完整字段、错误及状态见[批处理规格](../spec/batch-processing.md)和[输入清单规格](../spec/node-batch-input.md)。
 
 图校验业务错误由 validate 返回 200/`valid=false`；无效请求或保存图返回 422，版本冲突返回 `409 WORKFLOW_REVISION_CONFLICT`，音频重复运行返回 `409 AUDIO_BUSY`。统一错误结构为 `{error:{code,message,details?}}`。
 
-`audio_input.config.audio_id` 显式绑定项目内资源，校验及保存拒绝外部或不存在的资源（`INPUT_AUDIO_NOT_FOUND`）。启动路由的 `{aid}` 必须与该绑定一致，否则 `422 INPUT_AUDIO_MISMATCH`。旧 `{}` 输入仍使用该次运行的音频上下文。绑定修改生成新执行版本，不修改旧运行快照。
+`audio_input.config.audio_id` 固定单资源，互斥的 `audio_ids` 保存有序唯一清单（最多 10000，允许空图编辑）。校验及保存拒绝外部或不存在的资源（`INPUT_AUDIO_NOT_FOUND`）。普通运行遇空清单返回 `INPUT_AUDIO_COLLECTION_EMPTY`、多项返回 `INPUT_AUDIO_COLLECTION`；单项或固定绑定与路由 `{aid}` 不一致返回 `INPUT_AUDIO_MISMATCH`。旧 `{}` 仍使用该次运行的音频上下文。绑定或顺序改变生成新执行版本，不修改旧快照；读取旧图不补字段。
 
 工作流节点可带可选布局字段 `size: {width, height}`；缺失或 `null` 使用内容默认值，宽高为有限正数且不超过 1,000,000。保存与快照保留此字段；仅修改尺寸影响文档 `revision`，不提升执行 `workflow_revision`。显示时仍由前端按当前内容的最小尺寸约束，不能据此缩小到遮挡控件。
 
-产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，即使同名也不覆盖历史或源文件。
+产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。`naming_mode` 缺失或 exact 保持原名，prefix_sequence 生成 `前缀_00001` 加实际扩展名；普通运行编号 1，批次沿用固定序号，缺失有效序号报 `OUTPUT_SEQUENCE_UNAVAILABLE`。配置及 effective_config 保留前缀，artifact/ZIP 使用完整实际名。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，不覆盖历史或源文件。
 
 ## 旧数据兼容边界
 

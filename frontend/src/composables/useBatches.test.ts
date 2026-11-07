@@ -51,6 +51,14 @@ describe('batch REST state', () => {
     expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST').map(([, options]) => JSON.parse(options!.body as string))).toEqual([body, body])
   })
 
+  it('restores structurally valid pending selections without duplicating the server count limit', () => {
+    setup()
+    const ids = Array.from({ length: 10001 }, (_, index) => `a${index}`)
+    sessionStorage.setItem('voicetransl.batch.pending:p1', JSON.stringify({ path: '', body: { request_id: 'original-key', workflow_revision: 7, audio_ids: ids } }))
+    const recovered = useBatches('p1'); sessions.push(recovered)
+    expect(recovered.pending.value?.body.audio_ids).toEqual(ids)
+  })
+
   it('ignores a stale activity request that completes after a successful batch creation', async () => {
     let release!: (value: Response) => void
     let initial = true

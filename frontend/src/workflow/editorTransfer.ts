@@ -168,8 +168,8 @@ export function validateTransferGraph(graph: unknown, registry: NodeRegistry): W
 function portable(graph: WorkflowDocumentInput, registry: NodeRegistry): WorkflowDocumentInput {
   const result = validateTransferGraph({ nodes: graph.nodes, edges: graph.edges }, registry)
   for (const node of result.nodes) {
-    const binding = registry.kind(node.type)?.resourceInput?.configKey
-    if (binding) delete node.config[binding]
+    const resource = registry.kind(node.type)?.resourceInput
+    if (resource) { delete node.config[resource.configKey]; if (resource.collectionKey) delete node.config[resource.collectionKey] }
   }
   return result
 }

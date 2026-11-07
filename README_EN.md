@@ -16,7 +16,7 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.
 - String, integer, number, and boolean value nodes. Backend-declared parameter inputs initially cover ASR language, export filenames, and text format. Connections preserve manual fallback values, while run details record parameter sources and effective values.
 - Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
-- A batch panel imports multiple folders, validates and uploads audio, and runs each file against one frozen workflow. It supports progress, cancellation, retries of failed/interrupted items, and ZIP results. A Current File Info node supplies per-file naming and language parameters.
+- The audio input node imports files or multiple folders, validates uploads and source languages, and saves an ordered resource list. The shared Run action applies one frozen workflow independently to each file. The batch panel manages progress, cancellation, retries, and ZIP results. New outputs use a prefix and stable sequence, such as `name_00001.wav`; retries retain the original numbers, and existing graphs keep their filenames. Current File Info supplies per-file naming and language parameters.
 
 Real cloud/local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
 

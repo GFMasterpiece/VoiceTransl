@@ -102,7 +102,10 @@ async def test_default_workflow_and_validation_contract(tmp_path):
         pid, _ = await create_project(client)
         document = await get_default_workflow(client, pid)
         assert document["revision"] == document["workflow_revision"] == 0
-        assert document["nodes"][1]["config"] == {"filename_stem": "audio-copy"}
+        assert document["nodes"][1]["config"] == {
+            "filename_stem": "audio-copy",
+            "naming_mode": "prefix_sequence",
+        }
         assert not (app.state.store.project_dir(pid) / "workflow.json").exists()
 
         graph = graph_with_two_outputs()

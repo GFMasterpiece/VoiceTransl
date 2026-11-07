@@ -27,8 +27,17 @@ def definition() -> NodeDefinition:
         config_kind="none",
         normalize_config=normalize_input_config,
         validate_config=normalize_input_config,
-        fields=(CapabilityField(key="audio_id", type="string"),),
-        presentation={"resource_input": {"resource_type": "audio", "config_key": "audio_id"}},
+        fields=(
+            CapabilityField(key="audio_id", type="string"),
+            CapabilityField(key="audio_ids", type="json"),
+        ),
+        presentation={
+            "resource_input": {
+                "resource_type": "audio",
+                "config_key": "audio_id",
+                "collection_key": "audio_ids",
+            }
+        },
         execute=execute,
         max_instances=1,
         required_inbound=0,

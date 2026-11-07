@@ -4,14 +4,15 @@ import { hasMessage, locale, message, t } from '../i18n'
 import { resolveArtifactUrl, useWorkflowStore, workflowErrorLabel, type WorkflowNodeRun } from '../stores/workflow'
 import { runRecords } from '../workflow/runRecords'
 import CanvasDialog from './CanvasDialog.vue'
+import { useWorkflowExecution } from '../composables/workflowExecution'
 import NodeRunParameters from './NodeRunParameters.vue'
 
 const props = defineProps<{ panel: 'run' | 'artifacts' | 'logs' | null }>()
 const emit = defineEmits<{ close: [] }>()
 const store = useWorkflowStore()
+const execution = useWorkflowExecution()
 const title = computed(() => t(`workflow.${props.panel === 'artifacts' ? 'panelArtifacts' : props.panel === 'logs' ? 'panelLogs' : 'panelRun'}`))
-const controlsLocked = computed(() => store.saving || store.validating || !!store.activeRun || store.actionLoading || store.resourceUploading)
-const canRun = computed(() => !store.dirty && !controlsLocked.value && !store.loading && !!store.document && !!(store.boundAudioId || store.audioId))
+const canRun = computed(() => !execution.reason.value)
 const artifacts = computed(() => store.run?.nodes.filter((node) => node.artifact) || [])
 const records = computed(() => store.run ? runRecords(store.run) : [])
 
@@ -37,7 +38,7 @@ const summary = computed(() => store.run ? t('workflow.runSummary', {
 async function startRun() {
   if (store.dirty) { store.setError(message('workflow.saveFirst')); return }
   if (!canRun.value) return
-  try { await store.startRun() } catch { /* The store retains the actionable error. */ }
+  try { await execution.start() } catch { /* The store retains the actionable error. */ }
 }
 async function cancelRun() {
   try { await store.cancelRun() } catch { /* The store retains the actionable error. */ }
@@ -70,10 +71,11 @@ async function retryOutputs() {
             <div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3>{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div>
             <div class="workflow-run-actions">
               <button v-if="store.activeSingleRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelRun">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button>
-              <button v-else class="primary-button" type="button" :disabled="!canRun" @click="startRun">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button>
+              <button v-else class="primary-button" type="button" data-panel-run :disabled="!canRun" @click="startRun">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button>
             </div>
           </div>
           <p v-if="store.dirty" class="inspector-help">{{ t('workflow.saveFirst') }}</p>
+          <p v-else-if="execution.reason.value" class="inspector-help">{{ execution.reason.value }}</p>
           <p v-if="store.activeRun && store.run?.batch_id" class="inspector-help">{{ t('batch.childRun') }}</p>
           <p v-if="store.error" class="workflow-run-error" role="alert">{{ store.error }}</p>
           <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ statusLabel(store.run?.status) }}</span><span>{{ summary }}</span></div>
