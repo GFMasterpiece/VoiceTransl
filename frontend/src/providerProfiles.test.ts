@@ -9,6 +9,8 @@ import { createNodeRegistry } from './workflow/nodeRegistry'
 import { setLocale, t } from './i18n'
 import { batchError } from './composables/useBatches'
 import CloudWorkflowNotice from './components/CloudWorkflowNotice.vue'
+import { workflowCredentials } from './composables/workflowCredentials'
+import { copySelection, parseWorkflowFile, preparePaste, serializeWorkflow } from './workflow/editorTransfer'
 
 const profile = (id = 'connection-1', extra: Partial<ProviderProfile> = {}): ProviderProfile => ({ schema_version: '1.0', id, display_name: id, provider_type: 'extension_service',
   base_url: 'https://old.service.test/api', api_key_env: 'EXAMPLE_KEY', region: 'region-test', default_timeout: 37, enabled: true, ...extra })
@@ -29,19 +31,32 @@ function catalog(profiles: ProviderProfile[] = [profile()]): any {
     default_graph: { nodes: [{ id: 'input', type: 'source_extension', config: {}, position: { x: 0, y: 0 } }, { id: 'cloud', type: 'remote_extension', config: { connection_ref: 'connection-1', model: 'model-not-in-a-list', language: '', additional_parameters: {} }, position: { x: 450, y: 0 } },
       { id: 'output', type: 'text_extension', config: {}, position: { x: 900, y: 0 } }], edges: [{ id: 'first', source: 'input', source_port: 'audio', target: 'cloud', target_port: 'audio' }, { id: 'second', source: 'cloud', source_port: 'transcript', target: 'output', target_port: 'transcript' }] } }, asr: { providers: [] } }
 }
+function inlineCatalog(profiles: ProviderProfile[] = [profile()], legacy = false): any {
+  const value = catalog(profiles); value.workflow.schema_version = '1.9'
+  value.workflow.nodes.forEach((node: any) => { node.category = null })
+  const node = value.workflow.nodes[1]
+  const field = (key: string, type: string, value: unknown, extra: object = {}) => ({ key, label: key, type, default: value, required: false, input_port: null, ...extra })
+  node.config.fields.push(field('mode', 'select', 'profile', { creation_default: 'inline', options: [{ value: 'profile', label: 'Legacy' }, { value: 'inline', label: 'Inline' }] }),
+    field('endpoint', 'string', 'https://new.service.test/api'), field('timeout', 'integer', 37, { minimum: 1, maximum: 3600 }), field('region', 'string', null), field('env', 'string', 'DEFAULT_ENV'), field('credential_handle', 'string', null))
+  node.presentation.inline_connection_input = { mode_key: 'mode', mode_value: 'inline', base_url_key: 'endpoint', timeout_key: 'timeout', region_key: 'region', api_key_env_key: 'env', credential_ref_key: 'credential_handle' }
+  if (!legacy) Object.assign(value.workflow.default_graph.nodes[1].config, { mode: 'inline', endpoint: 'https://inline.service.test/api', timeout: 37, region: null, env: null, credential_handle: 'saved-ref' })
+  return value
+}
 const response = (value: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => structuredClone(value) }) as Response
 async function settle() { for (let index = 0; index < 40; index++) await Promise.resolve(); await nextTick() }
 let app: VueApp | undefined
 let root: HTMLDivElement | undefined
-function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; failCatalog?: boolean } = {}) {
-  const state = { profiles: options.profiles || [profile()], rejectSave: !!options.rejectSave, failCatalog: !!options.failCatalog }
-  const initial = catalog(state.profiles)
-  const document = { ...initial.workflow.default_graph, schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-07T00:00:00Z' }
+function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; failCatalog?: boolean; inline?: boolean; legacy?: boolean } = {}) {
+  const state = { profiles: options.profiles || [profile()], rejectSave: !!options.rejectSave, failCatalog: !!options.failCatalog, rejectWorkflow: false, loseSaveResponse: false }
+  const readCatalog = () => options.inline ? inlineCatalog(state.profiles, options.legacy) : catalog(state.profiles)
+  const initial = readCatalog()
+  let document = { ...initial.workflow.default_graph, schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-07T00:00:00Z' }
+  const savedRequests = new Map<string, any>()
   const audio = { id: 'a1', source: { original_name: 'local.wav', language: 'ja', size_bytes: 4 } }
   const project = { id: 'p1', name: 'Profile test', source: audio.source, audios: [audio], created_at: '2026-11-07', updated_at: '2026-11-07' }
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path.endsWith('/capabilities')) return state.failCatalog ? response({ detail: 'Catalog temporarily unavailable' }, 503) : response(catalog(state.profiles))
+    if (path.endsWith('/capabilities')) return state.failCatalog ? response({ detail: 'Catalog temporarily unavailable' }, 503) : response(readCatalog())
     if (path.endsWith('/provider-profiles') && !init?.method) return response({ items: state.profiles })
     if (path.includes('/provider-profiles') && init?.method) {
       if (state.rejectSave) return response({ error: { code: 'EXTENSION_PROFILE_ERROR', message: 'Original safe diagnostic' } }, 422)
@@ -53,7 +68,19 @@ function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; fa
     if (path.includes('/projects?')) return response({ items: [project], total: 1, limit: 20, offset: 0 })
     if (path.endsWith('/projects/p1')) return response(project)
     if (path.endsWith('/projects/p1/audios')) return response({ items: [audio] })
-    if (path.endsWith('/workflow')) return response(document)
+    if (path.endsWith('/workflow')) {
+      if (init?.method === 'PUT' && options.inline) {
+        const body = JSON.parse(String(init.body))
+        if (state.rejectWorkflow) return response({ error: { code: 'CREDENTIAL_STORAGE_ERROR', message: 'Safe storage error' } }, 503)
+        if (body.request_id && savedRequests.has(body.request_id)) return response(savedRequests.get(body.request_id))
+        const nodes = body.nodes
+        for (const update of body.credential_updates || []) nodes.find((node: any) => node.id === update.node_id).config.credential_handle = update.operation === 'clear' ? null : `new-ref-${document.revision + 1}`
+        document = { ...document, nodes, edges: body.edges, revision: document.revision + 1, workflow_revision: document.workflow_revision + 1 }
+        if (body.request_id) savedRequests.set(body.request_id, structuredClone(document))
+        if (state.loseSaveResponse) { state.loseSaveResponse = false; throw new TypeError('Failed to fetch') }
+      }
+      return response(document)
+    }
     if (path.endsWith('/upload-policy')) return response({ allowed_extensions: ['wav'], max_upload_bytes: 100 })
     if (path.endsWith('/workflow/validate')) return response({ valid: true, errors: [] })
     if (path.includes('/workflow-runs?') || path.includes('/batches?')) return response({ items: [], total: 0, limit: 20, offset: 0 })
@@ -63,7 +90,7 @@ function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; fa
   const pinia = createPinia(); setActivePinia(pinia)
   root = window.document.createElement('div'); window.document.body.append(root)
   app = createApp(App).use(pinia); app.mount(root)
-  return { state, fetcher, workflow: useWorkflowStore(pinia), profiles: useProviderProfilesStore(pinia), document }
+  return { state, fetcher, workflow: useWorkflowStore(pinia), profiles: useProviderProfilesStore(pinia), document, pinia }
 }
 async function openProject() { await app!._instance!.exposed!.openProject('p1'); await settle() }
 async function openManager() { root!.querySelector<HTMLButtonElement>('[data-open-profiles]')!.click(); await settle() }
@@ -249,6 +276,168 @@ describe('provider profile management', () => {
     root!.querySelector<HTMLButtonElement>('[data-profile-delete="connection-1"]')!.click(); await settle()
     expect(profiles.items).toHaveLength(1)
     expect(root!.querySelector('[data-profile-record="connection-1"]')).not.toBeNull()
+  })
+})
+
+describe('inline node credentials', () => {
+  async function typeKey(value = 'private-test-key') {
+    const input = root!.querySelector<HTMLInputElement>('[data-credential-input]')!
+    input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    return input
+  }
+  it('keeps new connections inline, old references unchanged, and nullable fields visibly empty', async () => {
+    const { workflow } = setup({ inline: true, legacy: true }); await settle(); await openProject()
+    expect(workflow.draft.nodes[1]!.config.mode).toBeUndefined()
+    expect(root!.querySelector('[data-credential-input]')).toBeNull()
+    const mode = root!.querySelector<HTMLSelectElement>('[data-connection-mode]')!
+    mode.value = 'inline'; mode.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect(workflow.draft.nodes[1]!.config.endpoint).toBe('https://old.service.test/api')
+    expect(workflow.draft.nodes[1]!.config.connection_ref).toBe('connection-1')
+    workflow.undo(); await settle()
+    expect(root!.querySelector('[data-credential-input]')).toBeNull()
+    expect(workflow.dirty).toBe(false)
+    workflow.addNode('remote_extension'); await settle()
+    expect(workflow.draft.nodes[workflow.draft.nodes.length - 1]!.config.mode).toBe('inline')
+  })
+  it('marks key-only edits dirty, guards save/run/leave, and never places keys in Pinia, graph, validation or transfer data', async () => {
+    const { workflow, pinia, fetcher } = setup({ inline: true }); await settle(); await openProject()
+    expect(root!.querySelector<HTMLInputElement>('[data-connection-field=env]')!.value).toBe('')
+    expect(workflow.dirty).toBe(false)
+    const input = await typeKey()
+    expect(workflow.dirty).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-run-workflow]')!.disabled).toBe(true)
+    const save = [...root!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === t('workflow.validateAndSave'))!
+    expect(save.disabled).toBe(false)
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+    expect(JSON.stringify(pinia.state.value)).not.toContain('private-test-key')
+    expect(serializeWorkflow(workflow.draft, workflow.registry!)).not.toContain('private-test-key')
+    expect(copySelection(workflow.draft, ['cloud'], workflow.registry!)).not.toContain('saved-ref')
+    await workflow.validate()
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/workflow/validate')).every(([, init]) => !String(init?.body).includes('private-test-key'))).toBe(true)
+    setLocale('en'); await settle()
+    expect(input.value).toBe('private-test-key')
+    await workflow.save(); await settle()
+    expect(input.value).toBe('')
+    expect(workflow.dirty).toBe(false)
+    expect(workflow.draft.nodes[1]!.config.credential_handle).toBe('new-ref-2')
+    const body = JSON.parse(fetcher.mock.calls.find(([, init]) => init?.method === 'PUT')![1]!.body as string)
+    expect(body.credential_updates).toEqual([{ node_id: 'cloud', operation: 'set', api_key: 'private-test-key' }])
+    expect(JSON.stringify(body.nodes)).not.toContain('private-test-key')
+  })
+  it('retries a lost Save response with the same request ID and clears only after confirmed success', async () => {
+    const { state, workflow, fetcher } = setup({ inline: true }); await settle(); await openProject(); const input = await typeKey()
+    state.loseSaveResponse = true
+    await expect(workflow.save()).rejects.toThrow(); await settle()
+    expect(input.value).toBe('private-test-key')
+    expect(workflow.dirty).toBe(true)
+    await workflow.save(); await settle()
+    const bodies = fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies[0]).toEqual(bodies[1])
+    expect(input.value).toBe('')
+    expect(workflow.document!.revision).toBe(2)
+  })
+  it('retains failed inputs, changes the request ID only when content changes, and allows cancelling a pending clear', async () => {
+    const { state, workflow, fetcher } = setup({ inline: true }); await settle(); await openProject(); const input = await typeKey()
+    state.rejectWorkflow = true
+    await expect(workflow.save()).rejects.toThrow(); await settle()
+    expect(input.value).toBe('private-test-key')
+    await typeKey('replacement-test-key')
+    await expect(workflow.save()).rejects.toThrow(); await settle()
+    const bodies = fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies[0].request_id).not.toBe(bodies[1].request_id)
+    root!.querySelector<HTMLButtonElement>('[data-credential-discard]')!.click(); await settle()
+    expect(workflow.dirty).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-credential-clear]')!.click(); await settle()
+    expect(workflow.credentialPending).toBe(true)
+    root!.querySelector<HTMLButtonElement>('[data-credential-discard]')!.click(); await settle()
+    expect(workflow.dirty).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-credential-clear]')!.click(); await settle(); state.rejectWorkflow = false
+    await workflow.save(); await settle()
+    expect(workflow.draft.nodes[1]!.config.credential_handle).toBeNull()
+    expect(workflow.credentialPending).toBe(false)
+  })
+  it('never restores private keys through undo, deletion, discard or portable paste/import', async () => {
+    const { workflow } = setup({ inline: true }); await settle(); await openProject(); await typeKey()
+    const copied = copySelection(workflow.draft, ['cloud'], workflow.registry!)
+    const pasted = preparePaste(copied, workflow.draft, workflow.registry!)
+    expect(JSON.stringify(pasted)).not.toContain('credential_handle')
+    const imported = parseWorkflowFile(serializeWorkflow(workflow.draft, workflow.registry!), workflow.registry!)
+    expect(JSON.stringify(imported)).not.toContain('credential_handle')
+    workflow.removeNode('cloud'); await settle(); expect(workflow.credentialPending).toBe(false)
+    workflow.undo(); await settle()
+    expect(root!.querySelector<HTMLInputElement>('[data-credential-input]')!.value).toBe('')
+    await typeKey(); workflow.discardDraft(); await settle()
+    expect(root!.querySelector<HTMLInputElement>('[data-credential-input]')!.value).toBe('')
+    expect(workflow.dirty).toBe(false)
+    await typeKey(); workflow.stop(); expect(workflowCredentials(workflow.credentialContext).pending.value).toBe(false)
+  })
+  it('keeps env-derived frozen refs current only for the same saved revision and marks key edits or rotations historical', async () => {
+    const { workflow } = setup({ inline: true }); await settle(); await openProject()
+    workflow.updateNode('cloud', { config: { ...workflow.draft.nodes[1]!.config, env: 'ENV_FALLBACK', credential_handle: null } })
+    await workflow.save(); await settle()
+    const frozen = JSON.parse(JSON.stringify(workflow.draft))
+    frozen.nodes[1].config.credential_handle = 'env-frozen-ref'
+    workflow.run = { id: 'completed', project_id: 'p1', audio_id: 'a1', workflow_revision: workflow.document!.workflow_revision, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] }
+    expect(workflow.runMatchesDraft).toBe(true)
+    workflow.run.workflow_revision -= 1
+    expect(workflow.runMatchesDraft).toBe(false)
+    workflow.run.workflow_revision += 1
+    await typeKey()
+    expect(workflow.runMatchesDraft).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-credential-discard]')!.click(); await settle()
+    expect(workflow.runMatchesDraft).toBe(true)
+    await typeKey(); await workflow.save(); await settle()
+    expect(workflow.runMatchesDraft).toBe(false)
+  })
+  it('compares explicit saved credential versions and displays historical inline destinations from the frozen graph', async () => {
+    const { workflow } = setup({ inline: true }); await settle(); await openProject()
+    const frozen = JSON.parse(JSON.stringify(workflow.draft))
+    workflow.run = { id: 'completed', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] }
+    expect(workflow.runMatchesDraft).toBe(true)
+    await typeKey(); await workflow.save(); await settle()
+    expect(workflow.runMatchesDraft).toBe(false)
+    workflow.updateNode('cloud', { config: { ...workflow.draft.nodes[1]!.config, endpoint: 'https://changed.service.test/api' } })
+    const runButton = [...root!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes(t('workflow.panelRun')))!
+    runButton.click(); await settle()
+    expect(root!.querySelector('[data-inline-provider-snapshot-target=cloud]')!.textContent).toContain('inline.service.test')
+    expect(root!.querySelector('[data-inline-provider-snapshot-target=cloud]')!.textContent).not.toContain('changed.service.test')
+  })
+  it('locks connection edits during Save and keeps forced input events from changing the submitted key', async () => {
+    const { workflow, fetcher } = setup({ inline: true }); await settle(); await openProject(); const input = await typeKey()
+    const originalFetch = fetcher.getMockImplementation()!
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    fetcher.mockImplementation(async (path, init) => { if (init?.method === 'PUT') await gate; return originalFetch(path, init) })
+    const save = workflow.save(); await settle()
+    expect(input.disabled).toBe(true)
+    expect(root!.querySelector<HTMLInputElement>('[data-connection-field=endpoint]')!.disabled).toBe(true)
+    input.value = 'forced-change'; input.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(workflowCredentials(workflow.credentialContext).value('cloud')).toBe('private-test-key')
+    release(); await save; await settle()
+    expect(input.value).toBe('')
+  })
+  it('redacts failed Save diagnostics and protects private input through the leave confirmation', async () => {
+    const { workflow, fetcher } = setup({ inline: true }); await settle(); await openProject(); const input = await typeKey()
+    const originalFetch = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (path, init) => init?.method === 'PUT' ? response({ error: { code: 'UNKNOWN', message: 'Rejected private-test-key' } }, 422) : originalFetch(path, init))
+    await expect(workflow.save()).rejects.toThrow('Rejected [redacted]'); await settle()
+    expect(workflow.error).not.toContain('private-test-key')
+    expect(input.value).toBe('private-test-key')
+    app!._instance!.exposed!.showList(); await settle()
+    expect(root!.querySelector('.workflow-discard')).not.toBeNull()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    const stay = [...root!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === t('workflow.continueEditing'))!
+    stay.click(); await settle()
+    expect(input.value).toBe('private-test-key')
+  })
+  it.each(['missing', 'duplicate', 'parameter', 'type'])('rejects malformed 1.9 inline metadata: %s', (mutation) => {
+    const value = inlineCatalog(); const node = value.workflow.nodes[1]
+    if (mutation === 'missing') delete node.presentation.inline_connection_input.timeout_key
+    if (mutation === 'duplicate') node.presentation.inline_connection_input.credential_ref_key = 'env'
+    if (mutation === 'parameter') node.config.fields.find((field: any) => field.key === 'credential_handle').input_port = 'language'
+    if (mutation === 'type') node.config.fields.find((field: any) => field.key === 'credential_handle').type = 'json'
+    expect(() => readCapabilities(value)).toThrow()
   })
 })
 

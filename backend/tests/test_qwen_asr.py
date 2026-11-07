@@ -242,6 +242,31 @@ async def test_protocol_streaming_auth_isolation_and_real_transcript(setup, mode
     assert all(stream.closed for stream in wire.result_streams)
 
 
+@pytest.mark.asyncio
+async def test_explicit_secret_overrides_env_without_entering_profile_or_metadata(setup, caplog):
+    wire, args = setup
+    explicit = "sk-test-only-explicit-secret"
+    args["profile"] = args["profile"].model_copy(update={"api_key_env": None})
+    with caplog.at_level(logging.DEBUG):
+        transcript = await qwen.transcribe(**args, api_key=explicit)
+    for request in wire.requests:
+        assert request.headers.get("Authorization") == (
+            f"Bearer {explicit}" if request.url.host == "control.example.test" else None
+        )
+    assert explicit not in args["profile"].model_dump_json()
+    assert explicit not in transcript.model_dump_json() + caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", ["", "bad key", "key\n", {}, 1])
+async def test_explicit_invalid_secret_never_falls_back_to_legacy_env(setup, explicit):
+    wire, args = setup
+    with pytest.raises(qwen.QwenASRError) as caught:
+        await qwen.transcribe(**args, api_key=explicit)
+    assert caught.value.code == "QWEN_CREDENTIALS_MISSING"
+    assert not wire.requests
+
+
 @pytest.mark.parametrize(
     "parameters",
     [

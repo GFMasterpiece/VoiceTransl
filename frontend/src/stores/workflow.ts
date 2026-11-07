@@ -1,13 +1,15 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, markRaw, ref, watch } from 'vue'
 import { API_BASE_URL, parseApiError } from '../api'
-import { t, locale, message, messageRef, hasMessage, type MessageParams } from '../i18n'
+import { t, locale, message, messageRef, hasMessage, LocalizedError, type MessageParams } from '../i18n'
 import { computed as vueComputed } from 'vue'
 import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import { TransferError, validateTransferGraph } from '../workflow/editorTransfer'
 import { providerErrorLabel, type ProviderProfile } from './providerProfiles'
+import { workflowCredentials } from '../composables/workflowCredentials'
+import { inlineConnectionActive, inlineConnectionKeys } from '../workflow/providerConnections'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = string
@@ -38,6 +40,7 @@ export const WORKFLOW_PREVIEW_HEIGHT = 190
 export function workflowVisibleFields(node: { type: NodeType; id?: string }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
   const kind = registry.kind(node.type)
   return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey
+    && !inlineConnectionKeys(kind).includes(field.key)
     && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
 export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
@@ -409,6 +412,9 @@ function isActiveRunStatus(status: RunStatus) {
 }
 
 export const useWorkflowStore = defineStore('workflow', () => {
+  const credentialContext = markRaw({})
+  const credentials = workflowCredentials(credentialContext)
+  const credentialPending = credentials.pending
   const capabilities = ref<Awaited<ReturnType<typeof fetchCapabilities>> | null>(null)
   const capabilitiesErrorState = messageRef()
   const capabilitiesError = capabilitiesErrorState.text
@@ -478,7 +484,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const transaction = ref<EditorSnapshot | null>(null)
   let mergeGroup: string | undefined
 
-  const dirty = computed(() => savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
+  const dirty = computed(() => credentialPending.value || savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
     || savedLayoutSignature.value !== layoutSignature(draft.value))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
@@ -490,8 +496,30 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const historyTransactionActive = computed(() => !!transaction.value)
   const currentOutputNode = computed(() => selectedNode.value && registry.value && isTerminalNode(selectedNode.value.type, registry.value) ? selectedNode.value : null)
   const runOutputs = computed(() => (run.value?.nodes || []).filter((node) => !!node.artifact))
-  const runMatchesDraft = computed(() => !!run.value && !!registry.value
-    && executionSignature(run.value.workflow, registry.value) === executionSignature(draft.value, registry.value))
+  const runMatchesDraft = computed(() => {
+    if (!run.value || !registry.value || credentialPending.value) return false
+    const currentSignature = executionSignature(draft.value, registry.value)
+    if (executionSignature(run.value.workflow, registry.value) === currentSignature) return true
+    if (!document.value || run.value.workflow_revision !== document.value.workflow_revision) return false
+    // Submitting an env-backed inline connection freezes a new credential ref in
+    // the run only. Normalize that derived ref for the same saved revision.
+    const snapshot = cloneDocument(run.value.workflow)
+    for (const node of snapshot.nodes) {
+      const inline = registry.value.kind(node.type)?.inlineConnectionInput
+      const current = draft.value.nodes.find((item) => item.id === node.id && item.type === node.type)
+      const saved = document.value.nodes.find((item) => item.id === node.id && item.type === node.type)
+      if (!inline || !current || !saved || !inlineConnectionActive(registry.value.kind(node.type), current.config)
+        || typeof node.config[inline.credentialRefKey] !== 'string' || !node.config[inline.credentialRefKey]
+        || current.config[inline.credentialRefKey] || saved.config[inline.credentialRefKey]
+        || typeof saved.config[inline.apiKeyEnvKey] !== 'string' || !String(saved.config[inline.apiKeyEnvKey]).trim()
+        || current.config[inline.apiKeyEnvKey] !== saved.config[inline.apiKeyEnvKey]) continue
+      if (current.config[inline.credentialRefKey] === undefined) delete node.config[inline.credentialRefKey]
+      else node.config[inline.credentialRefKey] = current.config[inline.credentialRefKey]
+    }
+    return executionSignature(snapshot, registry.value) === currentSignature
+  })
+  watch(() => draft.value.nodes.filter((node) => inlineConnectionActive(registry.value?.kind(node.type), node.config)).map((node) => node.id),
+    (ids) => credentials.reconcile(new Set(ids)), { flush: 'sync' })
 
   function currentKey() { return { id: projectId.value, audioId: audioId.value } }
   function isCurrent(id: string | null, aid: string | null, token: number) {
@@ -801,6 +829,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const draftSnapshot = cloneDocument(draft.value)
     if (!registry.value) { errorState.set(message('workflow.capSave')); return null }
     const body = { expected_revision: document.value?.revision ?? 1, nodes: draftSnapshot.nodes, edges: draftSnapshot.edges }
+    const credentialUpdates = credentials.updates()
+    const requestBody = credentialUpdates.length ? { ...body, request_id: credentials.requestId(JSON.stringify(body)), credential_updates: credentialUpdates } : body
     saving.value = true
     errorState.set('')
     noticeState.set('')
@@ -808,12 +838,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const response = await fetch(endpoint(projectPath(id)), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody),
       })
       if (!response.ok) {
         if (response.status === 409) {
           const failure = await workflowApiError(response)
-          failure.name = 'WORKFLOW_REVISION_CONFLICT'
+          if (!failure.name.startsWith('CREDENTIAL_')) failure.name = 'WORKFLOW_REVISION_CONFLICT'
           throw failure
         }
         throw await workflowApiError(response)
@@ -822,16 +852,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
       if (!isCurrent(id, aid, token) || sequence !== saveSequence) return null
       document.value = value
       assignDraft(value)
+      credentials.forget()
       savedSignature.value = executionSignature(value, registry.value || undefined)
       savedLayoutSignature.value = layoutSignature(value)
       validationIssues.value = []
       noticeState.set(message('workflow.saved'))
       return value
     } catch (reason) {
+      const failure = credentialUpdates.length ? reason instanceof LocalizedError ? message(reason.key, reason.params)
+        : new Error(credentials.redact(reason instanceof Error ? reason.message : t('workflow.saveFailed'))) : reason
       if (isCurrent(id, aid, token) && sequence === saveSequence) {
-        errorState.set(reason instanceof Error ? reason : message('workflow.saveFailed'))
+        errorState.set(failure instanceof Error ? failure : message('workflow.saveFailed'))
       }
-      throw reason
+      throw failure
     } finally {
       if (isCurrent(id, aid, token) && sequence === saveSequence) saving.value = false
     }
@@ -1073,6 +1106,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function leaveEditor() {
+    credentials.forget()
     cancelHistoryTransaction()
     resetEditorHistory()
     stopped.value = true
@@ -1229,6 +1263,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         : graph, registry.value)
       if (sameGraph(candidate, draft.value)) return false
       const before = editorSnapshot()
+      if (!append) credentials.forget()
       draft.value = candidate
       setSelection(graph.nodes.map((node) => node.id))
       nodeMinimums.value = Object.fromEntries(Object.entries(nodeMinimums.value).filter(([id]) => candidate.nodes.some((node) => node.id === id)))
@@ -1301,6 +1336,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function stop() {
+    credentials.forget()
     capabilityRefreshSequence++
     capabilityRefreshController?.abort()
     cancelHistoryTransaction()
@@ -1325,6 +1361,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function discardDraft() {
+    credentials.forget()
     resetEditorHistory()
     if (document.value) {
       assignDraft(document.value)
@@ -1343,6 +1380,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
+    credentialContext, credentialPending,
     capabilities, capabilitiesError, capabilitiesLoading, refreshCapabilities, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, boundAudioIds, setAudioContext,

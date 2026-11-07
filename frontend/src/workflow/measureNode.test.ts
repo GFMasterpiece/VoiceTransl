@@ -27,6 +27,8 @@ describe('node intrinsic content measurement', () => {
 
   it('measures an independent intrinsic clone and strips media and accessibility identities before mounting it', () => {
     fixture()
+    const password = document.createElement('input'); password.type = 'password'; password.value = 'secret-measure-key'; password.setAttribute('value', 'secret-measure-key')
+    group.querySelector('.node-config-fields')!.append(password)
     const append = document.body.append.bind(document.body)
     vi.spyOn(document.body, 'append').mockImplementation((...elements) => {
       const host = elements[0] as HTMLElement
@@ -34,6 +36,8 @@ describe('node intrinsic content measurement', () => {
       expect(host.inert).toBe(true)
       expect(host.querySelector('[src], [id], [for], [aria-describedby]')).toBeNull()
       expect(host.querySelector('pre')?.textContent).toBe('')
+      expect(host.querySelector<HTMLInputElement>('input[type=password]')!.value).toBe('')
+      expect(host.innerHTML).not.toContain('secret-measure-key')
       append(...elements)
     })
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
@@ -47,6 +51,7 @@ describe('node intrinsic content measurement', () => {
     expect(measured.width).toBeLessThan(900)
     expect(document.querySelector('.node-measure-host')).toBeNull()
     expect(group.querySelector('audio')?.getAttribute('src')).toBe('https://example.invalid/audio')
+    expect(password.value).toBe('secret-measure-key')
   })
 
   it('allows minimum height to grow for errors and shrink again without accumulating custom user sizes', () => {

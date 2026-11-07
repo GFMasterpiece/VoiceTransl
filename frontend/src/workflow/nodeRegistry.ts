@@ -112,6 +112,9 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
       if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: unexpected.join(', ') }) })
       for (const field of definition.fields) {
         const value = config?.[field.key]
+        const inline = definition.inlineConnectionInput
+        if (value === null && inline && [inline.regionKey, inline.apiKeyEnvKey, inline.credentialRefKey].includes(field.key)) continue
+        if (definition.providerProfileInput?.configKey === field.key && inline && config[inline.modeKey] === inline.modeValue) continue
         if (value === undefined) {
           if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue

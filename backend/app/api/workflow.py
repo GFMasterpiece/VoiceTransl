@@ -1,7 +1,10 @@
+from typing import Annotated, Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
+from ..application.workflow_credentials import prepare_workflow_credentials
 from ..application.workflow_profiles import ProfileSnapshotError
 from ..domain import (
     WorkflowDocument,
@@ -14,7 +17,7 @@ from ..domain import (
     validate_workflow_graph,
 )
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
-from ..domain.workflow import validate_workflow_resources
+from ..domain.workflow import normalize_workflow_graph, validate_workflow_resources
 from ..storage import ProjectNotFound
 from ..storage.project_store import WorkflowRevisionConflict
 
@@ -51,11 +54,28 @@ def _run(request: Request, pid: str, aid: str, rid: str) -> WorkflowRun:
         raise HTTPException(404, detail=_error("WORKFLOW_RUN_NOT_FOUND", "工作流运行不存在"))
 
 
+class SetCredential(BaseModel):
+    model_config = {"extra": "forbid"}
+    node_id: str
+    operation: Literal["set"]
+    api_key: SecretStr = Field(min_length=1, max_length=8192, exclude=True)
+
+
+class ClearCredential(BaseModel):
+    model_config = {"extra": "forbid"}
+    node_id: str
+    operation: Literal["clear"]
+
+
 class WorkflowSaveRequest(BaseModel):
     schema_version: str = SCHEMA_VERSION
     expected_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(max_length=64)
     edges: list[WorkflowEdge] = Field(max_length=64)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    credential_updates: list[
+        Annotated[SetCredential | ClearCredential, Field(discriminator="operation")]
+    ] = Field(default_factory=list, max_length=64, exclude=True)
 
     @field_validator("schema_version")
     @classmethod
@@ -107,15 +127,58 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
     async with store.mutation_lock(pid):
         try:
             current = store.load_workflow(pid)
-            if body.expected_revision != current.revision:
-                raise WorkflowRevisionConflict
-            return store.save_workflow(
-                pid,
-                current,
-                expected_revision=body.expected_revision,
-                nodes=body.nodes,
-                edges=body.edges,
+            replay = bool(
+                body.credential_updates
+                and body.request_id
+                and current.revision == body.expected_revision + 1
             )
+            if body.expected_revision != current.revision and not replay:
+                raise WorkflowRevisionConflict
+            prepared = prepare_workflow_credentials(
+                store,
+                pid,
+                body.nodes,
+                body.credential_updates,
+                body.request_id,
+                body.expected_revision,
+            )
+            prepared, edges = normalize_workflow_graph(prepared, body.edges)
+            if replay:
+                if prepared == current.nodes and edges == current.edges:
+                    return current
+                raise WorkflowRevisionConflict
+            try:
+                return store.save_workflow(
+                    pid,
+                    current,
+                    expected_revision=body.expected_revision,
+                    nodes=prepared,
+                    edges=edges,
+                )
+            except (OSError, ValueError):
+                # The atomic graph replace is the commit point. Metadata or
+                # history repair afterwards must not make a committed key
+                # update look as though it rolled back. No credential values
+                # participate in this comparison or error output.
+                published = WorkflowDocument.model_validate(
+                    store._load_json(store._workflow_path(pid), "workflow")
+                )
+                if (
+                    published.revision == body.expected_revision + 1
+                    and published.nodes == prepared
+                    and published.edges == edges
+                ):
+                    return published
+                raise
+        except ProfileSnapshotError as error:
+            status = (
+                409
+                if error.code == "CREDENTIAL_REQUEST_CONFLICT"
+                else 503
+                if error.code == "CREDENTIAL_STORAGE_ERROR"
+                else 422
+            )
+            raise HTTPException(status, detail=_error(error.code, str(error))) from None
         except WorkflowRevisionConflict:
             raise HTTPException(
                 409,
@@ -125,6 +188,10 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
             raise
         except ValueError:
             raise HTTPException(422, detail=_error("INVALID_WORKFLOW", "工作流无效"))
+        except OSError:
+            raise HTTPException(
+                503, detail=_error("WORKFLOW_SAVE_FAILED", "工作流保存失败，请使用相同请求重试")
+            ) from None
 
 
 @router.post("/projects/{pid}/workflow/validate", response_model=WorkflowValidationResponse)

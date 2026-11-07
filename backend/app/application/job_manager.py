@@ -132,9 +132,9 @@ class JobManager:
                     else workflow_snapshot(document)
                 )
                 if _snapshot is None:
-                    snapshot = freeze_workflow_profiles(self.store, snapshot)
+                    snapshot = freeze_workflow_profiles(self.store, snapshot, project_id)
                 else:
-                    validate_frozen_workflow_profiles(snapshot)
+                    validate_frozen_workflow_profiles(snapshot, self.store, project_id)
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",
@@ -151,7 +151,7 @@ class JobManager:
                             config=node.config,
                             parameter_sources=workflow_parameter_sources(node, snapshot.edges),
                         )
-                        for node in document.nodes
+                        for node in snapshot.nodes
                     ],
                 )
                 self.store.create_workflow_run(run)

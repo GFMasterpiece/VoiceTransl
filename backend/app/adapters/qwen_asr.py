@@ -257,20 +257,26 @@ def parse_transcript(payload, *, project_id: str, language: str) -> Transcript:
 
 
 class _Session:
-    def __init__(self, profile, model):
+    def __init__(self, profile, model, api_key=None):
         self.profile, self.model = profile, model
         self.task_id = None
         self.cancel_attempted = False
         self.stage = "初始化"
-        if not profile.base_url or not profile.api_key_env:
-            raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen连接需要服务地址和密钥环境变量名")
+        if not profile.base_url:
+            raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen连接需要服务地址")
         self.base = profile.base_url.rstrip("/")
         parsed = urlsplit(self.base)
         if parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen服务地址不能包含查询参数或认证信息")
-        key = os.environ.get(profile.api_key_env)
-        if not key or key != key.strip() or any(ord(c) < 33 or ord(c) > 126 for c in key):
-            raise QwenASRError("QWEN_CREDENTIALS_MISSING", "Qwen密钥环境变量未设置或格式无效")
+        # None preserves the legacy env contract. An explicitly supplied empty
+        # or invalid value must fail, never fall back to another credential.
+        key = api_key
+        if key is None:
+            if not profile.api_key_env:
+                raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen连接需要密钥或密钥环境变量名")
+            key = os.environ.get(profile.api_key_env)
+        if not isinstance(key, str) or not key or any(ord(c) < 33 or ord(c) > 126 for c in key):
+            raise QwenASRError("QWEN_CREDENTIALS_MISSING", "Qwen密钥未设置或格式无效")
         self.auth = {"Authorization": f"Bearer {key}"}
 
     def client(self):
@@ -463,12 +469,20 @@ class _Session:
 
 
 async def transcribe(
-    *, audio_path, project_id, language, profile, model, additional_parameters, cancel_event
+    *,
+    audio_path,
+    project_id,
+    language,
+    profile,
+    model,
+    additional_parameters,
+    cancel_event,
+    api_key=None,
 ):
     validate_additional_parameters(additional_parameters)
     if cancel_event.is_set():
         raise QwenASRCancelled()
-    session = _Session(profile, model)
+    session = _Session(profile, model, api_key)
     token = _PRIVATE_HTTP.set(True)
     work = asyncio.create_task(
         session.run(Path(audio_path), project_id, language, additional_parameters)

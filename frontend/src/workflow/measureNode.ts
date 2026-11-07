@@ -33,6 +33,7 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       // Document/JSON bodies scroll inside bounded controls and do not define UI minima.
       clone.querySelectorAll('pre').forEach((element) => { element.textContent = '' })
       clone.querySelectorAll('textarea').forEach((element) => { element.value = '' })
+      clone.querySelectorAll<HTMLInputElement>('input[type="password"], input[data-credential-input]').forEach((element) => { element.value = ''; element.removeAttribute('value') })
       host.append(clone)
       document.body.append(host)
       bodyWidth = clone.getBoundingClientRect().width

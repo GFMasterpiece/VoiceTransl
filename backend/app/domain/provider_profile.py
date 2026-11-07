@@ -1,8 +1,8 @@
 """Validated, secret-free provider connection profiles.
 
-Profiles describe how the server connects to a provider. Credentials are
-always resolved from the environment variable named by api_key_env and
-are never persisted in this model.
+Profiles describe how the server connects to a provider without containing keys.
+Persisted legacy profiles resolve credentials through api_key_env. Inline node
+execution may reuse this metadata model with a separately resolved credential.
 """
 
 import re

@@ -424,6 +424,8 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .node-field-description { display: block; grid-column: 1 / -1; max-width: 280px; white-space: normal; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; }
 .node-provider-settings { width: 300px; max-width: 100%; font-size: 10px; line-height: 1.45; padding: 4px; box-sizing: border-box; }
 .node-provider-settings p { margin: 5px 0; }
+.node-inline-connection { width: 300px; max-width: 100%; }
+.node-credential-status, .node-credential-help { margin: 5px 4px; font-size: 10px; line-height: 1.45; color: var(--muted); }
 .provider-target { display: grid; gap: 3px; padding: 7px; margin: 5px 0; border: 1px solid var(--line); border-radius: 7px; overflow-wrap: anywhere; font-size: 11px; }
 .provider-target small { color: var(--muted); }
 .cloud-workflow-notice { padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; background: var(--teal-soft); font-size: 12px; }

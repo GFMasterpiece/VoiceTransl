@@ -1,6 +1,7 @@
 import { onUnmounted, ref, watch, type Ref } from 'vue'
 import { message, messageRef } from '../i18n'
 import type { useWorkflowStore, WorkflowDocumentInput } from '../stores/workflow'
+import { workflowCredentials } from './workflowCredentials'
 import {
   copySelection, parseWorkflowFile, preparePaste, serializeWorkflow, TransferError, WORKFLOW_TRANSFER_MAX_BYTES,
 } from '../workflow/editorTransfer'
@@ -149,6 +150,7 @@ export function useEditorCommands(store: ReturnType<typeof useWorkflowStore>, op
     const pending = pendingImport.value
     if (!pending || pending.context !== options.context() || options.blocked() || store.historyTransactionActive) return
     const unchanged = JSON.stringify(stableJson(pending.graph)) === JSON.stringify(stableJson(store.draft))
+    if (unchanged) workflowCredentials(store.credentialContext).forget()
     if (unchanged || store.replaceGraph(pending.graph)) { cancelImport(); focusCanvas() }
   }
   onUnmounted(() => { alive = false; cancelImport(); clipboardGeneration += 1 })

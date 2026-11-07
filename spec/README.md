@@ -23,7 +23,7 @@
 | [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
 | [文件夹音频批处理](batch-processing.md) | Implemented | 多目录导入、固定快照逐文件调度、取消/重试及批次结果 |
 | [输入节点资源清单与编号输出](node-batch-input.md) | Implemented | 输入节点导入、统一单/批运行、输出前缀与稳定编号 |
-| [Qwen 录音文件识别](cloud-asr-qwen.md) | Implemented | 独立云端识别节点、临时上传、连接管理与冻结快照 |
+| [Qwen 录音文件识别](cloud-asr-qwen.md) | Implemented | 独立云端识别、节点内连接与密钥、临时上传及冻结快照 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 整体目标；当前音频直通、Mock、编辑器、批次及Qwen能力见各独立规格 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | OpenAI协议尚未实现；首个云端节点采用独立Qwen规格 |
 

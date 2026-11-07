@@ -87,6 +87,17 @@ def create_app(data_dir=None):
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, exc: RequestValidationError):
+        if any("credential_updates" in error.get("loc", ()) for error in exc.errors()):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "凭据更新参数无效",
+                        "details": None,
+                    }
+                },
+            )
         for error in exc.errors():
             context = error.get("ctx")
             if isinstance(context, dict) and isinstance(context.get("error"), SchemaVersionError):

@@ -756,8 +756,22 @@ def workflow_provider_profile_inputs(nodes):
         binding = (
             (definition.presentation or {}).get("provider_profile_input") if definition else None
         )
+        inline = (
+            (definition.presentation or {}).get("inline_connection_input") if definition else None
+        )
+        if inline is not None and node.config.get(inline["mode_key"]) == inline["mode_value"]:
+            continue
         if binding is not None:
             yield node, binding
+
+
+def workflow_inline_connection_inputs(nodes):
+    for node in nodes:
+        definition = _nodes.NODE_DEFINITIONS.get(node.type)
+        presentation = definition.presentation or {} if definition else {}
+        binding = presentation.get("inline_connection_input")
+        if binding is not None and node.config.get(binding["mode_key"]) == binding["mode_value"]:
+            yield node, binding, presentation["provider_profile_input"]["provider_type"]
 
 
 def validate_workflow_audio_selection(

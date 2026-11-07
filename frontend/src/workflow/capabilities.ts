@@ -34,6 +34,7 @@ export interface CapabilityField {
   description: string
 }
 export interface CapabilityNode {
+  inlineConnectionInput?: InlineConnectionInput | null
   category?: { id: string; label: string } | null
   providerProfileInput?: ProviderProfileInput | null
   type: string
@@ -54,6 +55,9 @@ export interface CapabilityNode {
   positionX: number | null
   resourceInput?: { resourceType: string; configKey: string; collectionKey?: string | null } | null
   preview?: { renderer: string } | null
+}
+export interface InlineConnectionInput {
+  modeKey: string; modeValue: string; baseUrlKey: string; timeoutKey: string; regionKey: string; apiKeyEnvKey: string; credentialRefKey: string
 }
 export interface ProviderProfileInput {
   configKey: string
@@ -171,7 +175,7 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false, categories = false): CapabilityNode {
+function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false, categories = false, inlineConnections = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   let category: CapabilityNode['category'] = null
   if (categories && item.category !== null) {
@@ -204,6 +208,20 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (new Set(mappedPorts).size !== mappedPorts.length || mappedPorts.some((port) => !inputPorts.includes(port) || requiredInputPorts.includes(port))) fail('workflow.capParameter')
   const presentation = item.presentation == null ? {} : object(item.presentation, 'workflow.capPresentation')
   const resource = presentation.resource_input == null ? null : object(presentation.resource_input, 'workflow.capPresentation')
+  let inlineConnectionInput: InlineConnectionInput | null = null
+  if (inlineConnections && presentation.inline_connection_input != null) {
+    const inline = object(presentation.inline_connection_input, 'profiles.invalidCapability')
+    const keys = ['mode_key', 'mode_value', 'base_url_key', 'timeout_key', 'region_key', 'api_key_env_key', 'credential_ref_key']
+    if (Object.keys(inline).length !== keys.length || Object.keys(inline).some((key) => !keys.includes(key))
+      || keys.some((key) => !safeIdentifier(inline[key]))) fail('profiles.invalidCapability')
+    const bound = keys.filter((key) => key !== 'mode_value').map((key) => inline[key])
+    if (new Set(bound).size !== bound.length || bound.some((key) => !parsedFields.some((field) => field.key === key && field.inputPort === null))) fail('profiles.invalidCapability')
+    const mode = parsedFields.find((field) => field.key === inline.mode_key)!
+    if (mode.type !== 'select' || !mode.options.some((option) => option.value === inline.mode_value)
+      || parsedFields.find((field) => field.key === inline.timeout_key)?.type !== 'integer'
+      || ['base_url_key', 'region_key', 'api_key_env_key', 'credential_ref_key'].some((key) => parsedFields.find((field) => field.key === inline[key])?.type !== 'string')) fail('profiles.invalidCapability')
+    inlineConnectionInput = { modeKey: String(inline.mode_key), modeValue: String(inline.mode_value), baseUrlKey: String(inline.base_url_key), timeoutKey: String(inline.timeout_key), regionKey: String(inline.region_key), apiKeyEnvKey: String(inline.api_key_env_key), credentialRefKey: String(inline.credential_ref_key) }
+  }
   let providerProfileInput: ProviderProfileInput | null = null
   if (profiles && presentation.provider_profile_input != null) {
     const profile = object(presentation.provider_profile_input, 'profiles.invalidCapability')
@@ -234,6 +252,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (resource && parsedFields.some((field) => (field.key === resource.config_key || (collections && field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
   if (parameters && item.is_parameter_source && (item.is_source === true || inputPorts.length || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
   return {
+    ...(inlineConnections ? { inlineConnectionInput } : {}),
     category,
     ...(profiles ? { providerProfileInput } : {}),
     resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), ...(collections ? { collectionKey: resource.collection_key as string | null } : {}) } : null,
@@ -267,10 +286,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7', '1.8'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8'].includes(String(workflow.schema_version)), ['1.7', '1.8'].includes(String(workflow.schema_version)), workflow.schema_version === '1.8'))
+  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9'].includes(String(workflow.schema_version)), ['1.7', '1.8', '1.9'].includes(String(workflow.schema_version)), ['1.8', '1.9'].includes(String(workflow.schema_version)), workflow.schema_version === '1.9'))
   const categoryLabels = new Map<string, string>()
   for (const entry of nodes) if (entry.category) {
     if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')

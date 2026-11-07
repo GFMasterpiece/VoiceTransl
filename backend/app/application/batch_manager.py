@@ -84,12 +84,12 @@ class BatchManager:
                 if issues:
                     raise ValueError("INVALID_WORKFLOW")
                 snapshot = workflow_snapshot(document).model_copy(deep=True)
-                snapshot = freeze_workflow_profiles(self.projects, snapshot)
+                snapshot = freeze_workflow_profiles(self.projects, snapshot, pid)
             else:
                 if retry.status in ACTIVE_BATCH_STATUSES:
                     raise RuntimeError("BATCH_BUSY")
                 snapshot = retry.workflow.model_copy(deep=True)
-                validate_frozen_workflow_profiles(snapshot)
+                validate_frozen_workflow_profiles(snapshot, self.projects, pid)
                 states = {"failed", "interrupted"} | ({"cancelled"} if cancelled else set())
                 audio_ids = [item.audio_id for item in retry.items if item.status in states]
                 if not audio_ids:

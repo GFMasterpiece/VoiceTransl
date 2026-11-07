@@ -46,7 +46,7 @@ data/projects/<project-id>/
 | `GET /projects/{pid}/audios/{aid}/source` | 按项目资源归属安全读取原音频，inline 响应支持 Range，使用可信 MIME 和 `nosniff` |
 | `DELETE /projects/{pid}` | 删除整个项目，任一音频运行/排队时返回 `409 PROJECT_BUSY` |
 | `GET /projects/{pid}/workflow` | 项目工作流，无已保存图时返回默认音频直通图 |
-| `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges}`，保存有效图并返回新修订 |
+| `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges,request_id?,credential_updates?}`，保存有效图并返回新修订；密钥更新为只写，附稳定请求 ID |
 | `POST /projects/{pid}/workflow/validate` | `{nodes,edges}`，返回 `{valid,errors}`，错误关联节点/边 |
 | `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision}`，202 返回绑定该音频的新运行 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs` | 分页历史摘要 `{items,total,limit,offset}`，默认 20、最大 100 |
@@ -79,7 +79,9 @@ data/projects/<project-id>/
 
 ## 云端连接快照
 
-`qwen_asr` 与原 Mock 节点独立，沿用同一单运行和批次接口。提交时按目录的连接声明冻结 `workflow.provider_profiles_snapshot`（键为Profile ID，值为非密钥Profile）；批次对子运行和重试复制原快照，不读最新连接。缺字段旧记录保持未记录，不补写；云节点缺冻结连接明确拒绝执行。嵌套Profile同样要求显式 `schema_version=1.0`。
+`qwen_asr` 与原 Mock 节点独立，沿用同一单运行和批次接口。新节点在图中保存 `connection_mode=inline`、地址、超时、地域、备用环境变量及不透明凭据引用，实际密钥经 `credential_updates` 的 `set` / `clear` 进入独立加密存储，不进入节点 config。验证接口只检查图，允许无密钥草稿；运行前检查连接和凭据，明确绑定却不可用时不静默改用备用。引用绑定项目、节点及 Provider；每次替换创建不可变版本，批次和重试保留原引用。相同请求 ID 重试不得重复轮换，冲突不覆盖旧图。
+
+缺少模式的旧节点继续按 Profile 声明冻结 `workflow.provider_profiles_snapshot`（键为 Profile ID，值为非密钥 Profile），执行时从冻结的环境变量名取值。批次对子运行和重试复制原快照，不读最新连接。缺字段旧记录保持未记录，不补写；旧云节点缺冻结连接明确拒绝执行。嵌套 Profile 同样要求显式 `schema_version=1.0`。
 
 提交前的缺连接、停用、类型不符、缺地址/环境变量名及坏文件等由API返回稳定422错误；缺实际密钥在节点执行时失败。新取消详情可保存在当前节点error中，最终运行仍为cancelled，不表示远端已终止。Profile删除检查公共可编辑图和旧配置引用；历史快照不单独阻止删除。详见[服务连接](provider_profiles.md)。
 

@@ -21,7 +21,7 @@ from ..domain.workflow import (
 )
 
 router = APIRouter(prefix="/api/v1")
-WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.8"
+WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.9"
 
 
 class WorkflowGraphConstraints(BaseModel):

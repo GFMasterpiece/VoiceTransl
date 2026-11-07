@@ -6,7 +6,7 @@ import math
 import re
 from typing import Callable
 
-from .node_constants import NODE_TYPE_PATTERN, PORT_PATTERN
+from .node_constants import BINDING_IDENTIFIER_PATTERN, NODE_TYPE_PATTERN, PORT_PATTERN
 from .node_contracts import CapabilityField as CapabilityField
 from .node_contracts import DataTypeDefinition as DataTypeDefinition
 from .node_contracts import NodeCategory as NodeCategory
@@ -218,7 +218,49 @@ def _catalog_presentation(definition):
     profile_binding = _provider_profile_binding(definition)
     if profile_binding is not None:
         presentation["provider_profile_input"] = profile_binding
+    inline = _inline_connection_binding(definition)
+    if inline is not None:
+        presentation["inline_connection_input"] = inline
     return presentation
+
+
+def _inline_connection_binding(definition):
+    binding = (definition.presentation or {}).get("inline_connection_input")
+    if binding is None:
+        return None
+    roles = {
+        "mode_key",
+        "base_url_key",
+        "timeout_key",
+        "region_key",
+        "api_key_env_key",
+        "credential_ref_key",
+    }
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != roles | {"mode_value"}
+        or any(
+            not isinstance(value, str) or not re.fullmatch(BINDING_IDENTIFIER_PATTERN, value)
+            for value in binding.values()
+        )
+    ):
+        raise ValueError("invalid inline connection declaration")
+    if len({binding[key] for key in roles}) != len(roles):
+        raise ValueError("inline connection fields must be distinct")
+    fields = {item.key: item for item in definition.fields}
+    for role in roles:
+        item = fields.get(binding[role])
+        expected = (
+            "integer" if role == "timeout_key" else "select" if role == "mode_key" else "string"
+        )
+        if item is None or item.type != expected or item.input_port is not None:
+            raise ValueError("inline connection fields cannot be connected parameters")
+    mode = fields[binding["mode_key"]]
+    if not any(option.get("value") == binding["mode_value"] for option in mode.options):
+        raise ValueError("inline connection mode must be a declared option")
+    if _provider_profile_binding(definition) is None:
+        raise ValueError("inline connections require a declared provider type")
+    return dict(binding)
 
 
 def _provider_profile_binding(definition):
@@ -338,6 +380,7 @@ def validate_node_definition(definition: NodeDefinition) -> None:
         raise ValueError("configuration field keys must be unique")
     resource_input = _resource_binding(definition)
     _provider_profile_binding(definition)
+    _inline_connection_binding(definition)
     bound_ports = [item.input_port for item in definition.fields if item.input_port is not None]
     if len(set(bound_ports)) != len(bound_ports):
         raise ValueError("parameter input bindings must be unique")
