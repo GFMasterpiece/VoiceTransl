@@ -342,9 +342,11 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .workflow-empty { pointer-events: none; position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; color: var(--muted); font-size: 12px; text-align: center; }.workflow-empty strong { color: var(--ink); font-family: var(--display); font-size: 16px; }
 .workflow-issues { position: absolute; z-index: 10; right: 16px; bottom: 44px; max-width: min(560px, calc(100% - 32px)); max-height: 30vh; overflow: auto; display: grid; gap: 8px; margin: 0; padding: 14px 16px; border-radius: 11px; color: var(--danger); background: oklch(96% .025 25); font-size: 11px; list-style: none; }.workflow-issues li { display: flex; align-items: baseline; gap: 10px; }.workflow-issues button { padding: 0; border: 0; color: inherit; background: transparent; font-weight: 700; }.workflow-issues button:disabled { cursor: default; opacity: 1; }
 .canvas-context-menu { position: fixed; z-index: 40; width: 264px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); box-shadow: 0 16px 40px oklch(28% .03 180 / .2); }
-.canvas-node-search { display: block; padding: 4px 4px 8px; }
+.canvas-node-search { display: block; position: sticky; top: -6px; z-index: 1; padding: 4px 4px 8px; background: var(--paper); }
+.canvas-node-category + .canvas-node-category { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 5px; }
+.canvas-node-category h3 { margin: 0; padding: 6px 10px 4px; color: var(--muted); font: 600 10px var(--sans); overflow-wrap: anywhere; }
 .canvas-node-search input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: oklch(96% .012 84); color: var(--ink); font: 12px var(--sans); }
-.canvas-context-menu button { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: 12px var(--sans); text-align: left; cursor: pointer; }
+.canvas-context-menu button { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: 12px var(--sans); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
 .canvas-context-menu button:hover:not(:disabled), .canvas-context-menu button:focus-visible { background: var(--teal-soft); color: var(--teal); }
 .canvas-context-menu button:disabled { opacity: .55; cursor: not-allowed; }
 .canvas-context-menu small, .canvas-context-menu p { margin: 0; color: var(--muted); font-size: 10px; }

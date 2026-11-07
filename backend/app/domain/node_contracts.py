@@ -39,6 +39,12 @@ ExecuteCallable = Callable[[NodeExecutionContext], Awaitable[NodeResult]]
 
 
 @dataclass(frozen=True)
+class NodeCategory:
+    id: str
+    label: str
+
+
+@dataclass(frozen=True)
 class NodeDefinition:
     type: str
     label: str
@@ -57,6 +63,7 @@ class NodeDefinition:
     presentation: dict[str, object] | None = None
     required_input_ports: tuple[str, ...] | None = None
     is_parameter_source: bool = False
+    category: NodeCategory | None = None
 
     @property
     def required_ports(self) -> tuple[str, ...]:

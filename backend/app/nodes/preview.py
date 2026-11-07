@@ -1,5 +1,6 @@
 """Independent preview nodes with persistent per-run artifacts."""
 
+from ..domain.node_categories import PREVIEW
 from ..domain.node_config import normalize_empty_config
 from ..domain.node_constants import AUDIO_PORT, TRANSCRIPT_PORT
 from ..domain.node_contracts import NodeDefinition
@@ -23,6 +24,7 @@ def definitions() -> tuple[NodeDefinition, ...]:
         NodeDefinition(
             type=node_type,
             label=label,
+            category=PREVIEW,
             input_ports=(port,),
             output_ports=(),
             terminal=True,

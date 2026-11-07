@@ -61,6 +61,38 @@ describe('capabilities parser', () => {
     return payload
   }
 
+  it('reads 1.8 extension categories without changing the graph and keeps old catalogs unclassified', () => {
+    const value = parameterCatalog()
+    const graph = JSON.stringify(value.workflow.default_graph)
+    value.workflow.schema_version = '1.8'
+    value.workflow.nodes.forEach((node: any) => { node.category = null })
+    value.workflow.nodes[1].category = { id: 'plugin_tools', label: 'Plugin tools' }
+    expect(readCapabilities(value).nodes[1]!.category).toEqual({ id: 'plugin_tools', label: 'Plugin tools' })
+    expect(readCapabilities(value).nodes[0]!.category).toBeNull()
+    expect(JSON.stringify(value.workflow.default_graph)).toBe(graph)
+    for (const version of ['1.2', '1.3', '1.4', '1.5', '1.6', '1.7']) {
+      value.workflow.schema_version = version
+      value.workflow.nodes.forEach((node: any) => { delete node.category })
+      expect(readCapabilities(value).nodes.every((node) => node.category === null)).toBe(true)
+    }
+  })
+
+  it.each([undefined, false, [], {}, { id: 'Bad ID', label: 'Tools' }, { id: 'tools', label: '' }, { id: 'tools', label: ' padded ' },
+    { id: 'tools', label: 'line\nbreak' }, { id: 'tools', label: 'x'.repeat(129) }, { id: 'tools', label: 'Tools', extra: true }])('rejects malformed 1.8 category %j', (category) => {
+    const value = parameterCatalog(); value.workflow.schema_version = '1.8'
+    value.workflow.nodes.forEach((node: any) => { node.category = null })
+    value.workflow.nodes[0].category = category
+    expect(() => readCapabilities(value)).toThrow()
+  })
+
+  it('rejects conflicting labels for one 1.8 category', () => {
+    const value = parameterCatalog(); value.workflow.schema_version = '1.8'
+    value.workflow.nodes.forEach((node: any) => { node.category = null })
+    value.workflow.nodes[0].category = { id: 'tools', label: 'Tools' }
+    value.workflow.nodes[1].category = { id: 'tools', label: 'Other tools' }
+    expect(() => readCapabilities(value)).toThrow()
+  })
+
   it('uses generic 1.5 field-to-port mappings and inherited primitive types without a node whitelist', () => {
     const payload = parameterCatalog()
     const registry = createNodeRegistry(readCapabilities(payload))
@@ -275,9 +307,9 @@ describe('capabilities parser', () => {
     const caps = readCapabilities(livePayload)
     const original = JSON.stringify(caps)
     const registry = createNodeRegistry(caps)
-    expect(registry.label('asr')).toBe('语音识别')
+    expect(registry.label('asr')).toBe('语音识别（Mock）')
     setLocale('en')
-    expect(registry.label('asr')).toBe('Speech recognition')
+    expect(registry.label('asr')).toBe('Mock speech recognition')
     expect(registry.kind('asr')?.fields.find((field) => field.key === 'language')?.label).toBe('Language')
     expect(registry.kind('audio_input')?.addLabel).toBe('Audio input')
     expect(registry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
@@ -285,7 +317,7 @@ describe('capabilities parser', () => {
     expect(registry.outputPortForNode('asr')).toBe('transcript')
     expect(JSON.stringify(caps)).toBe(original)
     setLocale('zh-CN')
-    expect(registry.label('asr')).toBe('语音识别')
+    expect(registry.label('asr')).toBe('语音识别（Mock）')
   })
 
   it('preserves exact extension node, field, and option labels in both languages', () => {

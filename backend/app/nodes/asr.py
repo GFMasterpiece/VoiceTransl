@@ -1,5 +1,6 @@
 """Mock speech recognition node."""
 
+from ..domain.node_categories import SPEECH_RECOGNITION
 from ..domain.node_config import MockASRNodeConfig, validate_asr_config
 from ..domain.node_constants import ASR_NODE_TYPE, AUDIO_PORT, TRANSCRIPT_PORT
 from ..domain.node_contracts import NodeDefinition, fields_from_model
@@ -30,7 +31,8 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
 def definition() -> NodeDefinition:
     return NodeDefinition(
         type=ASR_NODE_TYPE,
-        label="语音识别",
+        label="语音识别（Mock）",
+        category=SPEECH_RECOGNITION,
         input_ports=(AUDIO_PORT, "language"),
         required_input_ports=(AUDIO_PORT,),
         output_ports=(TRANSCRIPT_PORT,),

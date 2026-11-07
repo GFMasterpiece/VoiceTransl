@@ -62,6 +62,9 @@ from .node_contracts import (
     DataTypeDefinition as DataTypeDefinition,
 )
 from .node_contracts import (
+    NodeCategory as NodeCategory,
+)
+from .node_contracts import (
     NodeConfigCapability as NodeConfigCapability,
 )
 from .node_contracts import (

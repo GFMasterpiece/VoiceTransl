@@ -1,5 +1,6 @@
 """Transcript export node."""
 
+from ..domain.node_categories import OUTPUT
 from ..domain.node_config import TextOutputConfig, validate_text_output_config
 from ..domain.node_constants import TEXT_OUTPUT_NODE_TYPE, TRANSCRIPT_PORT
 from ..domain.node_contracts import NodeDefinition, fields_from_model
@@ -27,6 +28,7 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=TEXT_OUTPUT_NODE_TYPE,
         label="文本输出",
+        category=OUTPUT,
         input_ports=(TRANSCRIPT_PORT, "filename_stem", "text_format"),
         required_input_ports=(TRANSCRIPT_PORT,),
         output_ports=(),

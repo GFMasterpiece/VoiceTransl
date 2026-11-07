@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from ..domain.node_categories import PARAMETERS
 from ..domain.node_contracts import NodeDefinition, fields_from_model
 from ..domain.node_execution import NodeExecutionContext, NodeResult
 
@@ -38,6 +39,7 @@ def _definition(type_id: str, label: str, config_model: type[BaseModel]) -> Node
     return NodeDefinition(
         type=f"{type_id}_value",
         label=label,
+        category=PARAMETERS,
         input_ports=(),
         output_ports=(type_id,),
         terminal=False,

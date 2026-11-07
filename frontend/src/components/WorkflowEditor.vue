@@ -24,6 +24,7 @@ import { measureNodeContent, type NodeContentMinimum } from '../workflow/measure
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
 import { useProviderProfilesStore } from '../stores/providerProfiles'
+import { groupNodeKinds } from '../workflow/nodeCategories'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[]; externalDialogOpen?: boolean }>()
@@ -179,7 +180,7 @@ function guardUnload(event: BeforeUnloadEvent) {
   if (resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
 }
 
-const filteredKinds = computed(() => nodeKinds.value.filter((entry) => `${entry.label} ${entry.addLabel} ${entry.type}`.toLocaleLowerCase().includes(menuSearch.value.trim().toLocaleLowerCase())))
+const filteredKindGroups = computed(() => groupNodeKinds(nodeKinds.value, menuSearch.value))
 function addDisabledReason(type: string) {
   if (controlsLocked.value) return t('workflow.leaveSaving')
   const definition = registry.value?.kind(type)
@@ -245,7 +246,7 @@ function menuKey(event: KeyboardEvent) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !items.length) return
   event.preventDefault()
   const current = items.indexOf(document.activeElement as HTMLButtonElement)
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : current < 0 ? event.key === 'ArrowDown' ? 0 : items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
   items[index]?.focus()
 }
 function outsideMenu(event: PointerEvent) {
@@ -895,8 +896,11 @@ onUnmounted(() => {
     <div v-if="contextMenu" ref="menuElement" class="canvas-context-menu" role="menu" tabindex="-1" :aria-label="t('workflow.canvasMenu')" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @pointerdown.stop @contextmenu.prevent @keydown="menuKey">
       <template v-if="!contextMenu.nodeId">
         <label class="canvas-node-search"><span class="visually-hidden">{{ t('workflow.searchNodes') }}</span><input v-model="menuSearch" type="search" @contextmenu.stop :placeholder="t('workflow.searchNodes')" :aria-label="t('workflow.searchNodes')" /></label>
-        <button v-for="entry in filteredKinds" :key="entry.type" role="menuitem" type="button" :data-add-kind="entry.type" :disabled="!!addDisabledReason(entry.type)" :title="addDisabledReason(entry.type) || entry.label" @click="addFromMenu(entry.type)"><span>＋ {{ entry.addLabel }}</span><small v-if="addDisabledReason(entry.type)">{{ addDisabledReason(entry.type) }}</small></button>
-        <p v-if="!filteredKinds.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
+        <div v-for="(group, index) in filteredKindGroups" :key="group.id ?? ''" role="group" :aria-labelledby="`${clipId}-category-${index}`" :data-node-category="group.id ?? ''" class="canvas-node-category">
+          <h3 :id="`${clipId}-category-${index}`">{{ group.label }}</h3>
+          <button v-for="entry in group.nodes" :key="entry.type" role="menuitem" type="button" :data-add-kind="entry.type" :disabled="!!addDisabledReason(entry.type)" :title="addDisabledReason(entry.type) || entry.label" @click="addFromMenu(entry.type)"><span>＋ {{ entry.addLabel }}</span><small v-if="addDisabledReason(entry.type)">{{ addDisabledReason(entry.type) }}</small></button>
+        </div>
+        <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
       <button v-else role="menuitem" type="button" data-delete-node :disabled="controlsLocked || registry?.kind(store.selectedNode?.type || '')?.removable === false" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>

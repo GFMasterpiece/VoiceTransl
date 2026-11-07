@@ -1,5 +1,6 @@
 """Audio export node."""
 
+from ..domain.node_categories import OUTPUT
 from ..domain.node_config import AudioOutputConfig
 from ..domain.node_constants import AUDIO_OUTPUT_NODE_TYPE, AUDIO_PORT
 from ..domain.node_contracts import NodeDefinition, fields_from_model
@@ -36,6 +37,7 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=AUDIO_OUTPUT_NODE_TYPE,
         label="音频输出",
+        category=OUTPUT,
         input_ports=(AUDIO_PORT, "filename_stem"),
         required_input_ports=(AUDIO_PORT,),
         output_ports=(),

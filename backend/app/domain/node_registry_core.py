@@ -9,6 +9,7 @@ from typing import Callable
 from .node_constants import NODE_TYPE_PATTERN, PORT_PATTERN
 from .node_contracts import CapabilityField as CapabilityField
 from .node_contracts import DataTypeDefinition as DataTypeDefinition
+from .node_contracts import NodeCategory as NodeCategory
 from .node_contracts import NodeConfigCapability as NodeConfigCapability
 from .node_contracts import NodeDefinition as NodeDefinition
 from .node_contracts import PortDefinition as PortDefinition
@@ -276,7 +277,36 @@ def _provider_profile_binding(definition):
     return result
 
 
+def _category(definition):
+    value = definition.category
+    if value is None:
+        return None
+    if (
+        not isinstance(value, NodeCategory)
+        or not isinstance(value.id, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value.id)
+        or not isinstance(value.label, str)
+        or not 1 <= len(value.label) <= 128
+        or value.label != value.label.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in value.label)
+    ):
+        raise ValueError("invalid node category declaration")
+    return {"id": value.id, "label": value.label}
+
+
+def _validate_categories(definitions):
+    labels = {}
+    for definition in definitions:
+        category = _category(definition)
+        if category is None:
+            continue
+        previous = labels.setdefault(category["id"], category["label"])
+        if previous != category["label"]:
+            raise ValueError("node category ID has conflicting labels")
+
+
 def validate_node_definition(definition: NodeDefinition) -> None:
+    _validate_categories((*NODE_DEFINITIONS.values(), definition))
     if not re.fullmatch(NODE_TYPE_PATTERN, definition.type):
         raise ValueError("node type must be a lowercase identifier")
     all_ports = set(definition.input_ports) | set(definition.output_ports)
@@ -378,10 +408,12 @@ def validate_node_result(definition: NodeDefinition, result: NodeResult) -> Node
 
 
 def node_catalog() -> list[dict[str, object]]:
+    _validate_categories(NODE_DEFINITIONS.values())
     return [
         {
             "type": item.type,
             "label": item.label,
+            "category": _category(item),
             "input_ports": list(item.input_ports),
             "output_ports": list(item.output_ports),
             "terminal": item.terminal,

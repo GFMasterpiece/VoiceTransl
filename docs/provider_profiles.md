@@ -17,7 +17,7 @@
 
 字段包括 ID、显示名、Provider 类型、HTTP(S) `base_url`、地域、总超时、启用状态、时间及 `api_key_env`。实际密钥由服务端执行时解析，不返回给前端。URL 不允许用户名密码；云节点提交额外拒绝 query/fragment，避免把认证信息混入服务地址。
 
-目录 `workflow.schema_version=1.7` 的 `presentation.provider_profile_input` 声明连接字段、类型、显示名及创建默认值，后端按已启用且类型匹配的连接派生下拉选项。可选 `data_handling` 声明临时存储时长和远端取消边界，界面按声明展示，不将 Qwen 规则套用到未声明的扩展。新增同协议模型只改节点配置；新增不同协议需独立适配器、节点声明和验收。
+目录自 `workflow.schema_version=1.7` 起通过 `presentation.provider_profile_input` 声明连接字段、类型、显示名及创建默认值，后端按已启用且类型匹配的连接派生下拉选项。可选 `data_handling` 声明临时存储时长和远端取消边界，界面按声明展示，不将 Qwen 规则套用到未声明的扩展。新增同协议模型只改节点配置；新增不同协议需独立适配器、节点声明和验收。
 
 连接修改只刷新连接与目录缓存，不重新加载当前图；草稿、撤销、节点内待上传文件和视口保留。失效 ID 保留并显错，不自动改选。删除检查公共可编辑图及旧 Pipeline 引用，仍被引用返回 `PROVIDER_PROFILE_IN_USE`；历史不可变快照不单独阻止删除。旧只读 Pipeline 暂无解除引用的迁移工具。
 

@@ -1,5 +1,6 @@
 """Project audio source node."""
 
+from ..domain.node_categories import INPUT
 from ..domain.node_config import normalize_input_config
 from ..domain.node_constants import AUDIO_PORT, INPUT_NODE_TYPE
 from ..domain.node_contracts import CapabilityField, NodeDefinition
@@ -21,6 +22,7 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=INPUT_NODE_TYPE,
         label="音频输入",
+        category=INPUT,
         input_ports=(),
         output_ports=(AUDIO_PORT,),
         terminal=False,

@@ -1134,6 +1134,77 @@ describe('workflow viewport coordinates and gestures', () => {
 })
 
 describe('canvas context menus', () => {
+  function categorizedCatalog(): any {
+    const value: any = structuredClone(testCapabilities)
+    value.workflow.schema_version = '1.8'
+    const categories = [{ id: 'input', label: '输入' }, { id: 'plugin_tools', label: 'Plugin tools' }, { id: 'speech_recognition', label: '语音识别' }, { id: 'output', label: '输出' }]
+    value.workflow.nodes.forEach((node: any, index: number) => {
+      node.category = categories[Math.min(index, 3)]
+      node.is_parameter_source = false; node.required_input_ports = node.required_inbound ? [...node.input_ports] : []
+      node.config.fields.forEach((field: any) => { field.input_port = null })
+    })
+    value.workflow.nodes.push({ ...value.workflow.nodes[2], type: 'qwen_asr', label: 'Qwen ASR', add_label: 'Qwen ASR', category: categories[2] })
+    value.workflow.nodes.push({ ...value.workflow.nodes[1], type: 'extension_uncategorized', label: 'Extension without category', category: null })
+    value.workflow.nodes.push({ ...value.workflow.nodes[1], type: 'extension_named_uncategorized', label: 'Explicit extension category', category: { id: 'uncategorized', label: 'Extension tools' } })
+    return value
+  }
+  it('groups both entry points in catalog order, retains unknown categories, and never changes the draft', async () => {
+    const capabilities = categorizedCatalog()
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(capabilities)) : undefined); await settle()
+    const draft = JSON.stringify(useWorkflowStore().draft)
+    root!.querySelector<HTMLButtonElement>('[data-add-node]')!.click(); await settle()
+    expect([...root!.querySelectorAll('[data-node-category]')].map((group) => group.getAttribute('data-node-category'))).toEqual(['input', 'plugin_tools', 'speech_recognition', 'output', '', 'uncategorized'])
+    expect(root!.querySelector('[data-node-category=plugin_tools] h3')!.textContent).toBe('Plugin tools')
+    expect(root!.querySelector('[data-node-category=""] h3')!.textContent).toBe('未分类')
+    expect(root!.querySelector('[data-node-category=uncategorized] h3')!.textContent).toBe('Extension tools')
+    expect([...root!.querySelectorAll('[data-node-category=speech_recognition] [data-add-kind]')].map((item) => item.getAttribute('data-add-kind'))).toEqual(['asr', 'qwen_asr'])
+    expect(root!.querySelector('[data-add-kind=asr]')!.textContent).toContain('语音识别（Mock）')
+    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    menu(root!.querySelector('.workflow-svg')!); await settle()
+    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(6)
+    expect(JSON.stringify(useWorkflowStore().draft)).toBe(draft)
+  })
+
+  it('searches category IDs and both friendly languages, hides empty groups, and preserves the query across locale changes', async () => {
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
+    menu(root!.querySelector('.workflow-svg')!); await settle()
+    const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!
+    for (const query of ['speech recognition', '语音识别', 'speech_recognition']) {
+      search.value = query; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+      expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(1)
+      expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(2)
+    }
+    setLocale('en'); await settle()
+    expect(search.value).toBe('speech_recognition')
+    expect(root!.querySelector('[data-node-category=speech_recognition] h3')!.textContent).toBe('Speech recognition')
+    search.value = 'Plugin tools'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(1)
+    search.value = 'no matching category'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(0)
+    expect(root!.querySelector('.canvas-context-menu [role=status]')!.textContent).toBe('No matching nodes')
+  })
+
+  it('skips headings and disabled nodes with arrow, Home and End keys in grouped menus', async () => {
+    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
+    menu(root!.querySelector('.workflow-svg')!); await settle()
+    const menuElement = root!.querySelector('.canvas-context-menu')!
+    const items = [...menuElement.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
+    for (const [key, expected] of [['ArrowUp', items[items.length - 1]], ['Home', items[0]], ['End', items[items.length - 1]], ['ArrowDown', items[0]], ['ArrowDown', items[1]], ['ArrowUp', items[0]]] as const) {
+      menuElement.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle()
+      expect(document.activeElement).toBe(expected)
+      expect(document.activeElement!.getAttribute('role')).toBe('menuitem')
+    }
+    menuElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+  })
+
+  it('shows legacy nodes together as unclassified instead of inferring categories', async () => {
+    setup(); await settle(); menu(root!.querySelector('.workflow-svg')!); await settle()
+    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(1)
+    expect(root!.querySelector('[data-node-category=""] h3')!.textContent).toBe('未分类')
+    expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(testCapabilities.workflow.nodes.length)
+  })
+
   function menu(target: Element, x = 300, y = 200) {
     const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })
     target.dispatchEvent(event)

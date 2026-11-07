@@ -1,6 +1,20 @@
+from dataclasses import replace
+
 import pytest
-from app.domain.node_registry import NODE_DEFINITIONS
-from app.domain.workflow import WORKFLOW_GRAPH_CONSTRAINTS, default_workflow
+from app.domain.node_registry import (
+    NODE_DEFINITIONS,
+    NodeCategory,
+    NodeDefinition,
+    node_catalog,
+    register_node,
+    validate_node_definition,
+)
+from app.domain.workflow import (
+    WORKFLOW_GRAPH_CONSTRAINTS,
+    default_workflow,
+    workflow_semantic_digest,
+    workflow_snapshot,
+)
 from app.main import create_app
 from httpx import ASGITransport, AsyncClient
 
@@ -14,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.7"
+    assert body["workflow"]["schema_version"] == "1.8"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -47,6 +61,20 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "source_info",
         "qwen_asr",
     }
+    assert {
+        category: {node["type"] for node in nodes.values() if node["category"]["id"] == category}
+        for category in {node["category"]["id"] for node in nodes.values()}
+    } == {
+        "input": {"audio_input", "source_info"},
+        "preprocessing": {"preprocess"},
+        "speech_recognition": {"asr", "qwen_asr"},
+        "preview": {"audio_preview", "text_preview"},
+        "output": {"audio_output", "text_output"},
+        "parameters": {"string_value", "integer_value", "number_value", "boolean_value"},
+    }
+    assert nodes["asr"]["label"] == "语音识别（Mock）"
+    assert nodes["asr"]["category"] == {"id": "speech_recognition", "label": "语音识别"}
+    assert nodes["qwen_asr"]["category"] == nodes["asr"]["category"]
     assert body["workflow"]["constraints"] == WORKFLOW_GRAPH_CONSTRAINTS
     assert {node_type: node["is_source"] for node_type, node in nodes.items()} == {
         node_type: definition.is_source for node_type, definition in NODE_DEFINITIONS.items()
@@ -124,6 +152,78 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     assert text_format["input_port"] == "text_format"
     lowered = response.text.lower()
     assert "crispasr" not in lowered and "ffmpeg" not in lowered
+
+
+@pytest.mark.asyncio
+async def test_dynamic_categories_and_legacy_extension_are_display_only(tmp_path, monkeypatch):
+    plugin = replace(
+        NODE_DEFINITIONS["asr"],
+        type="plugin_asr",
+        category=NodeCategory("plugin_tools", "Plugin tools"),
+    )
+    legacy = NodeDefinition(
+        type="legacy_extension",
+        label="Legacy extension",
+        input_ports=(),
+        output_ports=("string",),
+        terminal=False,
+        config_kind="none",
+        execute=NODE_DEFINITIONS["string_value"].execute,
+    )
+    assert legacy.category is None
+    # Register through the public extension path, with automatic fixture cleanup.
+    for definition in (plugin, legacy):
+        monkeypatch.setitem(NODE_DEFINITIONS, definition.type, definition)
+        NODE_DEFINITIONS.pop(definition.type)
+        register_node(definition)
+    document = default_workflow("category_test")
+    before = workflow_snapshot(document).model_dump(mode="json")
+    digest = workflow_semantic_digest(document.nodes, document.edges)
+    monkeypatch.setitem(
+        NODE_DEFINITIONS,
+        "audio_output",
+        replace(NODE_DEFINITIONS["audio_output"], category=plugin.category),
+    )
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/capabilities")
+    assert response.status_code == 200
+    nodes = {node["type"]: node for node in response.json()["workflow"]["nodes"]}
+    assert nodes["plugin_asr"]["category"] == {"id": "plugin_tools", "label": "Plugin tools"}
+    assert nodes["legacy_extension"]["category"] is None
+    assert workflow_snapshot(document).model_dump(mode="json") == before
+    assert workflow_semantic_digest(document.nodes, document.edges) == digest
+    assert all("category" not in node for node in before["nodes"])
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        NodeCategory("bad/id", "Bad"),
+        NodeCategory("Uppercase", "Bad"),
+        NodeCategory("valid", ""),
+        NodeCategory("valid", " padded "),
+        NodeCategory("valid", "control\nlabel"),
+        NodeCategory("valid", "x" * 129),
+        {"id": "valid", "label": "Untyped"},
+    ],
+)
+def test_invalid_node_category_declarations_are_rejected(category):
+    with pytest.raises(ValueError, match="invalid node category"):
+        validate_node_definition(replace(NODE_DEFINITIONS["asr"], category=category))
+
+
+def test_category_label_conflicts_are_rejected_at_registration_and_catalog(monkeypatch):
+    conflict = replace(
+        NODE_DEFINITIONS["asr"],
+        type="conflicting_category",
+        category=NodeCategory("speech_recognition", "Different label"),
+    )
+    with pytest.raises(ValueError, match="conflicting labels"):
+        register_node(conflict)
+    monkeypatch.setitem(NODE_DEFINITIONS, conflict.type, conflict)
+    with pytest.raises(ValueError, match="conflicting labels"):
+        node_catalog()
 
 
 @pytest.mark.asyncio

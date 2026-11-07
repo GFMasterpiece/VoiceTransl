@@ -70,9 +70,11 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.7`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、分类、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.8`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
 
-目录 `1.5` 引入字段可空 `input_port` 及节点 `is_parameter_source`，保留严格命名必填输入数组；参数绑定必须存在、唯一、类型兼容且不是必连端口。`1.6` 在资源声明中增加可空集合键，形状为 `resource_input={resource_type,config_key,collection_key}`；资源字段均由专用控件处理，前端按声明识别和清除可移植导出的绑定。可空的 `creation_default` 只决定新节点配置，缺字段旧配置仍用 `default`，避免显示和执行不一致。可空 `presentation.preview={renderer}` 继续选择预览组件。前端兼容 `1.2–1.6` 的原声明，不按节点名称特判；持久化 schema 仍为 `1.0`，旧文件及运行快照不自动补写。
+目录 `1.8` 的每个节点发布可空 `category={id,label}`，由节点声明；共享内置类别集中在 `domain/node_categories.py`，注册核心校验标识、标签及同ID一致性。Qwen与Mock识别均归语音识别。前端根据声明分组及搜索，不维护节点到类别的第二份映射；未知类别保留后端标签，旧目录及缺分类扩展显示未分类。分类仅是展示元数据，不进入持久图、运行快照或执行语义；前端兼容 `1.2–1.7` 原目录。
+
+目录 `1.5` 引入字段可空 `input_port` 及节点 `is_parameter_source`，保留严格命名必填输入数组；参数绑定必须存在、唯一、类型兼容且不是必连端口。`1.6` 在资源声明中增加可空集合键，形状为 `resource_input={resource_type,config_key,collection_key}`；资源字段均由专用控件处理，前端按声明识别和清除可移植导出的绑定。可空的 `creation_default` 只决定新节点配置，缺字段旧配置仍用 `default`，避免显示和执行不一致。可空 `presentation.preview={renderer}` 继续选择预览组件。前端兼容 `1.2–1.7` 的原声明，不按节点名称特判；持久化 schema 仍为 `1.0`，旧文件及运行快照不自动补写。
 
 `domain/node_contracts.py` 定义自描述契约，`domain/node_registry_core.py` 管理通用实时注册与目录派生，`domain/node_registry.py` 保留旧导入入口并显式组合内置类型与节点。各 `nodes/` 模块拥有配置、声明和执行入口；输出配置不再由目录按 `config_kind` 特判。节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称；边端口 ID 与注册规则保持一致，最多 64 字符。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。节点使用通用 `NodeExecutionError(code,message)` 报告可展示的失败，完成资源清理后通过 `NodeExecutionCancelled` 报告取消；调度器不依赖 ASR 等节点专用异常。`required_input_ports` 逐名声明必填输入，目录中的 `required_inbound` 为其长度；旧未声明命名要求的定义继续将旧计数 0 解释为全可选，其余按全部输入必填派生。调度按每条边的 `source_port → target_port` 组装命名输入，同时校验输入与全部已声明输出的运行时类型。未连接的可选输入不传入；连接了失败上游的可选输入也会阻断当前节点。文件复制、源音频定位与原子发布集中到 `application/workflow_media.py`，调度器不特判内置节点类型。新增已有数据类型的节点通过独立模块与组合入口注册接入，无需修改通用调度器。不能让客户端提交任意导入路径或代码。
 

@@ -10,6 +10,7 @@ from ..adapters.qwen_protocol import (
     TEMPORARY_UPLOAD_RETENTION_HOURS,
     validate_additional_parameters,
 )
+from ..domain.node_categories import SPEECH_RECOGNITION
 from ..domain.node_contracts import NodeDefinition, fields_from_model
 from ..domain.node_execution import NodeExecutionContext, NodeExecutionError, NodeResult
 
@@ -107,6 +108,7 @@ def definition():
     return NodeDefinition(
         type="qwen_asr",
         label="Qwen语音识别",
+        category=SPEECH_RECOGNITION,
         input_ports=("audio", "language"),
         required_input_ports=("audio",),
         output_ports=("transcript",),

@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | [兼容性与扩展性整改](compatibility-extensibility.md) | Approved | 严格版本、能力/节点单一来源、可取消传输、附加参数、跨平台、语言与命名/分页 |
 | [节点资源与独立预览](node-resources-preview.md) | Implemented | 空项目、输入节点音频绑定、独立文本/音频预览及历史隔离 |
-| [节点模块化与多端口](node-modularity.md) | Implemented | 节点模块独立、命名多端口与汇合调度、目录和历史兼容 |
+| [节点模块化与多端口](node-modularity.md) | Implemented | 节点模块独立、命名多端口与汇合调度、后端声明分类、目录和历史兼容 |
 | [节点参数与连线输入统一](node-parameters.md) | Implemented | 可连线参数、基础值节点、参数来源与实际执行值 |
 | [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
 | [文件夹音频批处理](batch-processing.md) | Implemented | 多目录导入、固定快照逐文件调度、取消/重试及批次结果 |

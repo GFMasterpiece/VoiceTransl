@@ -2,6 +2,7 @@
 
 from pathlib import PurePosixPath
 
+from ..domain.node_categories import INPUT
 from ..domain.node_config import normalize_empty_config
 from ..domain.node_contracts import NodeDefinition
 from ..domain.node_execution import NodeExecutionContext, NodeResult
@@ -35,6 +36,7 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type="source_info",
         label="当前文件信息",
+        category=INPUT,
         input_ports=(),
         output_ports=tuple(PORT_LABELS),
         terminal=False,

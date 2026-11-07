@@ -1,5 +1,6 @@
 """Mock audio preprocessing node."""
 
+from ..domain.node_categories import PREPROCESSING
 from ..domain.node_config import MockPreprocessNodeConfig
 from ..domain.node_constants import AUDIO_PORT, PREPROCESS_NODE_TYPE
 from ..domain.node_contracts import NodeDefinition, fields_from_model
@@ -43,6 +44,7 @@ def definition() -> NodeDefinition:
     return NodeDefinition(
         type=PREPROCESS_NODE_TYPE,
         label="预处理",
+        category=PREPROCESSING,
         input_ports=(AUDIO_PORT,),
         output_ports=(AUDIO_PORT,),
         terminal=False,

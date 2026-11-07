@@ -34,6 +34,7 @@ export interface CapabilityField {
   description: string
 }
 export interface CapabilityNode {
+  category?: { id: string; label: string } | null
   providerProfileInput?: ProviderProfileInput | null
   type: string
   label: string
@@ -170,8 +171,16 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false): CapabilityNode {
+function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false, categories = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
+  let category: CapabilityNode['category'] = null
+  if (categories && item.category !== null) {
+    const declared = object(item.category, 'workflow.capCategory')
+    if (Object.keys(declared).length !== 2 || Object.keys(declared).some((key) => !['id', 'label'].includes(key))
+      || !safeNodeType(declared.id) || typeof declared.label !== 'string' || !declared.label || [...declared.label].length > 128
+      || declared.label !== declared.label.trim() || /[\x00-\x1f\x7f]/.test(declared.label)) fail('workflow.capCategory')
+    category = { id: declared.id, label: declared.label }
+  }
   if (parameters && typeof item.is_parameter_source !== 'boolean') fail('workflow.capParameter')
   if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
   const inputPorts = item.input_ports === undefined ? [] : item.input_ports
@@ -225,6 +234,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (resource && parsedFields.some((field) => (field.key === resource.config_key || (collections && field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
   if (parameters && item.is_parameter_source && (item.is_source === true || inputPorts.length || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
   return {
+    category,
     ...(profiles ? { providerProfileInput } : {}),
     resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), ...(collections ? { collectionKey: resource.collection_key as string | null } : {}) } : null,
     preview: preview ? { renderer: String(preview.renderer) } : null,
@@ -257,10 +267,15 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7'].includes(String(workflow.schema_version)), workflow.schema_version === '1.7'))
+  const parameters = ['1.5', '1.6', '1.7', '1.8'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8'].includes(String(workflow.schema_version)), ['1.7', '1.8'].includes(String(workflow.schema_version)), workflow.schema_version === '1.8'))
+  const categoryLabels = new Map<string, string>()
+  for (const entry of nodes) if (entry.category) {
+    if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')
+    categoryLabels.set(entry.category.id, entry.category.label)
+  }
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
   const ports = workflow.ports === undefined
     ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))].map((id) => ({ id, typeId: id, label: id, capabilityRequirements: [] as string[] }))
