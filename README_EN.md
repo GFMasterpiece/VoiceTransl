@@ -4,7 +4,7 @@
 
 VoiceTransl is building a visual audio workflow with ComfyUI-style node connections, independent node settings, and immutable snapshots for each run.
 
-**This is a Web development version with audio passthrough and Mock validation only. It does not perform real transcription, translation, or media conversion.** The old desktop implementation, GalTransl, plugins, dependencies, and packaging resources have been removed from the current source tree. The [roadmap](docs/roadmap.md) summarizes their history; full implementations remain in Git history.
+**This is a Web development version with audio passthrough, Mock validation, and Qwen cloud transcription. Translation and media conversion are not available.** The old desktop implementation, GalTransl, plugins, dependencies, and packaging resources have been removed from the current source tree. The [roadmap](docs/roadmap.md) summarizes their history; full implementations remain in Git history.
 
 ## Current Features
 
@@ -14,11 +14,12 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - An Edit menu with undo/redo, multi-selection and group dragging, copy/paste, and workflow JSON import/export. Imports become undoable drafts; audio files and run history remain separate.
 - A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
 - Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.
+- A separate Qwen ASR node uploads local audio, runs asynchronous transcription, and returns real text and timestamps. Model names are configurable; text previews, subtitle exports, and batches reuse the existing workflow. Keys stay in the backend environment, while runs freeze non-secret connection settings. See [connection setup](docs/provider_profiles.md).
 - String, integer, number, and boolean value nodes. Backend-declared parameter inputs initially cover ASR language, export filenames, and text format. Connections preserve manual fallback values, while run details record parameter sources and effective values.
 - Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
 - The audio input node imports files or multiple folders, validates uploads and source languages, and saves an ordered resource list. The shared Run action applies one frozen workflow independently to each file. The batch panel manages progress, cancellation, retries, and ZIP results. New outputs use a prefix and stable sequence, such as `name_00001.wav`; retries retain the original numbers, and existing graphs keep their filenames. Current File Info supplies per-file naming and language parameters.
 
-Real cloud/local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
+Other cloud protocols, local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
 
 ## Development Requirements
 

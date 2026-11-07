@@ -36,6 +36,7 @@ from .node_registry import (
     PORT_NAME,
     ports_are_compatible,
 )
+from .provider_profile import ProviderProfile
 from .schema import require_schema_version
 
 WORKFLOW_SCHEMA_VERSION = "1.0"
@@ -152,6 +153,21 @@ class WorkflowSnapshot(BaseModel):
     workflow_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(default_factory=list, max_length=MAX_WORKFLOW_NODES)
     edges: list[WorkflowEdge] = Field(default_factory=list, max_length=MAX_WORKFLOW_EDGES)
+    provider_profiles_snapshot: dict[str, ProviderProfile] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_snapshot(self, handler):
+        value = handler(self)
+        if self.provider_profiles_snapshot is None:
+            value.pop("provider_profiles_snapshot", None)
+        return value
+
+    @field_validator("provider_profiles_snapshot")
+    @classmethod
+    def validate_profile_keys(cls, value):
+        if value is not None and any(key != profile.id for key, profile in value.items()):
+            raise ValueError("provider profile snapshot key does not match profile ID")
+        return value
 
     @field_validator("schema_version")
     @classmethod
@@ -730,6 +746,17 @@ def workflow_resource_inputs(nodes):
         definition = _nodes.NODE_DEFINITIONS.get(node.type)
         binding = (definition.presentation or {}).get("resource_input") if definition else None
         if binding:
+            yield node, binding
+
+
+def workflow_provider_profile_inputs(nodes):
+    """Resolve connection dependencies through registered node declarations."""
+    for node in nodes:
+        definition = _nodes.NODE_DEFINITIONS.get(node.type)
+        binding = (
+            (definition.presentation or {}).get("provider_profile_input") if definition else None
+        )
+        if binding is not None:
             yield node, binding
 
 

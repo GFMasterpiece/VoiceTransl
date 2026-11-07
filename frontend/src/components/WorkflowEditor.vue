@@ -23,15 +23,18 @@ import NodePreview from './NodePreview.vue'
 import { measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
+import { useProviderProfilesStore } from '../stores/providerProfiles'
 
 const clipId = useId()
-const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
-const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
-const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive)
+const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[]; externalDialogOpen?: boolean }>()
+const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio]; manageProfiles: [] }>()
+const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!props.externalDialogOpen || !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
 const store = useWorkflowStore()
+const profiles = useProviderProfilesStore()
+watch(() => store.capabilities?.nodes.some((node) => !!node.providerProfileInput), (value) => { if (value && !profiles.loaded && !profiles.loading) void profiles.load().catch(() => {}) }, { immediate: true })
 watch(() => resourceBusy.value || batch.manifest.uploading.value, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
@@ -57,12 +60,12 @@ const editMenuOpen = ref(false)
 const editMenuElement = ref<HTMLElement | null>(null)
 const editMenuButton = ref<HTMLButtonElement | null>(null)
 let pendingClose: (() => void) | null = null
-const controlsLocked = computed(() => store.saving || store.validating || store.activeSingleRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
+const controlsLocked = computed(() => !!props.externalDialogOpen || store.saving || store.validating || store.activeSingleRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
 const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading && !drag.value && !resizing.value && !readingImport.value && !pendingImport.value)
 const commands = useEditorCommands(store, {
   stage,
   context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
-  blocked: () => controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value,
+  blocked: () => controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value || !!props.externalDialogOpen,
   pastePoint: () => {
     const bounds = stage.value?.getBoundingClientRect()
     return bounds && bounds.width > 0 && bounds.height > 0
@@ -70,7 +73,7 @@ const commands = useEditorCommands(store, {
   },
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
-const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value)
+const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || !!props.externalDialogOpen)
 type EditorCommand = 'undo' | 'redo' | 'select-all' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'import' | 'export'
 const editorCommands: Array<{ id: EditorCommand; shortcut: string }> = [
   { id: 'undo', shortcut: 'Ctrl/Cmd+Z' }, { id: 'redo', shortcut: 'Ctrl/Cmd+Shift+Z' },
@@ -684,6 +687,7 @@ async function reloadCapabilities() {
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
+  if (props.externalDialogOpen) return 'blocked'
   if (batch.manifest.uploading.value || batch.batches.submitting.value) { store.setError(message('batch.uploadBusy')); return 'blocked' }
   if (readingImport.value || pendingImport.value || clipboardBusy.value) { store.setError(message('workflow.editorImportPending')); return 'blocked' }
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
@@ -754,7 +758,7 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
+defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!props.externalDialogOpen || !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
@@ -852,7 +856,7 @@ onUnmounted(() => {
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
                 <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
                   <div class="node-body" :style="bodyStyle(node)">
-                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" /></div>
+                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" @manage-profiles="emit('manageProfiles')" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
                       <NodeAudioCollection v-if="kind(node)!.resourceInput!.collectionKey && kind(node)!.resourceInput!.resourceType === 'audio'" :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" :manifest="batch.manifest" :mode="batch.collection.mode.value" @mode="batch.collection.setMode($event)" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                       <NodeResourceInput v-else :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />

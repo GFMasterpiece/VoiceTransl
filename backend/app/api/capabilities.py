@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..domain.node_registry import (
@@ -12,7 +12,7 @@ from ..domain.node_registry import (
     port_catalog,
     type_catalog,
 )
-from ..domain.schema import SCHEMA_VERSION
+from ..domain.schema import SCHEMA_VERSION, SchemaVersionError
 from ..domain.workflow import (
     WORKFLOW_GRAPH_CONSTRAINTS,
     WorkflowEdge,
@@ -21,7 +21,7 @@ from ..domain.workflow import (
 )
 
 router = APIRouter(prefix="/api/v1")
-WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.6"
+WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.7"
 
 
 class WorkflowGraphConstraints(BaseModel):
@@ -90,8 +90,39 @@ def _text_output_options(nodes: list[dict[str, object]], key: str) -> list[dict[
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse)
-async def capabilities():
+async def capabilities(request: Request):
     nodes = node_catalog()
+    profile_nodes = [
+        node
+        for node in nodes
+        if (node["presentation"] or {}).get("provider_profile_input") is not None
+    ]
+    try:
+        profiles = request.app.state.store.load_provider_profiles() if profile_nodes else []
+    except SchemaVersionError:
+        raise
+    except (OSError, ValueError) as error:
+        raise HTTPException(
+            422,
+            detail={
+                "error": {
+                    "code": "INVALID_PROVIDER_PROFILES",
+                    "message": "提供商连接配置文件无效",
+                    "details": None,
+                }
+            },
+        ) from error
+    for node in profile_nodes:
+        binding = node["presentation"]["provider_profile_input"]
+        selected = next(
+            field for field in node["config"]["fields"] if field["key"] == binding["config_key"]
+        )
+        selected["type"] = "select"
+        selected["options"] = [
+            {"value": profile.id, "label": profile.display_name}
+            for profile in profiles
+            if profile.enabled and profile.provider_type == binding["provider_type"]
+        ]
     default_graph = default_workflow("capabilities-default")
     return {
         "schema_version": SCHEMA_VERSION,

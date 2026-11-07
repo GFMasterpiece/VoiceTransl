@@ -27,7 +27,7 @@
 - 分层职责、工作流持久化、取消/重启和安全：`docs/architecture.md`。
 - 项目/音频资源、目录、API 与兼容性：`docs/voicetransl_multi_audio_project.md`。
 - 先配置再运行的前端交互：`docs/frontend_workflow.md`。
-- 当前 Web 节点图范围：`docs/architecture.md` 与 `docs/frontend_workflow.md`；当前只保留音频直通和 Mock 验证能力。历史规格不代表当前支持能力。
+- 当前 Web 节点图范围：`docs/architecture.md` 与 `docs/frontend_workflow.md`；支持音频直通、Mock 验证及独立 Qwen 云端识别。历史规格不代表当前支持能力。
 - 已删除的本地 Provider 不作为当前配置或实现依据，不擅自恢复。
 - 留存的连接元数据 CRUD 与兼容边界：`docs/provider_profiles.md`。
 - 已完成里程碑和后续方向：`docs/roadmap.md`。计划项不代表已实现，不能描述为当前可用能力。
@@ -40,11 +40,11 @@
 - 一个项目包含零个或多个音频；空项目可以先编辑图，每个实际音频拥有独立工作流运行、状态、产物和不可变快照。
 - 项目保存公共可编辑图，运行绑定一个音频；旧公共/逐音频阶段配置只读兼容，不参与节点运行，不合并时间轴。
 - HTTP 服务及领域模型使用 FastAPI 和 Pydantic。
-- Web 当前运行入口为节点工作流；默认图只有 `audio_input -> audio_output`，通过 `audio` 端口连接。保留 Mock 验证节点，不提供真实处理 Provider 配置。
+- Web 当前运行入口为节点工作流；默认图只有 `audio_input -> audio_output`，通过 `audio` 端口连接。Mock 节点与独立 `qwen_asr` 云端节点分别维护，不把旧 Provider 配置恢复到 Mock。
 - WebSocket 只用于通知，REST 与文件才是真实状态来源。
-- 当前 Web 节点 Provider 仅保留 Mock；不得将历史实现文档误读为可用的真实处理能力。
-- 当前 Mock 节点不读取密钥；将来真实 Provider 密钥只由服务端解析，不保存进项目或图快照。
-- Provider Profile 仅保留后端连接元数据 CRUD 与旧引用检查，不与当前节点运行集成；旧 Job 的非密钥快照保持可读。`openai_transcribe` 不代表已有云端执行器。
+- Qwen 云端识别以 `spec/cloud-asr-qwen.md` 为范围；其他历史 Provider 和本地模型不代表当前可用能力。
+- Mock 节点不读取密钥；真实 Provider 密钥仅由服务端在执行时从指定环境变量解析，不保存进项目、图快照、产物或日志。
+- Provider Profile 通过目录声明集成到节点；普通运行/批次提交冻结非密钥设置，排队和重试只复制原快照，不补读当前连接。删除检查公共图及旧引用，旧 Job 快照保持可读。`openai_transcribe` 不代表已有云端执行器。
 
 ### 当前前端范围
 
@@ -54,6 +54,7 @@
 - 新建空项目通过仅填写名称的弹窗完成；音频由输入节点选择或上传，上传时明确提供源语言。失败可在同项目重试，上传不自动启动任务。旧上传创建 API 和批量上传工具保留兼容，不再作为当前创建入口。
 - 节点工作流支持画布编辑、目录驱动的 Mock 节点设置、类型端口校验/保存、当前音频运行/取消及历史下载；图按项目保存，运行保存不可变快照，通过 REST 轮询。默认图为音频输入直通音频输出，不执行识别、翻译或转码。
 - 可选 Mock 预处理仅保留 `provider=mock`；Mock ASR 仅保留 `provider=mock` 和示例结果的 `language`。不恢复无效的模型、后端、VAD、分段、Profile、采样率或声道设置；文本输出可导出 Mock 示例，不代表真实识别。
+- Qwen 节点内选择连接、自由模型名、语言及受限 JSON 附加参数，复用文本预览/导出和批处理；连接管理只存环境变量名。刷新不得重载图或丢失草稿、撤销及待上传 File。取消须回收本地传输，远端 RUNNING 可能继续，不能承诺立即删除临时云文件。
 
 ## 后端不变量
 

@@ -18,6 +18,7 @@ from ..domain.workflow import (
     workflow_parameter_sources,
     workflow_snapshot,
 )
+from .workflow_profiles import freeze_workflow_profiles, validate_frozen_workflow_profiles
 from .workflow_runner import execute_workflow_run
 
 logger = logging.getLogger("voicetransl.jobs")
@@ -130,6 +131,10 @@ class JobManager:
                     if _snapshot is not None
                     else workflow_snapshot(document)
                 )
+                if _snapshot is None:
+                    snapshot = freeze_workflow_profiles(self.store, snapshot)
+                else:
+                    validate_frozen_workflow_profiles(snapshot)
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",

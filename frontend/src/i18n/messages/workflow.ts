@@ -1,5 +1,7 @@
 export const workflowMessages = {
   "zh-CN": {
+    "node_qwen_asr_label": "Qwen 语音识别", "node_qwen_asr_add": "Qwen 语音识别", "field_qwen_asr_provider_profile_id": "服务连接", "field_qwen_asr_model": "模型", "field_qwen_asr_language": "识别语言", "field_qwen_asr_additional_parameters": "附加参数",
+    "description_qwen_asr_provider_profile_id": "选择匹配的服务连接；图中仅保存连接标识。", "description_qwen_asr_model": "填写服务商支持且符合此接口协议的模型名称。", "description_qwen_asr_language": "留空使用输入音频已声明的语言；接线时由参数值覆盖。", "description_qwen_asr_additional_parameters": "可选模型参数（JSON 对象）；不能覆盖音频、语言或认证等核心字段。",
     "field_audio_output_naming_mode": "命名方式", "field_text_output_naming_mode": "命名方式",
     "option_audio_output_naming_mode_exact": "完整名称", "option_text_output_naming_mode_exact": "完整名称",
     "option_audio_output_naming_mode_prefix_sequence": "前缀＋编号", "option_text_output_naming_mode_prefix_sequence": "前缀＋编号",
@@ -356,6 +358,8 @@ export const workflowMessages = {
     "error_INVALID_TEXT_FORMAT": "文本输出格式无效，请选择可用格式。"
   },
   "en": {
+    "node_qwen_asr_label": "Qwen speech recognition", "node_qwen_asr_add": "Qwen speech recognition", "field_qwen_asr_provider_profile_id": "Service connection", "field_qwen_asr_model": "Model", "field_qwen_asr_language": "Recognition language", "field_qwen_asr_additional_parameters": "Additional parameters",
+    "description_qwen_asr_provider_profile_id": "Choose a compatible connection. The graph stores only its ID.", "description_qwen_asr_model": "Enter a provider-supported model that uses this API protocol.", "description_qwen_asr_language": "Leave blank to use the input audio’s declared language. A connected parameter overrides this value.", "description_qwen_asr_additional_parameters": "Optional model parameters (JSON object). Audio, language, and authentication fields cannot be overridden.",
     "field_audio_output_naming_mode": "Naming mode", "field_text_output_naming_mode": "Naming mode",
     "option_audio_output_naming_mode_exact": "Exact name", "option_text_output_naming_mode_exact": "Exact name",
     "option_audio_output_naming_mode_prefix_sequence": "Prefix + sequence", "option_text_output_naming_mode_prefix_sequence": "Prefix + sequence",

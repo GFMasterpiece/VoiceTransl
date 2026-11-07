@@ -7,6 +7,7 @@ import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import { TransferError, validateTransferGraph } from '../workflow/editorTransfer'
+import { providerErrorLabel, type ProviderProfile } from './providerProfiles'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = string
@@ -84,6 +85,7 @@ export interface WorkflowDocumentInput {
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
 }
+export interface WorkflowSnapshot extends WorkflowDocumentInput { provider_profiles_snapshot?: Record<string, ProviderProfile> | null }
 
 export interface WorkflowDocument extends WorkflowDocumentInput {
   schema_version: string
@@ -156,7 +158,7 @@ export interface WorkflowRun {
   finished_at: string | null
   cancel_requested: boolean
   error: WorkflowError | null
-  workflow: WorkflowDocumentInput
+  workflow: WorkflowSnapshot
   nodes: WorkflowNodeRun[]
 }
 
@@ -196,7 +198,7 @@ export function workflowErrorLabel(error: WorkflowError): string {
   const key = `workflow.error_${code}`
   if (code && hasMessage(key)) return t(key)
   const apiKey = `common.api.${code}`
-  return code && hasMessage(apiKey) ? t(apiKey) : error.message
+  return code && hasMessage(apiKey) ? t(apiKey) : providerErrorLabel(error) || error.message
 }
 
 export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInput {
@@ -465,6 +467,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   let cancelSequence = 0
   let outputSequence = 0
   let pollTimer: ReturnType<typeof setTimeout> | null = null
+  let capabilityRefreshSequence = 0
+  let capabilityRefreshController: AbortController | null = null
   const stopped = ref(true)
 
   interface EditorSnapshot { graph: WorkflowDocumentInput; selection: string[]; primary: string | null }
@@ -724,6 +728,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } finally {
       capabilitiesLoading.value = false
     }
+  }
+  async function refreshCapabilities() {
+    const sequence = ++capabilityRefreshSequence
+    capabilityRefreshController?.abort()
+    const controller = new AbortController()
+    capabilityRefreshController = controller
+    const value = await fetchCapabilities(controller.signal)
+    if (sequence === capabilityRefreshSequence) {
+      capabilities.value = value
+      capabilitiesErrorState.set('')
+    }
+    return value
   }
 
   async function load(id: string, aid: string | null) {
@@ -1285,6 +1301,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function stop() {
+    capabilityRefreshSequence++
+    capabilityRefreshController?.abort()
     cancelHistoryTransaction()
     resetEditorHistory()
     stopped.value = true
@@ -1325,7 +1343,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    capabilities, capabilitiesError, capabilitiesLoading, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
+    capabilities, capabilitiesError, capabilitiesLoading, refreshCapabilities, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, boundAudioIds, setAudioContext,
     runMatchesDraft, nodeMinimums, setNodeMinimum, getNodeSize,

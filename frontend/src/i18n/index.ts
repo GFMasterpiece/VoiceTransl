@@ -5,6 +5,7 @@ import { workflowMessages } from './messages/workflow'
 import { workflowPanelMessages } from './messages/workflowPanels'
 import { editorOperationMessages } from './messages/editorOperations'
 import { batchMessages } from './messages/batch'
+import { profileMessages } from './messages/profiles'
 
 export type Locale = 'zh-CN' | 'en'
 export type MessageParams = Record<string, string | number>
@@ -18,8 +19,8 @@ export const i18n = createI18n({
   missingWarn: false,
   fallbackWarn: false,
   messages: {
-    'zh-CN': { batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
-    en: { batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
+    'zh-CN': { profiles: profileMessages['zh-CN'], batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
+    en: { profiles: profileMessages.en, batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
   },
 })
 

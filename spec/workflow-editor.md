@@ -6,7 +6,7 @@
 
 最终的 VoiceTransl 应提供类似 ComfyUI 的节点图编辑体验：用户能在画布上配置工作流节点及连接，主动设定处理路径，并独立配置各节点。ComfyUI 是交互范例，不是要求复制其全部功能。
 
-当前 Web 入口仅保留最简 `audio_input -> audio_output` 工作流及可选 Mock 验证能力。真实处理 Provider 与旧固定阶段工作区已退役，不代表当前功能。当前范围见 [`../docs/product_requirements.md`](../docs/product_requirements.md)、[`../docs/frontend_workflow.md`](../docs/frontend_workflow.md) 和 [`../docs/architecture.md`](../docs/architecture.md)。
+当前默认图仍为 `audio_input -> audio_output`，已按独立规格实现编辑器操作、批处理、Mock及Qwen识别节点；本整体草案不代表剩余目标已实现。旧固定阶段工作区及历史Provider不作为当前能力。当前范围见 [`../docs/product_requirements.md`](../docs/product_requirements.md)、[`../docs/frontend_workflow.md`](../docs/frontend_workflow.md) 和 [`../docs/architecture.md`](../docs/architecture.md)。
 
 ## 已对齐的方向
 

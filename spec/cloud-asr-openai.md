@@ -8,7 +8,7 @@
 
 在节点工作流中增加首个云端识别 Provider，将服务端识别结果转换为统一结构化结果。音频只在用户明确选择云端处理后发送到所选服务商；前端不直接调用服务商。
 
-当前 ASR 节点未作为真实处理能力开放，仅有 Mock 验证节点。此前 Provider Profile 的存储/API 说明见 [`../docs/provider_profiles.md`](../docs/provider_profiles.md)，但尚无云端 ASR 请求或可用配置界面。
+本草案只讨论未实施的 OpenAI 协议。首个云端节点已另选 Qwen Filetrans，见[Qwen规格](cloud-asr-qwen.md)；其连接管理和快照可供后续接入参考，但不表示本草案接口已批准或实现。现行Profile行为见 [`../docs/provider_profiles.md`](../docs/provider_profiles.md)。
 
 ## 首版范围建议
 

@@ -5,6 +5,8 @@ import { useProjectDetailStore } from './stores/projectDetail'
 import { useWorkflowStore } from './stores/workflow'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import CanvasDialog from './components/CanvasDialog.vue'
+import ProviderProfilesDialog from './components/ProviderProfilesDialog.vue'
+import { useProviderProfilesStore } from './stores/providerProfiles'
 import { locale, message, messageRef, setLocale, t } from './i18n'
 
 type View = 'list' | 'detail'
@@ -15,6 +17,8 @@ const workflowStore = useWorkflowStore()
 const view = ref<View>('list')
 const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
 const createOpen = ref(false)
+const profilesOpen = ref(false)
+const profiles = useProviderProfilesStore()
 const createPreparing = ref(false)
 const createError = messageRef()
 const projectName = ref('')
@@ -35,9 +39,13 @@ const workflowLeaveError = computed(() => {
   return ''
 })
 
-function guardCreateNavigation() { return !formBusy.value }
+function guardCreateNavigation() { return !formBusy.value && !profilesOpen.value }
+function showProfiles() {
+  if (createOpen.value || profilesOpen.value || formBusy.value || audioContextLocked.value || workflowEditor.value?.hasOpenDialog()) return
+  profilesOpen.value = true
+}
 function guardUnload(event: BeforeUnloadEvent) {
-  if (!formBusy.value) return
+  if (!formBusy.value && !profiles.busy) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -208,6 +216,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', guardUnload)
 })
 onUnmounted(() => {
+  profiles.stop()
   workflowStore.stop()
   detail.stop()
   window.removeEventListener('beforeunload', guardUnload)
@@ -223,7 +232,7 @@ onUnmounted(() => {
     </header>
 
     <main class="main-content">
-      <section v-if="view !== 'detail'" class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button></div></section>
+      <section v-if="view !== 'detail'" class="page-heading"><div><p class="eyebrow">{{ t('app.eyebrow') }}</p><h1>{{ pageTitle }}</h1><p class="subtitle">{{ pageSubtitle }}</p></div><div class="heading-actions"><button class="primary-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate"><span class="button-icon" aria-hidden="true">＋</span>{{ t('app.actions.create') }}</button><button class="secondary-button" type="button" data-open-profiles @click="showProfiles">{{ t('profiles.title') }}</button></div></section>
 
       <div v-if="currentError && !createOpen" class="alert" :class="{ 'workspace-alert': view === 'detail' }" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ currentError }}</span><button type="button" :aria-label="t('app.actions.close')" @click="view === 'detail' ? (detail.error = '', workflowStore.error = '') : (store.error = '')">×</button></div>
 
@@ -236,12 +245,12 @@ onUnmounted(() => {
       </section>
 
       <section v-else class="workspace" :aria-label="t('app.workspace.canvas')">
-        <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded" @batch-uploaded="detail.registerAudio($event, false)">
+        <WorkflowEditor v-if="detail.project && !detail.loading" :key="detail.project.id" ref="workflowEditor" :project="detail.project" :audios="detail.audios" :project-id="detail.project.id" :audio-id="detail.activeAudioId" :audio-name="detail.activeAudio?.source.original_name || t('app.workspace.choose')" @select-audio="focusAudio" @uploaded="audioUploaded" @batch-uploaded="detail.registerAudio($event, false)" :external-dialog-open="profilesOpen" @manage-profiles="showProfiles">
           <template #workspace-header>
             <button class="back-button workspace-header-back" type="button" @click="showList">{{ t('app.workspace.back') }}</button>
             <h1 class="workspace-project-title" :title="detail.project.name">{{ detail.project.name }}</h1>
             <label v-if="detail.audios.length" class="workflow-audio-picker"><span>{{ t('app.workspace.current') }}</span><select :value="detail.activeAudioId || ''" :aria-label="t('app.workspace.switch')" :disabled="audioContextLocked" @change="switchWorkflowAudio"><option v-for="audio in detail.audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option></select></label>
-            <div class="workspace-header-actions">
+            <div class="workspace-header-actions"><button class="secondary-button compact-button" type="button" data-open-profiles :disabled="audioContextLocked" @click="showProfiles">{{ t('profiles.title') }}</button>
               <button class="secondary-button compact-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate">{{ t('app.actions.create') }}</button>
 
               <button class="secondary-button compact-button danger-button" type="button" :aria-label="t('app.actions.deleteProject')" :disabled="detail.anyRunning || audioContextLocked" @click="deleteProject(detail.project.id, detail.project.name)">{{ t('app.actions.deleteProject') }}</button>
@@ -253,7 +262,7 @@ onUnmounted(() => {
           <div class="workspace-header">
             <button class="back-button workspace-header-back" type="button" @click="showList">{{ t('app.workspace.back') }}</button>
             <h1 class="workspace-project-title">{{ pageTitle }}</h1>
-            <div class="workspace-header-actions">
+            <div class="workspace-header-actions"><button class="secondary-button compact-button" type="button" data-open-profiles :disabled="audioContextLocked" @click="showProfiles">{{ t('profiles.title') }}</button>
               <button class="secondary-button compact-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate">{{ t('app.actions.create') }}</button>
 
             </div>
@@ -263,6 +272,7 @@ onUnmounted(() => {
         </div>
       </section>
     </main>
+    <ProviderProfilesDialog :open="profilesOpen" @close="profilesOpen = false" />
     <CanvasDialog class="project-create-modal" :open="createOpen" :title="t('app.title.create')" :close-disabled="formBusy" @close="cancelCreate">
       <form class="create-form" :aria-busy="formBusy" @submit.prevent="submitProject">
         <label class="field-label" for="project-name">{{ t('app.create.name') }} <span>{{ t('app.create.required') }}</span></label>

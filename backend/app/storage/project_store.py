@@ -614,7 +614,18 @@ class FileSystemProjectStore:
     def provider_profile_in_use(self, profile_id: str) -> bool:
         """Return whether an editable project config references a profile."""
 
+        from ..domain.workflow import workflow_provider_profile_inputs
+
         for _, project in self._published_projects():
+            try:
+                workflow = self.load_workflow(project.id)
+            except (OSError, ValueError):
+                workflow = None
+            if workflow is not None and any(
+                node.config.get(binding["config_key"]) == profile_id
+                for node, binding in workflow_provider_profile_inputs(workflow.nodes)
+            ):
+                return True
             for audio in project.audios:
                 try:
                     config = self.scope(project.id, audio.id).load_pipeline_config(project.id)

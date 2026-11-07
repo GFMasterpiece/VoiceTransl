@@ -5,7 +5,7 @@
 ## 1. 分层与运行方式
 
 - Vue 3 前端通过 REST 读写项目、工作流及运行；FastAPI 负责请求校验和错误转换。
-- `domain/` 定义数据、节点契约及通用注册核心；`nodes/` 的独立模块声明内置节点的配置、端口和执行入口；`storage/` 负责文件读写、路径边界和恢复扫描；`application/` 管理运行、取消、并发及媒体产物发布。
+- `domain/` 定义数据、节点契约及通用注册核心；`nodes/` 的独立模块声明内置节点的配置、端口和执行入口；`storage/` 负责文件读写、路径边界和恢复扫描；`application/` 管理运行、取消、并发及媒体产物发布；`adapters/` 隔离云端协议、传输及结果转换。
 - 文件系统是唯一持久数据源。不引入数据库、Redis、Celery 或外部 Worker。
 - 当前只支持单进程、单 Uvicorn worker，使用进程内异步任务；一次图运行占一个全局并发名额，默认额度为 1。
 - 同一音频不能重复运行或排队；不同音频独立排队。工作流内按拓扑顺序逐个执行，支持多输入汇合；仍不提供节点并行。
@@ -21,14 +21,15 @@
 | `audio_input` | 无 → `audio` | 互斥的 `audio_id` 单项或 `audio_ids` 有序资源清单；节点内导入文件/目录，图外逐文件展开；旧 `{}` 使用运行音频上下文 |
 | `preprocess` | `audio` → `audio` | 仅 `provider=mock`，复制直接上游原字节，不转换采样率/声道 |
 | `asr` | `audio`、可选 `language` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
+| `qwen_asr` | `audio`、可选 `language` → `transcript` | 独立连接、自由模型名、语言及附加参数；临时上传、异步识别并转换真实文本/时间戳 |
 | `audio_output` | `audio`、可选 `filename_stem` → 终端 | 安全前缀（默认 `audio-copy`）及 `naming_mode`；新节点默认编号，缺模式旧图原名，复制直接上游字节 |
-| `text_output` | `transcript`、可选 `filename_stem/text_format` → 终端 | 安全前缀（默认 `transcript`）、`naming_mode` 和 `format`（TXT/SRT/VTT/LRC），导出 Mock 文本 |
+| `text_output` | `transcript`、可选 `filename_stem/text_format` → 终端 | 安全前缀（默认 `transcript`）、`naming_mode` 和 `format`（TXT/SRT/VTT/LRC），导出统一转写文本 |
 | `audio_preview` | `audio` → 终端 | 无配置，保存该次输入的预览副本，供节点内播放器读取 |
 | `text_preview` | `transcript` → 终端 | 无配置，保存转写文本表示，供节点内纯文本展示 |
 | `string_value` / `integer_value` / `number_value` / `boolean_value` | 无 → 对应基础值类型 | 参数来源节点，保存 `{value: ...}`；字符串不是 `text` 文件产物，整数可满足数字类型，布尔值不冒充整数或数字 |
 | `source_info` | 无 → `filename/stem/source_language/relative_path/root_name` | 当前运行音频的只读字符串信息；无配置，作为参数根，可接输出命名或 ASR 语言 |
 
-Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示例文本。真实模型、后端、VAD、分段、Provider Profile、采样率、声道及“删除源文件”均不属于当前节点配置。未知字段和非 Mock Provider 明确拒绝，不能静默回退。
+Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示例文本。这些 Mock 节点不接受模型、VAD、分段、Profile、采样率、声道及“删除源文件”配置；未知字段和非 Mock Provider 明确拒绝。真实识别通过独立 Qwen 节点接入，不恢复旧配置，也不在失败时回退 Mock。
 
 图要求恰好一个音频资源源、至少一个终端节点（预览或导出）；额外的显式参数根不计入资源源数量。可达性从资源源和参数根的并集计算，所有节点仍须能到达终端，普通零输入节点不能自行成为合法根。节点可声明多个输入/输出；每个必填输入恰好一条类型兼容连接，可选输入零或一条；一个输出可连接多个下游，同一节点对允许连接不同端口的多条边。内置终端不声明输出端口。允许分支、串联和汇合，拒绝环、孤岛、无效端口、未知节点及危险配置；节点与边各最多 64 个。输入直连输出或预览均合法，不要求存在处理节点或文件导出节点。
 
@@ -64,18 +65,18 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 - 持久化 JSON 使用 UTF-8 与显式 `schema_version=1.0`；仅接受相同版本，含嵌套快照。缺失或不同版本拒绝读取，恢复扫描跳过且不改写错误文件。
 - JSON 与产物使用同目录唯一临时文件，刷新、同步后 `os.replace()` 发布；失败清理本次临时文件，保留旧状态。
 - 存储路径为项目相对 POSIX 路径；解析后必须仍在授权目录。拒绝目录穿越、危险符号链接和 Windows 保留文件名，不能覆盖源文件或其他运行产物。
-- 当前节点不执行外部命令、读取 API Key 或调用真实模型，不依赖旧桌面程序或本地模型工具。跨平台能力需由当前 Web 测试证明，不能根据旧桌面测试宣称已兼容；Windows 无符号链接权限导致的跳过不等于对应场景通过。
+- 当前节点不执行外部命令，不依赖旧桌面或本地模型工具；仅显式 Qwen 云节点读取服务端指定环境变量并调用配置服务，密钥及签名地址不进入日志/产物。跨平台能力需由当前 Web 测试证明，不能根据旧桌面测试宣称已兼容；Windows 无符号链接权限导致的跳过不等于对应场景通过。
 - 面向用户返回稳定错误码，不暴露 traceback、密钥或本机路径。运行数据和个人脚本不入库。
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.6`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.7`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
 
-目录 `1.5` 引入字段可空 `input_port` 及节点 `is_parameter_source`，保留严格命名必填输入数组；参数绑定必须存在、唯一、类型兼容且不是必连端口。`1.6` 在资源声明中增加可空集合键，形状为 `resource_input={resource_type,config_key,collection_key}`；资源字段均由专用控件处理，前端按声明识别和清除可移植导出的绑定。可空的 `creation_default` 只决定新节点配置，缺字段旧配置仍用 `default`，避免显示和执行不一致。可空 `presentation.preview={renderer}` 继续选择预览组件。前端兼容 `1.2–1.5` 的原声明，不按节点名称特判；持久化 schema 仍为 `1.0`，旧文件及运行快照不自动补写。
+目录 `1.5` 引入字段可空 `input_port` 及节点 `is_parameter_source`，保留严格命名必填输入数组；参数绑定必须存在、唯一、类型兼容且不是必连端口。`1.6` 在资源声明中增加可空集合键，形状为 `resource_input={resource_type,config_key,collection_key}`；资源字段均由专用控件处理，前端按声明识别和清除可移植导出的绑定。可空的 `creation_default` 只决定新节点配置，缺字段旧配置仍用 `default`，避免显示和执行不一致。可空 `presentation.preview={renderer}` 继续选择预览组件。前端兼容 `1.2–1.6` 的原声明，不按节点名称特判；持久化 schema 仍为 `1.0`，旧文件及运行快照不自动补写。
 
 `domain/node_contracts.py` 定义自描述契约，`domain/node_registry_core.py` 管理通用实时注册与目录派生，`domain/node_registry.py` 保留旧导入入口并显式组合内置类型与节点。各 `nodes/` 模块拥有配置、声明和执行入口；输出配置不再由目录按 `config_kind` 特判。节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称；边端口 ID 与注册规则保持一致，最多 64 字符。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。节点使用通用 `NodeExecutionError(code,message)` 报告可展示的失败，完成资源清理后通过 `NodeExecutionCancelled` 报告取消；调度器不依赖 ASR 等节点专用异常。`required_input_ports` 逐名声明必填输入，目录中的 `required_inbound` 为其长度；旧未声明命名要求的定义继续将旧计数 0 解释为全可选，其余按全部输入必填派生。调度按每条边的 `source_port → target_port` 组装命名输入，同时校验输入与全部已声明输出的运行时类型。未连接的可选输入不传入；连接了失败上游的可选输入也会阻断当前节点。文件复制、源音频定位与原子发布集中到 `application/workflow_media.py`，调度器不特判内置节点类型。新增已有数据类型的节点通过独立模块与组合入口注册接入，无需修改通用调度器。不能让客户端提交任意导入路径或代码。
 
-每次图运行仍为单源、单音频，批次在图外组织多份音频分别运行；多端口扩展不等同于混音或新增真实节点。每次节点结果仍至多保存一份 artifact 和一份 preview，多份持久导出结果使用独立输出节点。参数转连线与基础值节点见[参数规格](../spec/node-parameters.md)；动态字段、选定输出执行、持久缓存重跑、事件和子图仍分别细化，不作为当前能力；范围与验收见[节点模块化与多端口](../spec/node-modularity.md)。新数据源、视频及真实云端 Provider 需要先确认独立规格。全局 Profile CRUD 的留存不代表云端调用可用，见[Profile 兼容边界](provider_profiles.md)。
+每次图运行仍为单源、单音频，批次在图外组织多份音频分别运行；多端口扩展不等同于混音或新增真实节点。每次节点结果仍至多保存一份 artifact 和一份 preview，多份持久导出结果使用独立输出节点。参数转连线与基础值节点见[参数规格](../spec/node-parameters.md)；动态字段、选定输出执行、持久缓存重跑、事件和子图仍分别细化，不作为当前能力；范围与验收见[节点模块化与多端口](../spec/node-modularity.md)。新数据源、视频及其他云端协议仍需独立规格。目录 `1.7` 新增声明式连接输入，普通运行/批次提交在 `workflow.provider_profiles_snapshot` 冻结所需非密钥连接，排队与重试只复制旧设置；注册声明驱动选项、引用检查和冻结器，调度器不按 Qwen 类型分支。旧快照缺字段省略，不补写。云协议使用可取消异步 HTTP、完整总超时与分块上传，取消等待本地回收并尝试一次有界远端取消，不能保证远端 RUNNING 停止或立即删临时文件。具体配置、数据处理声明和限制见[服务连接](provider_profiles.md)。
 
 ## 7. 文件夹导入与批次调度
 

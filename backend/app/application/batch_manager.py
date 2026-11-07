@@ -21,6 +21,7 @@ from ..domain.workflow import (
     workflow_snapshot,
 )
 from ..storage.batch_store import BatchStore
+from .workflow_profiles import freeze_workflow_profiles, validate_frozen_workflow_profiles
 
 logger = logging.getLogger("voicetransl.batches")
 
@@ -83,10 +84,12 @@ class BatchManager:
                 if issues:
                     raise ValueError("INVALID_WORKFLOW")
                 snapshot = workflow_snapshot(document).model_copy(deep=True)
+                snapshot = freeze_workflow_profiles(self.projects, snapshot)
             else:
                 if retry.status in ACTIVE_BATCH_STATUSES:
                     raise RuntimeError("BATCH_BUSY")
                 snapshot = retry.workflow.model_copy(deep=True)
+                validate_frozen_workflow_profiles(snapshot)
                 states = {"failed", "interrupted"} | ({"cancelled"} if cancelled else set())
                 audio_ids = [item.audio_id for item in retry.items if item.status in states]
                 if not audio_ids:

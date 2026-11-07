@@ -131,7 +131,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
           if (field.minimum !== null && value < field.minimum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
           if (field.maximum !== null && value > field.maximum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
         }
-        if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
+        if (field.type === 'select' && !(value === '' && definition.providerProfileInput?.configKey === field.key) && !field.options.some((option) => option.value === value)) {
           issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
         }
         if (typeof value === 'string') {

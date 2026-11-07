@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp_path):
+async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/capabilities")
@@ -14,7 +14,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.6"
+    assert body["workflow"]["schema_version"] == "1.7"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -45,6 +45,7 @@ async def test_capabilities_publish_only_mock_nodes_and_no_discovery_runtime(tmp
         "number_value",
         "boolean_value",
         "source_info",
+        "qwen_asr",
     }
     assert body["workflow"]["constraints"] == WORKFLOW_GRAPH_CONSTRAINTS
     assert {node_type: node["is_source"] for node_type, node in nodes.items()} == {

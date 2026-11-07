@@ -2,7 +2,8 @@ import { computed, ref, shallowRef } from 'vue'
 import { API_BASE_URL, parseApiError, type ApiError } from '../api'
 import { displayError, hasMessage, message, t } from '../i18n'
 import type { SourceOrigin } from '../stores/projects'
-import type { WorkflowDocumentInput } from '../stores/workflow'
+import { providerErrorLabel } from '../stores/providerProfiles'
+import type { WorkflowSnapshot } from '../stores/workflow'
 import { randomRequestId } from './useBatchManifest'
 
 export interface BatchCounts { queued: number; running: number; completed: number; partial: number; failed: number; cancelled: number; interrupted: number }
@@ -11,7 +12,7 @@ export interface BatchSummary {
   started_at: string | null; finished_at: string | null; cancel_requested: boolean; retry_of: string | null
   total: number; counts: BatchCounts; error: { type: string; message: string } | null
 }
-export interface BatchDetail extends BatchSummary { workflow: WorkflowDocumentInput }
+export interface BatchDetail extends BatchSummary { workflow: WorkflowSnapshot }
 export interface BatchItem {
   sequence?: number | null
   index: number; audio_id: string; audio_name: string; source_language: string; origin: SourceOrigin | null
@@ -26,7 +27,7 @@ export function batchError(reason: unknown) {
   const value = reason as { code?: string; type?: string; message?: unknown }
   const code = value?.code || value?.type
   return code && hasMessage(`batch.error_${code}`) ? t(`batch.error_${code}`)
-    : value && !(reason instanceof Error) && typeof value.message === 'string' ? value.message : displayError(reason)
+    : value && typeof value.message === 'string' ? providerErrorLabel({ ...value, message: value.message }) || (reason instanceof Error ? displayError(reason) : value.message) : displayError(reason)
 }
 function readSummary(value: unknown): BatchSummary {
   const batch = value as BatchSummary

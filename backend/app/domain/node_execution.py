@@ -20,6 +20,14 @@ class NodeExecutionError(RuntimeError):
 class NodeExecutionCancelled(Exception):
     """The node has cancelled its operation and completed resource cleanup."""
 
+    def __init__(self, code: str | None = None, message: str | None = None):
+        self.code = code
+        self.message = message
+        if message is None:
+            super().__init__()
+        else:
+            super().__init__(message)
+
 
 @dataclass(frozen=True)
 class NodeData:

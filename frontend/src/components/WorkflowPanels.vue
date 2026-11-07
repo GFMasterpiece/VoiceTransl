@@ -6,6 +6,7 @@ import { runRecords } from '../workflow/runRecords'
 import CanvasDialog from './CanvasDialog.vue'
 import { useWorkflowExecution } from '../composables/workflowExecution'
 import NodeRunParameters from './NodeRunParameters.vue'
+import CloudWorkflowNotice from './CloudWorkflowNotice.vue'
 
 const props = defineProps<{ panel: 'run' | 'artifacts' | 'logs' | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -66,6 +67,7 @@ async function retryOutputs() {
   <CanvasDialog :open="!!panel" :title="title" @close="emit('close')">
     <div class="workflow-panel-content" :data-panel="panel">
       <template v-if="panel === 'run'">
+        <CloudWorkflowNotice :workflow="store.draft" :audio-count="store.boundAudioIds?.length ?? ((store.boundAudioId || store.audioId) ? 1 : 0)" />
         <section class="workflow-run-panel">
           <div class="workflow-run-heading">
             <div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3>{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div>
@@ -83,6 +85,7 @@ async function retryOutputs() {
           <p v-if="store.runError" class="workflow-run-error" role="alert">{{ store.runError }}</p>
           <p v-if="store.run?.error" class="workflow-run-error" role="alert">{{ workflowErrorLabel(store.run.error) }}</p>
           <div v-if="store.run" class="workflow-run-nodes">
+            <CloudWorkflowNotice :workflow="store.run.workflow" :audio-count="1" historical />
             <article v-for="node in store.run.nodes" :key="node.node_id" class="workflow-run-node">
               <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span></div>
               <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>

@@ -225,7 +225,12 @@ async def execute_workflow_run(
                 record.status = WorkflowNodeStatus.COMPLETED
                 record.finished_at = now()
                 store.save_workflow_run(run)
-            except NodeExecutionCancelled:
+            except NodeExecutionCancelled as error:
+                if error.code is not None or error.message is not None:
+                    record.error = WorkflowNodeError(
+                        type=error.code or "NODE_CANCELLED",
+                        message=error.message or "节点运行已取消",
+                    )
                 raise
             except NodeExecutionError as error:
                 record.status = WorkflowNodeStatus.FAILED

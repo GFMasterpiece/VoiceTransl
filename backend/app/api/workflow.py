@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from ..application.workflow_profiles import ProfileSnapshotError
 from ..domain import (
     WorkflowDocument,
     WorkflowEdge,
@@ -143,6 +144,8 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
     _audio(request, pid, aid)
     try:
         return await request.app.state.jobs.start_workflow(pid, aid, body.workflow_revision)
+    except ProfileSnapshotError as error:
+        raise HTTPException(422, detail=_error(error.code, str(error))) from error
     except RuntimeError as error:
         if str(error) == "WORKFLOW_REVISION_CONFLICT":
             raise HTTPException(

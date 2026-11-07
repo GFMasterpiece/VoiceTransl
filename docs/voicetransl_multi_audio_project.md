@@ -77,6 +77,12 @@ data/projects/<project-id>/
 
 产物以 `artifact_id/port/filename/media_type/size_bytes/sha256/download_url` 描述，不从文件名推断业务类型。`naming_mode` 缺失或 exact 保持原名，prefix_sequence 生成 `前缀_00001` 加实际扩展名；普通运行编号 1，批次沿用固定序号，缺失有效序号报 `OUTPUT_SEQUENCE_UNAVAILABLE`。配置及 effective_config 保留前缀，artifact/ZIP 使用完整实际名。输出名称拒绝路径、控制字符、危险字符、Windows 保留名称及尾点等；各运行/节点目录隔离，不覆盖历史或源文件。
 
+## 云端连接快照
+
+`qwen_asr` 与原 Mock 节点独立，沿用同一单运行和批次接口。提交时按目录的连接声明冻结 `workflow.provider_profiles_snapshot`（键为Profile ID，值为非密钥Profile）；批次对子运行和重试复制原快照，不读最新连接。缺字段旧记录保持未记录，不补写；云节点缺冻结连接明确拒绝执行。嵌套Profile同样要求显式 `schema_version=1.0`。
+
+提交前的缺连接、停用、类型不符、缺地址/环境变量名及坏文件等由API返回稳定422错误；缺实际密钥在节点执行时失败。新取消详情可保存在当前节点error中，最终运行仍为cancelled，不表示远端已终止。Profile删除检查公共可编辑图和旧配置引用；历史快照不单独阻止删除。详见[服务连接](provider_profiles.md)。
+
 ## 旧数据兼容边界
 
 - `GET /projects/{pid}/config` 读取旧公共配置；逐音频 `/config` 读取对应旧覆盖。主音频优先 `primary-config.json`，再根 `config.json`，缺失时使用兼容默认值；其他音频优先自身配置，再适配语言的公共默认。

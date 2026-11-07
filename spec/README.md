@@ -23,7 +23,8 @@
 | [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
 | [文件夹音频批处理](batch-processing.md) | Implemented | 多目录导入、固定快照逐文件调度、取消/重试及批次结果 |
 | [输入节点资源清单与编号输出](node-batch-input.md) | Implemented | 输入节点导入、统一单/批运行、输出前缀与稳定编号 |
-| [可视化节点工作流编辑器](workflow-editor.md) | Draft | 目标方向；当前仅保留音频直通和 Mock 验证能力 |
-| [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | 云端服务商、协议和节点接入范围待确定，尚未实现 |
+| [Qwen 录音文件识别](cloud-asr-qwen.md) | Implemented | 独立云端识别节点、临时上传、连接管理与冻结快照 |
+| [可视化节点工作流编辑器](workflow-editor.md) | Draft | 整体目标；当前音频直通、Mock、编辑器、批次及Qwen能力见各独立规格 |
+| [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | OpenAI协议尚未实现；首个云端节点采用独立Qwen规格 |
 
 整体产品方向见 [`../docs/product_requirements.md`](../docs/product_requirements.md)，阶段与进度见 [`../docs/roadmap.md`](../docs/roadmap.md)。首个音频直通里程碑的 Retired 摘要已合并至线路图，原规格可从 Git 历史追溯。规格获批和实现后才把稳定行为沉淀为 `docs/` 契约，不在两处重复维护完整细节。

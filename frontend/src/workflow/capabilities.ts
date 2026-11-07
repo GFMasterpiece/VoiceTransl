@@ -34,6 +34,7 @@ export interface CapabilityField {
   description: string
 }
 export interface CapabilityNode {
+  providerProfileInput?: ProviderProfileInput | null
   type: string
   label: string
   addLabel: string
@@ -52,6 +53,13 @@ export interface CapabilityNode {
   positionX: number | null
   resourceInput?: { resourceType: string; configKey: string; collectionKey?: string | null } | null
   preview?: { renderer: string } | null
+}
+export interface ProviderProfileInput {
+  configKey: string
+  providerType: string
+  label: string
+  defaults: { base_url: string; api_key_env: string; default_timeout: number }
+  dataHandling?: { temporaryUploadRetentionHours?: number | null; remoteCancelPendingOnly?: boolean | null } | null
 }
 export interface CapabilityAsr {
   providers: readonly CapabilityOption[]
@@ -162,7 +170,7 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown, namedInputs = false, parameters = false, collections = false): CapabilityNode {
+function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   if (parameters && typeof item.is_parameter_source !== 'boolean') fail('workflow.capParameter')
   if (!safeNodeType(item.type) || typeof item.label !== 'string' || !item.label.trim()) fail('workflow.capNodeId')
@@ -187,6 +195,27 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (new Set(mappedPorts).size !== mappedPorts.length || mappedPorts.some((port) => !inputPorts.includes(port) || requiredInputPorts.includes(port))) fail('workflow.capParameter')
   const presentation = item.presentation == null ? {} : object(item.presentation, 'workflow.capPresentation')
   const resource = presentation.resource_input == null ? null : object(presentation.resource_input, 'workflow.capPresentation')
+  let providerProfileInput: ProviderProfileInput | null = null
+  if (profiles && presentation.provider_profile_input != null) {
+    const profile = object(presentation.provider_profile_input, 'profiles.invalidCapability')
+    const defaults = object(profile.defaults, 'profiles.invalidCapability')
+    const profileField = parsedFields.find((field) => field.key === profile.config_key)
+    if (Object.keys(profile).some((key) => !['config_key', 'provider_type', 'label', 'defaults', 'data_handling'].includes(key))
+      || !safeIdentifier(profile.config_key) || !safeIdentifier(profile.provider_type) || typeof profile.label !== 'string' || !profile.label.trim()
+      || !profileField || profileField.type !== 'select' || profileField.inputPort !== null
+      || Object.keys(defaults).length !== 3 || Object.keys(defaults).some((key) => !['base_url', 'api_key_env', 'default_timeout'].includes(key))
+      || typeof defaults.base_url !== 'string' || !defaults.base_url || typeof defaults.api_key_env !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(defaults.api_key_env)
+      || !Number.isInteger(defaults.default_timeout) || Number(defaults.default_timeout) < 1) fail('profiles.invalidCapability')
+    try { const url = new URL(defaults.base_url); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) fail('profiles.invalidCapability') } catch { fail('profiles.invalidCapability') }
+    providerProfileInput = { configKey: profile.config_key, providerType: profile.provider_type, label: profile.label, defaults: defaults as ProviderProfileInput['defaults'] }
+    if (profile.data_handling != null) {
+      const handling = object(profile.data_handling, 'profiles.invalidCapability')
+      if (Object.keys(handling).some((key) => !['temporary_upload_retention_hours', 'remote_cancel_pending_only'].includes(key))
+        || (handling.temporary_upload_retention_hours != null && (typeof handling.temporary_upload_retention_hours !== 'number' || !Number.isFinite(handling.temporary_upload_retention_hours) || handling.temporary_upload_retention_hours <= 0))
+        || (handling.remote_cancel_pending_only != null && typeof handling.remote_cancel_pending_only !== 'boolean')) fail('profiles.invalidCapability')
+      providerProfileInput.dataHandling = { temporaryUploadRetentionHours: handling.temporary_upload_retention_hours as number | null | undefined, remoteCancelPendingOnly: handling.remote_cancel_pending_only as boolean | null | undefined }
+    }
+  }
   if (collections && resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key'].includes(key))
     || (resource.collection_key !== null && (!safeIdentifier(resource.collection_key) || resource.collection_key === resource.config_key
       || !parsedFields.some((field) => field.key === resource.collection_key && field.type === 'json'))))) fail('workflow.capPresentation')
@@ -196,6 +225,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (resource && parsedFields.some((field) => (field.key === resource.config_key || (collections && field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
   if (parameters && item.is_parameter_source && (item.is_source === true || inputPorts.length || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
   return {
+    ...(profiles ? { providerProfileInput } : {}),
     resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), ...(collections ? { collectionKey: resource.collection_key as string | null } : {}) } : null,
     preview: preview ? { renderer: String(preview.renderer) } : null,
     type: item.type,
@@ -227,10 +257,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, workflow.schema_version === '1.6'))
+  const parameters = ['1.5', '1.6', '1.7'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7'].includes(String(workflow.schema_version)), workflow.schema_version === '1.7'))
   if (new Set(nodes.map((entry) => entry.type)).size !== nodes.length) fail('workflow.capDuplicateNodes')
   const ports = workflow.ports === undefined
     ? [...new Set(nodes.flatMap((entry) => [...entry.inputPorts, ...entry.outputPorts]))].map((id) => ({ id, typeId: id, label: id, capabilityRequirements: [] as string[] }))

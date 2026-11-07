@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Callable
 
@@ -12,6 +13,7 @@ from .node_contracts import NodeConfigCapability as NodeConfigCapability
 from .node_contracts import NodeDefinition as NodeDefinition
 from .node_contracts import PortDefinition as PortDefinition
 from .node_execution import NodeResult
+from .provider_profile import ProviderProfile
 
 TYPE_DEFINITIONS: dict[str, DataTypeDefinition] = {}
 PORT_DEFINITIONS: dict[str, PortDefinition] = {}
@@ -212,7 +214,66 @@ def _catalog_presentation(definition):
     binding = _resource_binding(definition)
     if binding is not None:
         presentation["resource_input"] = binding
+    profile_binding = _provider_profile_binding(definition)
+    if profile_binding is not None:
+        presentation["provider_profile_input"] = profile_binding
     return presentation
+
+
+def _provider_profile_binding(definition):
+    binding = (definition.presentation or {}).get("provider_profile_input")
+    if binding is None:
+        return None
+    if (
+        not isinstance(binding, dict)
+        or set(binding) - {"config_key", "provider_type", "label", "defaults", "data_handling"}
+        or not {"config_key", "provider_type", "label", "defaults"} <= set(binding)
+        or any(
+            not isinstance(binding.get(key), str) or not binding[key].strip()
+            for key in ("config_key", "provider_type", "label")
+        )
+    ):
+        raise ValueError("invalid provider profile input declaration")
+    defaults = binding["defaults"]
+    if (
+        not isinstance(defaults, dict)
+        or set(defaults) != {"base_url", "api_key_env", "default_timeout"}
+        or not isinstance(defaults["base_url"], str)
+        or not isinstance(defaults["api_key_env"], str)
+        or type(defaults["default_timeout"]) is not int
+    ):
+        raise ValueError("invalid provider profile defaults")
+    ProviderProfile(
+        id="connection_defaults",
+        provider_type=binding["provider_type"],
+        display_name=binding["label"],
+        **defaults,
+    )
+    field = next((item for item in definition.fields if item.key == binding["config_key"]), None)
+    if field is None or field.type != "string":
+        raise ValueError("provider profile binding requires a declared string field")
+    if field.input_port is not None:
+        raise ValueError("provider profile bindings cannot be connected parameters")
+    result = {**binding, "defaults": dict(defaults)}
+    if "data_handling" in binding:
+        handling = binding["data_handling"]
+        if (
+            not isinstance(handling, dict)
+            or set(handling) != {"temporary_upload_retention_hours", "remote_cancel_pending_only"}
+            or type(handling["remote_cancel_pending_only"]) is not bool
+        ):
+            raise ValueError("invalid provider data handling declaration")
+        hours = handling["temporary_upload_retention_hours"]
+        try:
+            valid = hours is None or (
+                type(hours) in {int, float} and hours > 0 and math.isfinite(hours)
+            )
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError("upload retention hours must be a positive finite number or null")
+        result["data_handling"] = dict(handling)
+    return result
 
 
 def validate_node_definition(definition: NodeDefinition) -> None:
@@ -246,6 +307,7 @@ def validate_node_definition(definition: NodeDefinition) -> None:
     if len(set(field_keys)) != len(field_keys):
         raise ValueError("configuration field keys must be unique")
     resource_input = _resource_binding(definition)
+    _provider_profile_binding(definition)
     bound_ports = [item.input_port for item in definition.fields if item.input_port is not None]
     if len(set(bound_ports)) != len(bound_ports):
         raise ValueError("parameter input bindings must be unique")
