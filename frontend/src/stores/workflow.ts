@@ -17,10 +17,13 @@ export type InputPortName = string
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled' | 'interrupted'
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted'
 export const WORKFLOW_NODE_WIDTH = 188
+export const WORKFLOW_NODE_FORM_WIDTH = 272
+export const WORKFLOW_NODE_CONNECTION_WIDTH = 336
 export const WORKFLOW_NODE_HEIGHT = 92
 export const WORKFLOW_NODE_PORT_Y = 45
 export const WORKFLOW_NODE_FIELDS_Y = 62
 export const WORKFLOW_NODE_PORT_ROW_HEIGHT = 24
+export const WORKFLOW_NODE_BODY_BOTTOM = 12
 export function workflowNodeFieldsY(type: NodeType, registry: NodeRegistry): number {
   const count = Math.max(registry.inputPortsForNode(type).length, registry.outputPortsForNode(type).length, 1)
   return WORKFLOW_NODE_FIELDS_Y + (count - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT
@@ -30,9 +33,9 @@ export function workflowPortY(type: NodeType, port: PortName, direction: 'input'
   const index = ports.indexOf(port)
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
-export const WORKFLOW_NODE_FIELD_HEIGHT = 44
+export const WORKFLOW_NODE_FIELD_HEIGHT = 72
 export function workflowFieldHeight(field: { type: string }): number {
-  return field.type === 'json' ? 108 : WORKFLOW_NODE_FIELD_HEIGHT
+  return field.type === 'json' ? 152 : WORKFLOW_NODE_FIELD_HEIGHT
 }
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
@@ -50,7 +53,7 @@ export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeI
   const kind = registry.kind(type)
   const bodyY = workflowNodeFieldsY(type, registry)
   return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges)
-    + (kind?.resourceInput ? kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + 10)
+    + (kind?.resourceInput ? kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + WORKFLOW_NODE_BODY_BOTTOM)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNodeSize {
@@ -70,6 +73,8 @@ export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { i
   const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
   return {
     width: Math.max(registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
+      registry?.kind(node.type)?.fields.length ? WORKFLOW_NODE_FORM_WIDTH : 0,
+      registry?.kind(node.type)?.inlineConnectionInput || registry?.kind(node.type)?.providerProfileInput ? WORKFLOW_NODE_CONNECTION_WIDTH : 0,
       dimension(node.size?.width), dimension(measuredMin?.width)),
     height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges) : WORKFLOW_NODE_HEIGHT,
       dimension(node.size?.height), dimension(measuredMin?.height)),

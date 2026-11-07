@@ -3,7 +3,7 @@ import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import WorkflowEditor from './components/WorkflowEditor.vue'
 import {
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_PORT_Y, workflowNodeHeight, workflowFieldsHeight,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_PORT_Y, WORKFLOW_NODE_FIELD_HEIGHT, WORKFLOW_NODE_ROW_GAP, workflowNodeHeight, workflowFieldsHeight, workflowNodeSize,
   cloneDocument, createDefaultWorkflow, executionSignature, nextNodePosition,
   resolveArtifactUrl, useWorkflowStore, validateNodeConfig,
   type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun, type WorkflowRunSummary,
@@ -509,14 +509,14 @@ describe('workflow validation and helpers', () => {
 
   it('places every new node without overlapping any existing node rectangle', () => {
     const firstPre = nextNodePosition('preprocess', [input, output], testRegistry)
-    expect(firstPre).toEqual({ x: 286, y: 264 })
+    expect(firstPre).toEqual({ x: 286, y: output.position.y + workflowNodeHeight(output.type, testRegistry) + WORKFLOW_NODE_ROW_GAP })
     const secondPre = nextNodePosition('preprocess', [input, output, { ...preprocess, position: firstPre }], testRegistry)
-    expect(secondPre).toEqual({ x: 286, y: 408 })
-    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: 408 })
+    expect(secondPre).toEqual({ x: 286, y: firstPre.y + workflowNodeHeight(preprocess.type, testRegistry) + WORKFLOW_NODE_ROW_GAP })
+    expect(nextNodePosition('audio_output', [input, output, { ...preprocess, position: firstPre }], testRegistry)).toEqual({ x: 420, y: secondPre.y })
     expect(nextNodePosition('audio_output', [{ ...input, position: { x: 80, y: 120 } }], testRegistry)).toEqual({ x: 500, y: 120 })
     const all = [input, output, { ...preprocess, position: firstPre }, { ...preprocess, id: 'preprocess-2', position: secondPre }]
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
-      const overlapX = Math.min(all[i].position.x + WORKFLOW_NODE_WIDTH, all[j].position.x + WORKFLOW_NODE_WIDTH) - Math.max(all[i].position.x, all[j].position.x)
+      const overlapX = Math.min(all[i].position.x + workflowNodeSize(all[i], testRegistry).width, all[j].position.x + workflowNodeSize(all[j], testRegistry).width) - Math.max(all[i].position.x, all[j].position.x)
       const overlapY = Math.min(all[i].position.y + workflowNodeHeight(all[i].type, testRegistry), all[j].position.y + workflowNodeHeight(all[j].type, testRegistry)) - Math.max(all[i].position.y, all[j].position.y)
       expect(overlapX <= 0 || overlapY <= 0).toBe(true)
     }
@@ -1771,7 +1771,8 @@ describe('workflow editor interactions', () => {
     await addNode('audio_output')
     const transforms = Array.from(root!.querySelectorAll<SVGGElement>('.workflow-node.is-audio_output'))
       .map((item) => item.getAttribute('transform'))
-    expect(transforms).toEqual(['translate(420 120)', 'translate(420 264)', 'translate(420 408)'])
+    const step = workflowNodeHeight('audio_output', useWorkflowStore().registry!) + WORKFLOW_NODE_ROW_GAP
+    expect(transforms).toEqual([`translate(420 120)`, `translate(420 ${120 + step})`, `translate(420 ${120 + step * 2})`])
   })
 
   it('fits all nodes inside a narrow canvas using both dimensions', async () => {
@@ -2688,7 +2689,7 @@ describe('catalog-driven parameter connections', () => {
     await settle(); await frames()
     expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
     expect(control().value).toBe('1e2'); expect(control().disabled).toBe(false)
-    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(44)
+    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(WORKFLOW_NODE_FIELD_HEIGHT)
     expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).not.toBe('none')
     expect(output().size).toEqual({ width: 800, height: 600 }); expect(output().position).toEqual(position)
     store.run = runBody({ status: 'running' }); await settle()

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, ref } from 'vue'
 import { t } from '../i18n'
 import type { NodeRegistry } from '../workflow/nodeRegistry'
-import { workflowFieldHeight, workflowVisibleFields, type WorkflowNode, type WorkflowEdge } from '../stores/workflow'
+import { workflowVisibleFields, type WorkflowNode, type WorkflowEdge } from '../stores/workflow'
 import { useProviderProfilesStore } from '../stores/providerProfiles'
 import ProviderTarget from './ProviderTarget.vue'
 import NodeProviderConnection from './NodeProviderConnection.vue'
+import NodeConfigField from './NodeConfigField.vue'
 import { inlineConnectionActive, inlineConnectionKeys } from '../workflow/providerConnections'
 
 const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: boolean; edges?: readonly WorkflowEdge[] }>()
@@ -16,11 +17,13 @@ const inlineDescriptor = computed(() => props.registry.kind(props.node.type)?.in
 const inlineActive = computed(() => inlineConnectionActive(props.registry.kind(props.node.type), props.node.config))
 const inlineHost = computed(() => { try { return new URL(String(props.node.config[inlineDescriptor.value?.baseUrlKey || ''] || '')).host } catch { return '' } })
 const profileId = computed(() => profileDescriptor.value && typeof props.node.config[profileDescriptor.value.configKey] === 'string' ? props.node.config[profileDescriptor.value.configKey] as string : '')
-const id = useId()
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
 const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey
   && !inlineConnectionKeys(props.registry.kind(props.node.type)).includes(field.key) && !(inlineActive.value && field.key === profileDescriptor.value?.configKey)))
 const visibleKeys = computed(() => new Set(workflowVisibleFields(props.node, props.registry, props.edges).map((field) => field.key)))
+const connectionFields = computed(() => fields.value.filter((field) => field.key === profileDescriptor.value?.configKey))
+const parameterFields = computed(() => fields.value.filter((field) => field.key !== profileDescriptor.value?.configKey))
+const hasConnection = computed(() => !!profileDescriptor.value || !!inlineDescriptor.value)
 type Field = (typeof fields.value)[number]
 function connection(field: Field) { return field.inputPort ? props.edges?.find((edge) => edge.target === props.node.id && edge.target_port === field.inputPort) : undefined }
 function disabled(field: Field) { return props.locked || !!connection(field) }
@@ -58,24 +61,21 @@ function error(field: Field) {
 
 <template>
   <div class="node-config-fields" @pointerdown.stop @click.stop @dblclick.stop @keydown.stop @keyup.stop @wheel.stop>
-    <NodeProviderConnection v-if="inlineDescriptor" :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
-    <div v-if="profileDescriptor || inlineDescriptor" class="node-provider-settings">
-      <div v-if="inlineActive" class="provider-target" :data-inline-provider-target="node.id"><strong>{{ t('profiles.target') }}</strong><span>{{ inlineHost || t('profiles.unknownTarget') }} · {{ node.config[inlineDescriptor!.regionKey] || t('profiles.unknownRegion') }}</span></div>
-      <ProviderTarget v-else-if="profileDescriptor" :id="profileId" :profile="profiles.items.find((profile) => profile.id === profileId)" :provider-type="profileDescriptor.providerType" :label="profileDescriptor.label" :loading="profiles.loading" />
-      <p>{{ t('profiles.cloudNotice') }}</p><p v-if="profileDescriptor?.dataHandling?.temporaryUploadRetentionHours">{{ t('profiles.temporaryRetention', { hours: profileDescriptor.dataHandling.temporaryUploadRetentionHours }) }}</p><p v-if="profileDescriptor?.dataHandling?.remoteCancelPendingOnly">{{ t('profiles.cancelPendingOnly') }}</p>
-      <p v-if="!inlineActive && profiles.error" class="node-field-error">{{ profiles.error }}</p>
-      <button v-if="!inlineActive && profileDescriptor" type="button" class="text-button" data-open-profiles :disabled="locked" @click="emit('manageProfiles')">{{ t('profiles.manage') }}</button>
-    </div>
-    <label v-for="field in fields" v-show="visibleKeys.has(field.key)" :key="field.key" class="node-config-row" :class="{ 'is-json': field.type === 'json', 'has-error': !!error(field) }" :style="{ minHeight: `${workflowFieldHeight(field)}px` }" :title="field.description || field.label">
-      <span class="node-config-label" :title="field.label">{{ field.label }}</span>
-      <select v-if="field.type === 'select' || field.type === 'boolean'" :data-field="field.key" :value="text(field)" :disabled="disabled(field)" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" @change="edit(field, $event)">
-        <template v-if="field.type === 'boolean'"><option value="true">{{ t('workflow.yes') }}</option><option value="false">{{ t('workflow.no') }}</option></template>
-        <template v-else><option v-if="!text(field) && !field.options.some((option) => option.value === '')" value="">{{ t(profileDescriptor?.configKey === field.key ? 'profiles.choose' : 'profiles.chooseValue') }}</option><option v-if="text(field) && !field.options.some((option) => option.value === text(field))" :value="text(field)">{{ t('profiles.unknownOption', { value: text(field) }) }}</option><option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option></template>
-      </select>
-      <textarea v-else-if="field.type === 'json'" :data-field="field.key" :value="text(field)" :disabled="disabled(field)" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" spellcheck="false" @input="edit(field, $event)" />
-      <input v-else type="text" :inputmode="field.type === 'number' || field.type === 'integer' ? 'decimal' : undefined" :data-field="field.key" :value="text(field)" :disabled="disabled(field)" :aria-label="field.label" :aria-invalid="!!error(field)" :aria-describedby="error(field) ? `${id}-${field.key}-error` : undefined" :min="field.minimum ?? undefined" :max="field.maximum ?? undefined" :step="field.type === 'integer' ? 1 : undefined" @input="edit(field, $event)" />
-      <small v-if="error(field)" :id="`${id}-${field.key}-error`" class="node-field-error" :title="error(field)">{{ error(field) }}</small>
-      <small v-if="field.description" class="node-field-description">{{ field.description }}</small>
-    </label>
+    <section v-if="hasConnection" class="node-config-section" data-node-section="connection">
+      <h4 class="node-config-section-title">{{ t('profiles.connectionSettings') }}</h4>
+      <NodeProviderConnection v-if="inlineDescriptor" :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
+      <NodeConfigField v-for="field in connectionFields" :key="field.key" :field="field" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" :placeholder="t('profiles.choose')" @edit="edit(field, $event)" />
+      <div class="node-provider-settings">
+        <div v-if="inlineActive" class="provider-target" :data-inline-provider-target="node.id"><strong>{{ t('profiles.target') }}</strong><span>{{ inlineHost || t('profiles.unknownTarget') }} · {{ node.config[inlineDescriptor!.regionKey] || t('profiles.unknownRegion') }}</span></div>
+        <ProviderTarget v-else-if="profileDescriptor" :id="profileId" :profile="profiles.items.find((profile) => profile.id === profileId)" :provider-type="profileDescriptor.providerType" :label="profileDescriptor.label" :loading="profiles.loading" />
+        <p v-if="!inlineActive && profiles.error" class="node-field-error">{{ profiles.error }}</p>
+        <button v-if="!inlineActive && profileDescriptor" type="button" class="text-button" data-open-profiles :disabled="locked" @click="emit('manageProfiles')">{{ t('profiles.manage') }}</button>
+        <details class="node-help-details" data-node-data-handling><summary>{{ t('profiles.dataHandling') }}</summary><div><p>{{ t('profiles.cloudNotice') }}</p><p v-if="profileDescriptor?.dataHandling?.temporaryUploadRetentionHours">{{ t('profiles.temporaryRetention', { hours: profileDescriptor.dataHandling.temporaryUploadRetentionHours }) }}</p><p v-if="profileDescriptor?.dataHandling?.remoteCancelPendingOnly">{{ t('profiles.cancelPendingOnly') }}</p></div></details>
+      </div>
+    </section>
+    <section v-if="parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
+      <h4 v-if="hasConnection" class="node-config-section-title">{{ t('profiles.processingParameters') }}</h4>
+      <NodeConfigField v-for="field in parameterFields" :key="field.key" :field="field" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
+    </section>
   </div>
 </template>

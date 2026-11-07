@@ -1,4 +1,4 @@
-import { WORKFLOW_NODE_FIELDS_Y, type WorkflowNodeSize } from '../stores/workflow'
+import { WORKFLOW_NODE_BODY_BOTTOM, WORKFLOW_NODE_FIELDS_Y, type WorkflowNodeSize } from '../stores/workflow'
 
 export interface NodeContentMinimum extends WorkflowNodeSize {
   fields: number
@@ -15,14 +15,23 @@ function textWidth(element: SVGTextElement | null): number {
 
 export function measureNodeContent(group: SVGGElement, fallback: NodeContentMinimum): NodeContentMinimum {
   const body = group.querySelector<HTMLElement>('.node-body')
+  const widthOf = (selector: string) => Math.max(0, ...Array.from(group.querySelectorAll<SVGTextElement>(selector), textWidth))
+  const inputWidth = widthOf('.node-port-label-in')
+  const outputWidth = widthOf('.node-port-label-out')
+  const portWidth = inputWidth && outputWidth ? Math.max(inputWidth, outputWidth) * 2 + 28 : Math.max(inputWidth, outputWidth) + 20
+  const width = Math.ceil(Math.max(fallback.width, textWidth(group.querySelector('.node-name')) + 64, portWidth))
+  // SVG attributes are world units. Screen rectangles would change with zoom.
+  const foreignObject = group.querySelector('foreignObject')
+  const declaredWidth = Number(foreignObject?.getAttribute('width'))
+  const currentBodyWidth = Number.isFinite(declaredWidth) && declaredWidth > 0 ? declaredWidth : width - 16
   const host = document.createElement('div')
   host.className = 'node-measure-host'
+  host.style.width = `${Math.max(width - 16, currentBodyWidth)}px`
   host.setAttribute('aria-hidden', 'true')
   host.inert = true
   let fields = fallback.fields
   let resource = fallback.resource
   let preview = fallback.preview
-  let bodyWidth = 0
   try {
     if (body) {
       const clone = body.cloneNode(true) as HTMLElement
@@ -36,19 +45,14 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       clone.querySelectorAll<HTMLInputElement>('input[type="password"], input[data-credential-input]').forEach((element) => { element.value = ''; element.removeAttribute('value') })
       host.append(clone)
       document.body.append(host)
-      bodyWidth = clone.getBoundingClientRect().width
       const height = (selector: string, minimum: number) => Math.max(minimum, Math.ceil(clone.querySelector<HTMLElement>(selector)?.getBoundingClientRect().height || 0))
       fields = height('.node-config-fields', fields)
       resource = height('.node-body-resource', resource)
       preview = height('.node-body-preview', preview)
     }
-    const widthOf = (selector: string) => Math.max(0, ...Array.from(group.querySelectorAll<SVGTextElement>(selector), textWidth))
-    const inputWidth = widthOf('.node-port-label-in')
-    const outputWidth = widthOf('.node-port-label-out')
-    const portWidth = inputWidth && outputWidth ? Math.max(inputWidth, outputWidth) * 2 + 28 : Math.max(inputWidth, outputWidth) + 20
     return {
-      width: Math.ceil(Math.max(fallback.width, textWidth(group.querySelector('.node-name')) + 64, portWidth, bodyWidth + 16)),
-      height: Math.ceil(Math.max(fallback.height, (fallback.bodyY ?? WORKFLOW_NODE_FIELDS_Y) + fields + resource + preview + 10)),
+      width,
+      height: Math.ceil(Math.max(fallback.height, (fallback.bodyY ?? WORKFLOW_NODE_FIELDS_Y) + fields + resource + preview + WORKFLOW_NODE_BODY_BOTTOM)),
       fields, resource, preview, ...(fallback.bodyY === undefined ? {} : { bodyY: fallback.bodyY }),
     }
   } finally { host.remove() }

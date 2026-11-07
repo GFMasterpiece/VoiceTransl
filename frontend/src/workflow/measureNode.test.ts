@@ -21,7 +21,7 @@ describe('node intrinsic content measurement', () => {
     group.append(label)
     const minimum = measureNodeContent(group, { ...fallback, bodyY: 134 })
     expect(minimum.width).toBe(628)
-    expect(minimum.height).toBe(188)
+    expect(minimum.height).toBe(190)
     expect(minimum.bodyY).toBe(134)
   })
 
@@ -47,7 +47,7 @@ describe('node intrinsic content measurement', () => {
       return { ...rect, x: 0, y: 0, top: 0, left: 0, right: rect.width, bottom: rect.height, toJSON: () => ({}) }
     })
     const measured = measureNodeContent(group, fallback)
-    expect(measured).toEqual({ width: 326, height: 272, fields: 80, preview: 120, resource: 0 })
+    expect(measured).toEqual({ width: 224, height: 274, fields: 80, preview: 120, resource: 0 })
     expect(measured.width).toBeLessThan(900)
     expect(document.querySelector('.node-measure-host')).toBeNull()
     expect(group.querySelector('audio')?.getAttribute('src')).toBe('https://example.invalid/audio')
@@ -62,9 +62,30 @@ describe('node intrinsic content measurement', () => {
       const height = this.classList.contains('node-config-fields') ? errorHeight : 0
       return { width, height, x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, toJSON: () => ({}) }
     })
-    expect(measureNodeContent(group, fallback).height).toBe(192)
+    expect(measureNodeContent(group, fallback).height).toBe(194)
     errorHeight = 44
-    expect(measureNodeContent(group, fallback).height).toBe(116)
+    expect(measureNodeContent(group, fallback).height).toBe(118)
     expect(group.querySelector<HTMLElement>('.node-body')?.style.height).toBe('800px')
+  })
+
+  it('measures wrapping at the current world width while keeping the minimum width independent of user size and zoom', () => {
+    fixture()
+    const foreignObject = group.querySelector('foreignObject')!
+    foreignObject.setAttribute('width', '584')
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+      const worldWidth = Number.parseFloat(this.closest<HTMLElement>('.node-measure-host')?.style.width || '0')
+      const height = this.classList.contains('node-config-fields') ? Math.ceil(1200 / worldWidth) * 24 : 0
+      return { width: worldWidth, height, x: 0, y: 0, top: 0, left: 0, right: worldWidth, bottom: height, toJSON: () => ({}) }
+    })
+    const wide = measureNodeContent(group, fallback)
+    foreignObject.setAttribute('width', '224')
+    const narrow = measureNodeContent(group, fallback)
+    expect(wide.width).toBe(narrow.width)
+    expect(wide.width).toBeLessThan(584)
+    expect(narrow.height).toBeGreaterThan(wide.height)
+    group.setAttribute('transform', 'scale(.1)')
+    expect(measureNodeContent(group, fallback)).toEqual(narrow)
+    expect(foreignObject.getAttribute('width')).toBe('224')
+    expect(group.querySelector<HTMLElement>('.node-body')!.style.width).toBe('900px')
   })
 })

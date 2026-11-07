@@ -68,6 +68,17 @@ describe('workflow node dimensions', () => {
     expect(workflowNodeSize(node(), null)).toEqual({ width: 188, height: 92 })
   })
 
+  it('provides usable form width from field metadata while retaining a legacy stored size unchanged', () => {
+    const extended: any = structuredClone(payload)
+    extended.workflow.nodes[1].config.fields = [{ key: 'model', type: 'string', default: 'free-model' }]
+    const formRegistry = createNodeRegistry(readCapabilities(extended))
+    const legacy = { ...node(), size: { width: 188, height: 92 } }
+    expect(workflowNodeSize(legacy, formRegistry).width).toBe(272)
+    expect(workflowNodeSize(legacy, formRegistry).height).toBeGreaterThan(92)
+    expect(legacy.size).toEqual({ width: 188, height: 92 })
+    expect(workflowNodeSize({ ...legacy, size: { width: 600, height: 500 } }, formRegistry)).toEqual({ width: 600, height: 500 })
+  })
+
   it('stores only changed content measurements without persisting or dirtying the draft', () => {
     const store = createStore()
     store.validationIssues = [{ code: 'example', message: 'retain' }]

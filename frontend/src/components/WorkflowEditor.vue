@@ -3,7 +3,7 @@ import { t, locale, message, hasMessage } from '../i18n'
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, useId, watch } from 'vue'
 import {
   workflowIssueLabel,
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, workflowNodeFieldsY, workflowPortY, workflowNodeHeight,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, WORKFLOW_NODE_BODY_BOTTOM, workflowNodeFieldsY, workflowPortY, workflowNodeHeight, workflowNodeSize,
   WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight, workflowVisibleFields,
   executionSignature,
   nodeLabel as registeredNodeLabel,
@@ -381,7 +381,7 @@ const observedBodies = new Set<Element>()
 const measuredNodes = new Set<string>()
 function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
-    bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH,
+    bodyY: fieldsY(node), width: registry.value ? workflowNodeSize({ type: node.type }, registry.value).width : WORKFLOW_NODE_WIDTH,
     height: registry.value ? workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges) : WORKFLOW_NODE_HEIGHT,
     fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
     preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
@@ -405,7 +405,7 @@ function measureContent() {
     if (!node) continue
     // Start from catalog minima every time, never from a previous user size or measurement.
     const minimum = measureNodeContent(group, {
-      bodyY: fieldsY(node), width: WORKFLOW_NODE_WIDTH, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges),
+      bodyY: fieldsY(node), width: workflowNodeSize({ type: node.type }, registry.value).width, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges),
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
@@ -452,7 +452,7 @@ watch(stage, (element) => {
   mutationObserver?.disconnect(); resizeObserver?.disconnect(); observedBodies.clear()
   if (!element) return
   mutationObserver = new MutationObserver(scheduleMeasurement)
-  mutationObserver.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'aria-invalid', 'disabled'] })
+  mutationObserver.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'aria-invalid', 'disabled', 'open', 'width'] })
   resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMeasurement)
   scheduleMeasurement()
 }, { flush: 'post' })
@@ -765,6 +765,7 @@ onMounted(() => {
   void store.load(props.projectId, props.audioId)
   void batch.batches.refreshActivity()
   void document.fonts?.ready.then(scheduleMeasurement)
+  document.fonts?.addEventListener?.('loadingdone', scheduleMeasurement)
   window.addEventListener('pointerdown', outsideMenu, true)
   window.addEventListener('beforeunload', guardUnload)
   window.addEventListener('pointermove', onWindowPointerMove)
@@ -775,6 +776,7 @@ onMounted(() => {
 onUnmounted(() => {
   batch.dispose()
   measurementDisposed = true
+  document.fonts?.removeEventListener?.('loadingdone', scheduleMeasurement)
   if (measurementFrame !== null) cancelAnimationFrame(measurementFrame)
   mutationObserver?.disconnect(); resizeObserver?.disconnect()
   store.resourceUploading = false
@@ -855,7 +857,7 @@ onUnmounted(() => {
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-${node.id}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ nodeLabel(node) }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
-                <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - 10">
+                <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - WORKFLOW_NODE_BODY_BOTTOM">
                   <div class="node-body" :style="bodyStyle(node)">
                     <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" @manage-profiles="emit('manageProfiles')" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
