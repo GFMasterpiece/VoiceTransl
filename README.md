@@ -44,9 +44,11 @@ Windows PowerShell 下如 `npm` 被脚本执行策略阻止，使用 `npm.cmd` �
 
 ## 启动
 
-Windows 本机可以直接双击 `scripts/start-dev.cmd` 一键启动后端、前端并打开页面。`scripts/` 是本机脚本目录，已被 Git 忽略；如果重新克隆仓库，需要自行放入该脚本。脚本默认使用名为 `asmr` 的 Conda 环境；如果环境名不同，可在命令提示符中先设置 `VOICETRANSL_CONDA_ENV`。如果 Conda 不在 PATH 中，可设置 `VOICETRANSL_CONDA_COMMAND` 指向 `conda.bat` 或 `conda.exe`。
+Windows 本机可以直接双击 `scripts/start-dev.cmd` 一键重启后端、前端并打开页面。本机脚本使用后端 `8000`、前端 `5180`：先停止对应的已有项目服务，等待端口释放，再重新启动；无关进程占用或停止权限不足时明确报错，不按名称批量结束 Python/Node。`scripts/` 是本机脚本目录，已被 Git 忽略；如果重新克隆仓库，需要自行放入该脚本及其辅助文件。脚本默认使用名为 `asmr` 的 Conda 环境；如果环境名不同，可在命令提示符中先设置 `VOICETRANSL_CONDA_ENV`。如果 Conda 不在 PATH 中，可设置 `VOICETRANSL_CONDA_COMMAND` 指向 `conda.bat` 或 `conda.exe`。
 
-在两个独立终端启动服务。后端命令从 `backend/` 执行，保持单进程、单 worker：
+运行 `scripts/start-dev.cmd --stop` 可只停止这两个开发服务。重启会中断当前本机任务；脚本先尝试正常停止，再清理未退出的项目进程。
+
+也可在两个独立终端手动启动服务。后端命令从 `backend/` 执行，保持单进程、单 worker：
 
 ```text
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1

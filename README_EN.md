@@ -44,9 +44,11 @@ On Windows PowerShell, use `npm.cmd` for these npm commands if script execution 
 
 ## Start
 
-On Windows, double-click `scripts/start-dev.cmd` to start the backend and frontend in separate windows and open the local UI. The `scripts/` directory is ignored by Git as a local script directory; after cloning the repository, place the script there manually. The script uses the `asmr` Conda environment by default. Set `VOICETRANSL_CONDA_ENV` for another environment, or set `VOICETRANSL_CONDA_COMMAND` to the path of `conda.bat` or `conda.exe` when Conda is not on `PATH`.
+On Windows, double-click `scripts/start-dev.cmd` to restart the backend and frontend in separate windows and open the local UI. The local launcher uses backend port `8000` and frontend port `5180`: it stops the existing project services, waits for their ports to be released, and starts them again. Unrelated listeners or insufficient permissions produce an error; the script never terminates all Python/Node processes by name. The `scripts/` directory is ignored by Git as a local script directory; after cloning the repository, place the launcher and its helper files there manually. The script uses the `asmr` Conda environment by default. Set `VOICETRANSL_CONDA_ENV` for another environment, or set `VOICETRANSL_CONDA_COMMAND` to the path of `conda.bat` or `conda.exe` when Conda is not on `PATH`.
 
-Use two terminals. Start the backend from `backend/`, keeping a single process and worker:
+Use `scripts/start-dev.cmd --stop` to stop these development services without restarting. Restarting interrupts local tasks; the launcher first attempts a normal shutdown, then terminates remaining project processes.
+
+Alternatively, use two terminals to start services manually. Start the backend from `backend/`, keeping a single process and worker:
 
 ```text
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
