@@ -1,12 +1,11 @@
 export const workflowMessages = {
   "zh-CN": {
     "node_qwen_asr_label": "Qwen 语音识别", "node_qwen_asr_add": "Qwen 语音识别", "field_qwen_asr_model": "模型", "field_qwen_asr_language": "识别语言", "field_qwen_asr_additional_parameters": "附加参数",
-    "description_qwen_asr_model": "填写服务商支持且符合此接口协议的模型名称。", "description_qwen_asr_language": "留空使用输入音频已声明的语言；接线时由参数值覆盖。", "description_qwen_asr_additional_parameters": "可选模型参数（JSON 对象）；不能覆盖音频、语言或认证等核心字段。",
+
     "field_audio_output_naming_mode": "命名方式", "field_text_output_naming_mode": "命名方式",
     "option_audio_output_naming_mode_exact": "完整名称", "option_text_output_naming_mode_exact": "完整名称",
     "option_audio_output_naming_mode_prefix_sequence": "前缀＋编号", "option_text_output_naming_mode_prefix_sequence": "前缀＋编号",
-    "outputNamingHint": "前缀＋编号会自动附加 _00001；批次重试保留原始编号，扩展名由输出格式确定。",
-    "description_audio_output_naming_mode": "前缀＋编号会自动附加 _00001；重试保留原始编号，扩展名由输出格式确定。", "description_text_output_naming_mode": "前缀＋编号会自动附加 _00001；重试保留原始编号，扩展名由输出格式确定。",
+
     "capParameter": "能力目录中的参数绑定元数据无效",
     "parameterPortLabel": "{field} · {type}",
     "dataType_string": "字符串",
@@ -38,7 +37,7 @@ export const workflowMessages = {
     "resizeNode": "调整{name}的大小",
     "resizeWidth": "调整{name}的宽度",
     "resizeHeight": "调整{name}的高度",
-    "resizeHelp": "拖动调整大小；方向键微调，Shift 加速，Home 恢复内容最小尺寸。",
+
     "invalidPreview": "运行记录中的预览元数据无效。",
     "capPresentation": "能力目录中的节点展示元数据无效",
     "node_audio_preview_label": "音频预览",
@@ -50,7 +49,7 @@ export const workflowMessages = {
     "resourceMissing": "绑定的资源不可用",
     "resourceUpload": "选择音频文件",
     "resourceFile": "上传节点音频",
-    "resourceDrop": "也可将文件拖到此节点；上传后仍需保存。",
+
     "resourceUploading": "正在上传音频，请等待完成。",
     "resourceUploadFailed": "上传失败，请重试。",
     "resourceTooLarge": "文件超过项目上传大小限制。",
@@ -58,7 +57,7 @@ export const workflowMessages = {
     "previewHistorical": "历史版本 · {id}",
     "previewCurrent": "与画布一致 · {id}",
     "previewUnsupported": "暂不支持预览渲染器：{renderer}",
-    "previewEmpty": "运行此节点后，在这里查看预览。",
+    "previewEmpty": "暂无结果",
     "previewLoading": "正在加载预览…",
     "previewFailed": "预览加载失败，运行结果仍保留。",
     "previewRetry": "重试预览",
@@ -207,27 +206,21 @@ export const workflowMessages = {
     "zoomIn": "放大画布",
     "fit": "适配",
     "resetView": "重置视图",
-    "canvasHelp": "拖动空白处平移 · Ctrl/⌘ + 滚轮缩放 · 在匹配的输入与输出端口之间拖动连线，任一端都可起拖",
+
     "canvasAria": "音频输入、预处理、语音识别与音频/文本输出的节点画布",
     "emptyCanvas": "画布为空",
-    "emptyCanvasHelp": "添加一个输入节点和至少一个输出节点开始。",
+
     "unsaved": "未保存",
     "synced": "已同步",
     "selectNode": "选择一个节点",
-    "description_audio_input": "音频输入 · 只绑定当前焦点音频",
-    "description_preprocess": "音频预处理 · 每个节点生成独立产物，源文件始终保留",
-    "description_asr": "语音识别 · 输出独立 transcript.json，语言为节点独立设置",
-    "description_text_output": "文本输出 · 从直接上游 transcript 导出一种文本格式",
-    "description_audio_output": "音频输出 · 复制直接上游字节与媒体类型",
+
     "nodeId": "节点 ID",
-    "inlineEditHelp": "直接在节点中编辑配置，再统一校验并保存。",
+
     "deletePreprocess": "删除预处理节点",
     "deleteAsr": "删除ASR节点",
     "deleteOutput": "删除输出节点",
     "deleteNode": "删除节点",
-    "preprocessHelp": "Mock 是固定示例，只复制上游原字节以验证链路，不执行真实预处理或媒体转换。源文件始终保留，不会被删除或覆盖。",
-    "asrHelp": "Mock 是固定示例，不执行真实语音识别。语言只用于此节点的示例配置。",
-    "textHelp": "TXT 可无时间戳；SRT、VTT、LRC 需要完整有效时间范围。缺失时间戳只会让该文本输出失败，不影响音频分支。",
+
     "inspectorEmpty": "选择画布中的节点，查看设置和执行状态。",
     "workflowVersion": "工作流版本",
     "documentRevision": "文档修订",
@@ -235,7 +228,7 @@ export const workflowMessages = {
     "historyAudio": "历史音频上下文",
     "workflow": "工作流",
     "runTitle": "运行与产物",
-    "snapshotHelp": "任务启动时固定工作流快照；编辑不会改变已启动或历史运行。",
+
     "cancelling": "提交取消…",
     "cancelRun": "取消运行",
     "starting": "正在启动…",
@@ -255,13 +248,13 @@ export const workflowMessages = {
     "refresh": "刷新",
     "historyEmpty": "历史记录会保留在此项目音频下，旧运行不会被新轮询覆盖。",
     "outputFilename": "输出文件名（不含扩展名）",
-    "audioFilenameHelp": "最多 128 个字符；后端生成安全文件名并按直接上游的媒体类型补扩展名。这里不是本机路径。",
+
     "textOutputFormat": "文本格式",
     "format_txt": "TXT · 纯识别原文",
     "format_srt": "SRT · 字幕",
     "format_vtt": "VTT · 字幕",
     "format_lrc": "LRC · 歌词",
-    "textFormatHelp": "TXT 允许片段没有时间戳；SRT、VTT、LRC 需要完整时间范围。每个文本输出节点只生成一种格式。",
+
     "mockExample": "Mock 固定示例",
     "mockPreprocess": "只复制上游原字节以验证链路，不执行真实预处理或媒体转换。",
     "mockAsr": "不执行真实语音识别；provider 与语言仅用于示例配置。",
@@ -286,9 +279,7 @@ export const workflowMessages = {
     "field_qwen_asr_streaming_timeout_seconds": "超时（秒）",
     "field_qwen_asr_streaming_model": "模型",
     "field_qwen_asr_streaming_language": "识别语言",
-    "description_qwen_asr_streaming_model": "首版仅支持 PCM16 单声道 WAV 文件，经 WebSocket 发送后统一展示识别结果；不提供麦克风或实时字幕。模型可填写采用相同协议的受支持名称。",
-    "description_qwen_asr_streaming_language": "留空使用输入音频声明的语言；语言参数线可覆盖该值。",
-    "description_qwen_asr_streaming_additional_parameters": "可选协议参数（JSON 对象），不能覆盖音频、模型、语言或认证等核心字段。",
+
     "field_qwen_asr_streaming_additional_parameters": "附加参数",
     "field_qwen_asr_base_url": "服务地址",
     "field_qwen_asr_timeout_seconds": "超时（秒）",
@@ -311,18 +302,18 @@ export const workflowMessages = {
     "deleteShortConfirm": "删除节点“{name}”？",
     "textKind": "{format} 文本输出",
     "historyCount": "运行历史 · {count}",
-    "boundAudioHelp": "输入音频：{name}。端口必须同类型连接；新增节点不会静默替换原有连线。",
+
     "version": "版本 {version}",
     "nodeAria": "{name}，{kind}，{status}",
     "inputPort": "输入端口 {port}",
     "optionalPort": "可选",
     "outputPort": "输出端口 {port}",
-    "inputHelp": "输入使用音频资源 {name}；可在输入节点选择或上传，不接受本机路径。",
+
     "nodeReference": "节点 {id}",
     "runSummary": "运行 {id} · 版本 {version} · 创建 {date} · {snapshot}",
     "snapshotArtifact": "快照产物 · {port} · {type} · {size}",
     "download": "下载 {filename}",
-    "textFilenameHelp": "最多 128 个字符；后端按 {format} 格式补扩展名。这里不是本机路径。",
+
     "genericSettings": "{name}设置",
     "genericDescription": "{name} · 配置由服务端能力目录定义",
     "runStatus_pending": "排队中",
@@ -380,12 +371,11 @@ export const workflowMessages = {
   },
   "en": {
     "node_qwen_asr_label": "Qwen speech recognition", "node_qwen_asr_add": "Qwen speech recognition", "field_qwen_asr_model": "Model", "field_qwen_asr_language": "Recognition language", "field_qwen_asr_additional_parameters": "Additional parameters",
-    "description_qwen_asr_model": "Enter a provider-supported model that uses this API protocol.", "description_qwen_asr_language": "Leave blank to use the input audio’s declared language. A connected parameter overrides this value.", "description_qwen_asr_additional_parameters": "Optional model parameters (JSON object). Audio, language, and authentication fields cannot be overridden.",
+
     "field_audio_output_naming_mode": "Naming mode", "field_text_output_naming_mode": "Naming mode",
     "option_audio_output_naming_mode_exact": "Exact name", "option_text_output_naming_mode_exact": "Exact name",
     "option_audio_output_naming_mode_prefix_sequence": "Prefix + sequence", "option_text_output_naming_mode_prefix_sequence": "Prefix + sequence",
-    "outputNamingHint": "Prefix + sequence appends _00001 automatically. Batch retries retain original numbers; output format determines the extension.",
-    "description_audio_output_naming_mode": "Prefix + sequence appends _00001. Retries retain original numbers; output format determines the extension.", "description_text_output_naming_mode": "Prefix + sequence appends _00001. Retries retain original numbers; output format determines the extension.",
+
     "capParameter": "The capability catalog has invalid parameter binding metadata.",
     "parameterPortLabel": "{field} · {type}",
     "dataType_string": "String",
@@ -417,7 +407,7 @@ export const workflowMessages = {
     "resizeNode": "Resize {name}",
     "resizeWidth": "Resize {name} width",
     "resizeHeight": "Resize {name} height",
-    "resizeHelp": "Drag to resize; use arrow keys to adjust, Shift for larger steps, Home to reset to content size.",
+
     "invalidPreview": "The run contains invalid preview metadata.",
     "capPresentation": "The capability catalog contains invalid node presentation metadata.",
     "node_audio_preview_label": "Audio preview",
@@ -429,7 +419,7 @@ export const workflowMessages = {
     "resourceMissing": "Bound resource is unavailable",
     "resourceUpload": "Choose audio file",
     "resourceFile": "Upload node audio",
-    "resourceDrop": "Or drop a file here. Save the workflow after uploading.",
+
     "resourceUploading": "Uploading audio. Please wait.",
     "resourceUploadFailed": "Upload failed. Try again.",
     "resourceTooLarge": "The file exceeds the project upload size limit.",
@@ -437,7 +427,7 @@ export const workflowMessages = {
     "previewHistorical": "Historical version · {id}",
     "previewCurrent": "Matches canvas · {id}",
     "previewUnsupported": "Unsupported preview renderer: {renderer}",
-    "previewEmpty": "Run this node to see a preview here.",
+    "previewEmpty": "No results yet",
     "previewLoading": "Loading preview…",
     "previewFailed": "Preview failed to load. The run result is preserved.",
     "previewRetry": "Retry preview",
@@ -586,27 +576,21 @@ export const workflowMessages = {
     "zoomIn": "Zoom in",
     "fit": "Fit",
     "resetView": "Reset view",
-    "canvasHelp": "Drag empty space to pan · Ctrl/⌘ + scroll to zoom · Drag between matching input and output ports, starting from either end",
+
     "canvasAria": "Node canvas for audio input, preprocessing, speech recognition, and audio/text output",
     "emptyCanvas": "The canvas is empty",
-    "emptyCanvasHelp": "Add an input node and at least one output node to get started.",
+
     "unsaved": "Unsaved",
     "synced": "Synced",
     "selectNode": "Select a node",
-    "description_audio_input": "Audio input · bound only to the currently focused audio",
-    "description_preprocess": "Audio preprocessing · each node produces its own artifact; source files are always preserved",
-    "description_asr": "Speech recognition · produces a separate transcript.json with language configured per node",
-    "description_text_output": "Text output · exports one text format from the direct upstream transcript",
-    "description_audio_output": "Audio output · copies bytes and media type from the direct upstream",
+
     "nodeId": "Node ID",
-    "inlineEditHelp": "Edit fields on the nodes, then validate and save the workflow.",
+
     "deletePreprocess": "Delete preprocessing node",
     "deleteAsr": "Delete ASR node",
     "deleteOutput": "Delete output node",
     "deleteNode": "Delete node",
-    "preprocessHelp": "Mock is a fixed example that copies upstream bytes to verify the workflow. It does not perform real preprocessing or media conversion. Source files are never deleted or overwritten.",
-    "asrHelp": "Mock is a fixed example and does not perform real speech recognition. Language is used only in this node’s example configuration.",
-    "textHelp": "TXT can omit timestamps. SRT, VTT, and LRC require complete, valid time ranges. Missing timestamps fail only this text output, not the audio branch.",
+
     "inspectorEmpty": "Select a node on the canvas to view its settings and execution status.",
     "workflowVersion": "Workflow version",
     "documentRevision": "Document revision",
@@ -614,7 +598,7 @@ export const workflowMessages = {
     "historyAudio": "History audio context",
     "workflow": "Workflow",
     "runTitle": "Runs & artifacts",
-    "snapshotHelp": "A workflow snapshot is fixed when a run starts. Edits do not change active or historical runs.",
+
     "cancelling": "Requesting cancellation…",
     "cancelRun": "Cancel run",
     "starting": "Starting…",
@@ -634,13 +618,13 @@ export const workflowMessages = {
     "refresh": "Refresh",
     "historyEmpty": "Run history stays with this project audio. New polling does not overwrite older runs.",
     "outputFilename": "Output filename (without extension)",
-    "audioFilenameHelp": "Up to 128 characters. The backend generates a safe filename and adds an extension based on the direct upstream media type. This is not a local path.",
+
     "textOutputFormat": "Text format",
     "format_txt": "TXT · original transcript",
     "format_srt": "SRT · subtitles",
     "format_vtt": "VTT · subtitles",
     "format_lrc": "LRC · lyrics",
-    "textFormatHelp": "TXT allows segments without timestamps. SRT, VTT, and LRC require complete time ranges. Each text output node generates one format.",
+
     "mockExample": "Fixed Mock example",
     "mockPreprocess": "Copies upstream bytes only to verify the workflow; no real preprocessing or media conversion.",
     "mockAsr": "Does not perform real speech recognition; provider and language are only example settings.",
@@ -665,9 +649,7 @@ export const workflowMessages = {
     "field_qwen_asr_streaming_timeout_seconds": "Timeout (seconds)",
     "field_qwen_asr_streaming_model": "Model",
     "field_qwen_asr_streaming_language": "Recognition language",
-    "description_qwen_asr_streaming_model": "This release streams PCM16 mono WAV files over WebSocket and displays the combined result when complete. Microphone input and live captions are not provided. Other supported models using the same protocol can be entered.",
-    "description_qwen_asr_streaming_language": "Leave blank to use the audio’s declared language. A connected language parameter overrides this value.",
-    "description_qwen_asr_streaming_additional_parameters": "Optional protocol parameters (JSON object). Audio, model, language and authentication fields cannot be overridden.",
+
     "field_qwen_asr_streaming_additional_parameters": "Additional parameters",
     "field_qwen_asr_base_url": "Service URL",
     "field_qwen_asr_timeout_seconds": "Timeout (seconds)",
@@ -690,18 +672,18 @@ export const workflowMessages = {
     "deleteShortConfirm": "Delete node “{name}”?",
     "textKind": "{format} text output",
     "historyCount": "Run history · {count}",
-    "boundAudioHelp": "Input audio: {name}. Only matching port types can connect. Adding nodes never silently replaces connections.",
+
     "version": "Version {version}",
     "nodeAria": "{name}, {kind}, {status}",
     "inputPort": "Input port {port}",
     "optionalPort": "optional",
     "outputPort": "Output port {port}",
-    "inputHelp": "Input uses audio resource {name}. Choose or upload it on the input node; local paths are not accepted.",
+
     "nodeReference": "Node {id}",
     "runSummary": "Run {id} · Version {version} · Created {date} · {snapshot}",
     "snapshotArtifact": "Snapshot artifact · {port} · {type} · {size}",
     "download": "Download {filename}",
-    "textFilenameHelp": "Up to 128 characters. The backend adds the extension for {format}. This is not a local path.",
+
     "genericSettings": "{name} settings",
     "genericDescription": "{name} · configuration defined by the server capability catalog",
     "runStatus_pending": "Queued",

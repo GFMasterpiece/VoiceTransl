@@ -98,7 +98,7 @@ describe('inline node credentials', () => {
     input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); await settle()
     return input
   }
-  it('remeasures expanded help and late fonts without dragging nodes, changing legacy sizes or losing private input', async () => {
+  it('remeasures validation errors and late fonts without dragging nodes, changing legacy sizes or losing private input', async () => {
     const fontDescriptor = Object.getOwnPropertyDescriptor(document, 'fonts')
     const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() })
     Object.defineProperty(document, 'fonts', { value: fonts, configurable: true })
@@ -106,7 +106,7 @@ describe('inline node credentials', () => {
     const originalRect = HTMLElement.prototype.getBoundingClientRect
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
       if (!this.classList.contains('node-config-fields') || !this.closest('.node-measure-host')) return originalRect.call(this)
-      const height = (this.querySelector<HTMLDetailsElement>('[data-node-data-handling]')?.open ? 1000 : 700) + extraFontHeight
+      const height = (this.querySelector('.node-field-error') ? 1000 : 700) + extraFontHeight
       return { width: 320, height, x: 0, y: 0, top: 0, left: 0, right: 320, bottom: height, toJSON: () => ({}) }
     })
     const frame = async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); await settle() }
@@ -121,23 +121,21 @@ describe('inline node credentials', () => {
       const closedHeight = workflow.getNodeSize(cloud()).height
       expect(workflow.getNodeSize(cloud()).width).toBeGreaterThan(316)
       expect(closedHeight).toBeGreaterThan(300)
-      const help = root!.querySelector<HTMLDetailsElement>('[data-node-data-handling]')!
-      expect(help.open).toBe(false)
-      const summary = help.querySelector('summary')!
-      summary.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 20, clientY: 20 }))
-      help.open = true; await settle(); await frame()
+      const timeout = root!.querySelector<HTMLInputElement>('[data-connection-field=timeout]')!
+      timeout.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 20, clientY: 20 }))
+      timeout.value = 'invalid'; timeout.dispatchEvent(new Event('input', { bubbles: true })); await settle(); await frame()
       window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 200, clientY: 200 }))
       const expandedHeight = workflow.getNodeSize(cloud()).height
       expect(expandedHeight).toBeGreaterThan(closedHeight)
       extraFontHeight = 50; fonts.dispatchEvent(new Event('loadingdone')); await frame()
       expect(workflow.getNodeSize(cloud()).height).toBeGreaterThan(expandedHeight)
-      help.open = false; await settle(); await frame()
+      timeout.value = '37'; timeout.dispatchEvent(new Event('input', { bubbles: true })); await settle(); await frame()
       expect(workflow.getNodeSize(cloud()).height).toBeLessThan(expandedHeight)
       setLocale('en'); await settle(); await frame()
       expect(input.value).toBe('private-test-key')
       expect(cloud().size).toEqual({ width: 316, height: 300 })
       expect(JSON.stringify(workflow.draft)).toBe(graph)
-      expect(root!.querySelector('[data-inline-provider-target=cloud]')).not.toBeNull()
+      expect(root!.querySelector('[data-node-credential-help], [data-node-data-handling], .node-field-description')).toBeNull()
     } finally {
       app?.unmount(); app = undefined
       if (fontDescriptor) Object.defineProperty(document, 'fonts', fontDescriptor)
@@ -288,16 +286,11 @@ describe('independent streaming node connections', () => {
     const node = root!.querySelector('[data-node-id=cloud]')!
     expect(node.querySelector('[data-connection-mode], [data-open-profiles], [data-connection-field=env], [data-connection-field=region]')).toBeNull()
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/provider-profiles'))).toBe(false)
-    expect(node.querySelector('[data-inline-provider-target=cloud]')!.textContent).toContain('wss://stream.service.test/api-ws/v1/inference')
-    expect(node.textContent).toContain(t('connections.cancelClosesStream'))
-    expect(node.textContent).not.toContain(t('connections.cancelPendingOnly'))
-    expect(node.textContent).not.toContain('48')
+    expect(node.querySelector<HTMLInputElement>('[data-connection-field=endpoint]')!.value).toBe('wss://stream.service.test/api-ws/v1/inference')
     expect(node.querySelector<HTMLInputElement>('[data-field=model]')!.value).toBe('qwen-audio-3.0-asr-flash-streaming')
-    expect(node.textContent).toContain('PCM16')
     expect(workflow.registry!.validateConfig('qwen_asr_streaming', workflow.draft.nodes[1]!.config)).toEqual([])
     setLocale('en'); await settle()
-    expect(node.textContent).toContain('Microphone input and live captions are not provided')
-    expect(node.textContent).not.toContain('environment variable')
+    expect(node.querySelector('[data-credential-status]')!.textContent).toBe(t('connections.keyNotStoredDirect'))
   })
   it('isolates two streaming credentials and a file service credential through failed Save and idempotent retry', async () => {
     const { state, workflow, fetcher, pinia } = setup({ streaming: true }); await settle(); await openProject()

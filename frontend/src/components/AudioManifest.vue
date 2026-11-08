@@ -27,7 +27,6 @@ function size(bytes?: number) { return bytes === undefined ? '—' : `${new Intl
 function pageLabel(page: { total: number; offset: number; items: unknown[] }) { return t('batch.pagination', { from: page.total ? page.offset + 1 : 0, to: page.offset + page.items.length, total: page.total }) }
 </script>
 <template>      <section class="batch-manifest">
-        <details><summary>{{ t('batch.listHelp') }}</summary><p class="inspector-help">{{ t('batch.localHint') }}</p><p class="inspector-help">{{ t('batch.uploadedHint') }}</p></details>
         <div class="batch-actions">
           <button type="button" class="secondary-button" data-batch-files :disabled="locked" @click="fileInput?.click()">{{ t('batch.files') }}</button>
           <button type="button" class="secondary-button" data-batch-folder :disabled="locked" @click="folderInput?.click()">{{ t('batch.folder') }}</button>

@@ -11,16 +11,15 @@ const targets = computed(() => props.workflow.nodes.flatMap((node) => {
   if (!inline) return []
   const unsupported = workflowStore.registry?.validateConfig(node.type, node.config).some((issue) => issue.code === 'LEGACY_CONNECTION_UNSUPPORTED')
   return [{ nodeId: node.id, host: unsupported ? '' : connectionTarget(node.config[inline.baseUrlKey]), showRegion: !!inline.regionKey,
-    region: inline.regionKey ? node.config[inline.regionKey] : null, handling: inline.dataHandling }]
+    region: inline.regionKey ? node.config[inline.regionKey] : null }]
 }))
 const missingTarget = computed(() => props.historical && (targets.value.some((target) => !target.host)
   || (!targets.value.length && !!props.workflow.provider_profiles_snapshot)))
 </script>
 <template>
   <div v-if="targets.length || missingTarget" class="cloud-workflow-notice" data-cloud-notice>
-    <p>{{ t('connections.cloudNotice') }} {{ t('connections.fileCount', { count: audioCount }) }}</p>
+    <p>{{ t('connections.fileCount', { count: audioCount }) }}</p>
     <p v-if="missingTarget" data-historical-target-missing>{{ t('connections.historicalTargetMissing') }}</p>
     <div v-for="target in targets" :key="target.nodeId" class="provider-target" :data-inline-provider-target="!historical ? target.nodeId : undefined" :data-inline-provider-snapshot-target="historical ? target.nodeId : undefined"><strong>{{ t(historical ? 'connections.snapshotTarget' : 'connections.target') }}</strong><span>{{ target.host || t('connections.unknownTarget') }}<template v-if="target.showRegion"> · {{ target.region || t('connections.unknownRegion') }}</template></span></div>
-    <template v-if="!historical"><template v-for="target in targets" :key="target.nodeId"><p v-if="target.handling?.temporaryUploadRetentionHours">{{ t('connections.temporaryRetention', { hours: target.handling.temporaryUploadRetentionHours }) }}</p><p v-if="target.handling?.remoteCancelPendingOnly">{{ t('connections.cancelPendingOnly') }}</p><p v-if="target.handling?.cancelBehavior === 'close_stream'">{{ t('connections.cancelClosesStream') }}</p></template></template>
   </div>
 </template>

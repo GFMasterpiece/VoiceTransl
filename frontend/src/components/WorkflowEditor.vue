@@ -798,7 +798,6 @@ onUnmounted(() => {
           <button ref="editMenuButton" class="secondary-button compact-button" type="button" data-editor-menu aria-haspopup="menu" :aria-expanded="editMenuOpen" :disabled="editingBlocked" @click="toggleEditMenu">{{ t('workflow.editorMenu') }} ▾</button>
           <div v-if="editMenuOpen" ref="editMenuElement" class="editor-command-menu" role="menu" :aria-label="t('workflow.editorMenu')" @keydown="editorMenuKey" @pointerdown.stop>
             <p>{{ t('workflow.editorSelectionCount', { count: store.selectedNodeIds.length }) }}</p>
-            <p>{{ t('workflow.editorSelectionHelp') }}</p>
             <button v-for="command in editorCommands" :key="command.id" type="button" role="menuitem" :data-editor-command="command.id" :disabled="commandDisabled(command.id)" @click="runEditorCommand(command.id)"><span>{{ t(`workflow.editorCommand_${command.id}`) }}</span><kbd v-if="command.shortcut">{{ command.shortcut }}</kbd></button>
           </div>
         </div>
@@ -835,7 +834,7 @@ onUnmounted(() => {
     <template v-else>
       <div class="workflow-main">
         <div ref="canvas" class="workflow-canvas" :style="gridStyle" @wheel="onWheel" @contextmenu="canvasContextMenu">
-          <div class="canvas-caption"><span>{{ t('workflow.canvasHelp') }}</span><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
+          <div class="canvas-caption"><span>{{ t('workflow.version', { version: numberLabel(store.document?.workflow_revision) }) }}</span></div>
             <svg ref="stage" class="workflow-svg" width="100%" height="100%" role="group" tabindex="0" :aria-label="t('workflow.canvasAria')" @keydown="canvasKeyboard" @paste="canvasPaste" @pointerdown="startPan" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @lostpointercapture="onPointerUp">
 
               <g class="workflow-content" :transform="`translate(${store.pan.x} ${store.pan.y}) scale(${store.zoom})`">
@@ -874,15 +873,15 @@ onUnmounted(() => {
                   <text class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY(node, port, 'output')! + 3" aria-hidden="true"><title>{{ portLabel(port) }}</title>{{ portLabel(port) }}</text>
                 </g>
                 <text v-if="nodeIssue(node)" class="node-error-mark" :x="nodeWidth(node) - 28" y="20" aria-hidden="true">!</text>
-                <rect class="node-resize-handle is-right" data-resize="right" :x="nodeWidth(node) - 4" :y="fieldsY(node) - 4" width="8" :height="Math.max(0, nodeHeight(node) - fieldsY(node) - 8)" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeWidth', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'right')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'right')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
-                <rect class="node-resize-handle is-bottom" data-resize="bottom" x="8" :y="nodeHeight(node) - 4" :width="nodeWidth(node) - 20" height="8" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeHeight', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'bottom')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'bottom')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
-                <rect class="node-resize-handle is-corner" data-resize="corner" :x="nodeWidth(node) - 16" :y="nodeHeight(node) - 16" width="24" height="24" rx="4" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeNode', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'corner')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'corner')"><title>{{ t('workflow.resizeHelp') }}</title></rect>
+                <rect class="node-resize-handle is-right" data-resize="right" :x="nodeWidth(node) - 4" :y="fieldsY(node) - 4" width="8" :height="Math.max(0, nodeHeight(node) - fieldsY(node) - 8)" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeWidth', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'right')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'right')"></rect>
+                <rect class="node-resize-handle is-bottom" data-resize="bottom" x="8" :y="nodeHeight(node) - 4" :width="nodeWidth(node) - 20" height="8" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeHeight', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'bottom')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'bottom')"></rect>
+                <rect class="node-resize-handle is-corner" data-resize="corner" :x="nodeWidth(node) - 16" :y="nodeHeight(node) - 16" width="24" height="24" rx="4" role="button" :tabindex="controlsLocked ? -1 : 0" :aria-disabled="controlsLocked" :aria-label="t('workflow.resizeNode', { name: nodeLabel(node) })" @pointerdown.stop="startResize($event, node, 'corner')" @click.stop @dblclick.stop @keydown.stop="resizeKey($event, node, 'corner')"></rect>
                 <path class="node-resize-mark" :d="`M ${nodeWidth(node) - 14} ${nodeHeight(node) - 8} l 6 -6 M ${nodeWidth(node) - 10} ${nodeHeight(node) - 8} l 2 -2`" />
               </g>
               <rect v-if="marqueeBounds" class="workflow-marquee" :x="marqueeBounds.x" :y="marqueeBounds.y" :width="marqueeBounds.width" :height="marqueeBounds.height" aria-hidden="true" />
               </g>
             </svg>
-          <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong><span>{{ t('workflow.emptyCanvasHelp') }}</span></div>
+          <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong></div>
         </div>
 
       </div>

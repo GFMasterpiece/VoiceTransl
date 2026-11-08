@@ -70,7 +70,7 @@ async function retryOutputs() {
         <CloudWorkflowNotice :workflow="store.draft" :audio-count="store.boundAudioIds?.length ?? ((store.boundAudioId || store.audioId) ? 1 : 0)" />
         <section class="workflow-run-panel">
           <div class="workflow-run-heading">
-            <div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3>{{ t('workflow.runTitle') }}</h3><p>{{ t('workflow.snapshotHelp') }}</p></div>
+            <div><span class="section-kicker">{{ t('workflow.runKicker') }}</span><h3>{{ t('workflow.runTitle') }}</h3></div>
             <div class="workflow-run-actions">
               <button v-if="store.activeSingleRun" class="secondary-button danger-button" type="button" :disabled="store.actionLoading" @click="cancelRun">{{ store.actionLoading ? t('workflow.cancelling') : t('workflow.cancelRun') }}</button>
               <button v-else class="primary-button" type="button" data-panel-run :disabled="!canRun" @click="startRun">{{ store.actionLoading ? t('workflow.starting') : store.dirty ? t('workflow.saveToRun') : t('workflow.runWorkflow') }}</button>
@@ -78,7 +78,6 @@ async function retryOutputs() {
           </div>
           <p v-if="store.dirty" class="inspector-help">{{ t('workflow.saveFirst') }}</p>
           <p v-else-if="execution.reason.value" class="inspector-help">{{ execution.reason.value }}</p>
-          <p v-if="store.activeRun && store.run?.batch_id" class="inspector-help">{{ t('batch.childRun') }}</p>
           <p v-if="store.error" class="workflow-run-error" role="alert">{{ store.error }}</p>
           <div class="workflow-run-summary"><span class="run-status" :class="`is-${store.run?.status || 'idle'}`">{{ statusLabel(store.run?.status) }}</span><span>{{ summary }}</span></div>
           <div v-if="store.runLoading" class="workflow-loading small" role="status">{{ t('workflow.loadingRun') }}</div>
@@ -102,7 +101,6 @@ async function retryOutputs() {
       </template>
 
       <template v-else-if="panel === 'artifacts'">
-        <p class="inspector-help">{{ t('workflow.panelArtifactsHelp') }}</p>
         <p class="workflow-panel-meta">{{ summary }}</p>
         <p v-if="store.error" class="workflow-run-error" role="alert">{{ store.error }}</p>
         <p v-if="!artifacts.length" class="workflow-panel-empty">{{ store.run ? t('workflow.panelArtifactEmpty') : t('workflow.noRuns') }}</p>
@@ -124,7 +122,6 @@ async function retryOutputs() {
       </template>
 
       <template v-else-if="panel === 'logs'">
-        <p class="inspector-help">{{ t('workflow.panelLogsHelp') }}</p>
         <p class="workflow-panel-meta">{{ summary }}</p>
         <p v-if="!store.run" class="workflow-panel-empty">{{ t('workflow.noRuns') }}</p>
         <ol v-else class="workflow-records">

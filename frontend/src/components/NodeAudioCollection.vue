@@ -11,7 +11,6 @@ function modeChange(event: Event) { emit('mode', (event.target as HTMLSelectElem
 <template>
   <div class="node-audio-collection" @pointerdown.stop @click.stop @dblclick.stop @keydown.stop @keyup.stop @wheel.stop>
     <label class="collection-mode">{{ t('batch.inputMode') }}<select data-collection-mode :value="mode" :disabled="locked" @change="modeChange"><option value="context">{{ t('batch.modeContext') }}</option><option v-if="mode === 'single'" value="single">{{ t('batch.modeSingle') }}</option><option value="collection">{{ t('batch.modeCollection') }}</option></select></label>
-    <p class="inspector-help">{{ t('batch.inputHint') }}</p>
     <AudioManifest v-if="mode === 'collection'" :manifest="manifest" :audios="audios" :locked="locked" />
     <template v-else>
       <NodeResourceInput :project-id="projectId" :audios="audios" :value="value" :source-language="sourceLanguage" :resource-type="resourceType" :locked="locked" @bind="emit('bind', $event)" @uploaded="emit('uploaded', $event)" @busy="emit('busy', $event)" />

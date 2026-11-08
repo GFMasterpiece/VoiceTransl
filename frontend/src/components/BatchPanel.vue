@@ -15,7 +15,6 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
 <template>
   <CanvasDialog class="batch-dialog" :open="open" :title="t('batch.title')" @close="emit('close')">
     <div class="batch-panel" data-batch-panel>
-      <p class="inspector-help">{{ t('batch.background') }}</p>
       <p v-if="batches.error" role="alert" class="workflow-run-error">{{ batches.error }}</p>
       <div v-if="batches.pending" class="batch-pending" role="status"><p>{{ t('batch.pendingRequest') }}</p><p v-if="!batches.pendingStored" class="workflow-run-error">{{ t('batch.leavePendingVolatile') }}</p><button type="button" class="secondary-button" data-batch-retry-request :disabled="locked" @click="batches.retryPending">{{ t('batch.retryRequest') }}</button></div>
       <section class="batch-history">
@@ -39,7 +38,7 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
       </section>
       <section v-if="batches.detail" class="batch-detail">
         <CloudWorkflowNotice :workflow="batches.detail.workflow" :audio-count="batches.detail.total" historical />
-        <h3>{{ batches.detail.id }} · {{ t('batch.snapshot', { revision: batches.detail.workflow_revision }) }}</h3><p>{{ t('batch.frozen') }}</p>
+        <h3>{{ batches.detail.id }} · {{ t('batch.snapshot', { revision: batches.detail.workflow_revision }) }}</h3>
         <div class="batch-table-scroll"><table class="batch-table"><thead><tr><th>#</th><th>{{ t('batch.name') }}</th><th>{{ t('batch.origin') }}</th><th>{{ t('batch.language') }}</th><th>{{ t('batch.state') }}</th></tr></thead><tbody><tr v-for="item in batches.items.items" :key="item.index" :data-batch-run-item="item.index"><td>{{ item.sequence ?? item.index + 1 }}</td><td>{{ item.audio_name }}<small>{{ item.origin?.relative_path }}</small></td><td>{{ item.origin?.root_name || '—' }}</td><td>{{ item.source_language }}</td><td>{{ batchStatus(item.status) }}<small v-if="item.error" class="workflow-run-error">{{ batchError(item.error) }}</small><small>{{ item.run_id }}</small></td></tr></tbody></table></div>
         <nav class="batch-actions" :aria-label="t('batch.details')"><button type="button" class="secondary-button" :disabled="batches.detailLoading || batches.items.offset === 0" @click="batches.select(batches.detail!.id, Math.max(0, batches.items.offset - batches.items.limit))">{{ t('batch.previous') }}</button><span>{{ pageLabel(batches.items) }}</span><button type="button" class="secondary-button" :disabled="batches.detailLoading || batches.items.offset + batches.items.limit >= batches.items.total" @click="batches.select(batches.detail!.id, batches.items.offset + batches.items.limit)">{{ t('batch.next') }}</button></nav>
       </section>

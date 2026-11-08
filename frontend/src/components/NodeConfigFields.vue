@@ -5,14 +5,11 @@ import type { NodeRegistry } from '../workflow/nodeRegistry'
 import { workflowVisibleFields, type WorkflowNode, type WorkflowEdge } from '../stores/workflow'
 import NodeProviderConnection from './NodeProviderConnection.vue'
 import NodeConfigField from './NodeConfigField.vue'
-import { connectionTarget, inlineConnectionKeys } from '../workflow/providerConnections'
+import { inlineConnectionKeys } from '../workflow/providerConnections'
 
 const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: boolean; edges?: readonly WorkflowEdge[] }>()
 const emit = defineEmits<{ update: [config: Record<string, unknown>] }>()
 const inlineDescriptor = computed(() => props.registry.kind(props.node.type)?.inlineConnectionInput)
-const inlineHost = computed(() => legacyIssue.value ? '' : connectionTarget(props.node.config[inlineDescriptor.value?.baseUrlKey || '']))
-const dataHandling = computed(() => props.registry.kind(props.node.type)?.inlineConnectionInput?.dataHandling)
-const inlineRegion = computed(() => inlineDescriptor.value?.regionKey ? props.node.config[inlineDescriptor.value.regionKey] : null)
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
 const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey
   && !inlineConnectionKeys(props.registry.kind(props.node.type)).includes(field.key)))
@@ -62,10 +59,6 @@ function error(field: Field) {
       <h4 class="node-config-section-title">{{ t('connections.connectionSettings') }}</h4>
       <p v-if="legacyIssue" class="node-field-error" role="alert" data-cloud-rebuild>{{ legacyIssue.message }}</p>
       <NodeProviderConnection v-else :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
-      <div class="node-provider-settings">
-        <div class="provider-target" :data-inline-provider-target="node.id"><strong>{{ t('connections.target') }}</strong><span>{{ inlineHost || t('connections.unknownTarget') }}<template v-if="inlineDescriptor?.regionKey"> · {{ inlineRegion || t('connections.unknownRegion') }}</template></span></div>
-        <details class="node-help-details" data-node-data-handling><summary>{{ t('connections.dataHandling') }}</summary><div><p>{{ t('connections.cloudNotice') }}</p><p v-if="dataHandling?.temporaryUploadRetentionHours">{{ t('connections.temporaryRetention', { hours: dataHandling.temporaryUploadRetentionHours }) }}</p><p v-if="dataHandling?.remoteCancelPendingOnly">{{ t('connections.cancelPendingOnly') }}</p><p v-if="dataHandling?.cancelBehavior === 'close_stream'">{{ t('connections.cancelClosesStream') }}</p></div></details>
-      </div>
     </section>
     <section v-if="parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
       <h4 v-if="hasConnection" class="node-config-section-title">{{ t('connections.processingParameters') }}</h4>

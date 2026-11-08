@@ -25,7 +25,7 @@ describe('catalog preview renderers', () => {
     props.runId = ''; props.record = { ...props.record, preview: null }; props.historical = true
     await settle()
     expect(root!.querySelector('.node-preview-version')).toBeNull()
-    expect(root!.textContent).toContain('运行此节点后')
+    expect(root!.textContent).toContain('暂无结果')
   })
 
   it('renders text as inert text, reports historical snapshots and retries a transient preview failure', async () => {

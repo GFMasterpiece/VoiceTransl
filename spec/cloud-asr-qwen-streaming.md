@@ -31,7 +31,7 @@
 
 - 持久化 schema 为 `1.0`，当前能力目录为 `1.11`。`presentation.inline_connection_input` 只声明 `provider_type`、`label`、`base_url_key`、`timeout_key`、可空 `region_key`、`credential_ref_key` 及可选 `data_handling`；没有 Profile、连接模式或环境变量角色。
 - Streaming 声明端点、超时和凭据角色，地域为空；Filetrans 使用相同通用声明，前端和调度器不按 Qwen 类型分支。内联连接使用不持久化的 `InlineConnection`，旧 Profile 专用模型与冻结器已删除。
-- Streaming 的存储期限未声明，`remote_cancel_pending_only=false`、`cancel_behavior=close_stream`；界面说明关闭连接不能撤回已发送音频，不套用 Filetrans 临时上传期限。
+- Streaming 的存储期限未声明，`remote_cancel_pending_only=false`、`cancel_behavior=close_stream`，不套用 Filetrans 临时上传期限。这些协议元数据继续保留，但节点和运行界面不展示数据处理/取消说明段落。
 
 ## 执行与结果
 

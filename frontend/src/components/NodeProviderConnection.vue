@@ -39,7 +39,6 @@ function error(key: string) { return props.registry.validateConfig(props.node.ty
         <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-credential-input :value="keyValue" :disabled="locked" :aria-label="t('connections.apiKey')" :aria-describedby="`${credentialId}-status`" autocomplete="new-password" spellcheck="false" :placeholder="hasReference ? t('connections.keyUnchanged') : t('connections.keyPlaceholder')" @input="editKey" /></label>
         <p :id="`${credentialId}-status`" class="node-credential-status" role="status" data-credential-status>{{ operation === 'clear' ? t('connections.keyClearing') : operation === 'set' ? t('connections.keyPending') : hasReference ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p>
         <div class="node-credential-actions" data-credential-actions><button class="text-button" type="button" data-credential-clear :disabled="locked || (!hasReference && !operation)" @click="clearKey">{{ t('connections.clearKey') }}</button><button v-if="operation" class="text-button" type="button" data-credential-discard :disabled="locked" @click="discardKey">{{ t('connections.discardKey') }}</button></div>
-        <details class="node-help-details" data-node-credential-help><summary>{{ t('connections.keyStorageHelp') }}</summary><p class="node-credential-help">{{ t('connections.keyHint') }}</p></details>
       </div>
   </div>
 </template>

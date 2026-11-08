@@ -80,7 +80,6 @@ onUnmounted(() => { alive = false; controller.abort(); emit('busy', false) })
       <label><span>{{ t('app.create.source') }}</span><input :value="language" @input="!locked && (language = ($event.target as HTMLInputElement).value)" data-resource-language type="text" :disabled="locked" :placeholder="t('app.create.sourcePlaceholder')" autocomplete="off" /></label>
       <button class="node-resource-upload" type="button" :disabled="locked || !policy" @click="fileInput?.click()">{{ t('workflow.resourceUpload') }}</button>
       <input ref="fileInput" class="visually-hidden" type="file" :accept="policy?.allowed_extensions.map((extension) => `.${extension}`).join(',')" :disabled="locked || !policy" :aria-label="t('workflow.resourceFile')" @change="choose" />
-      <small>{{ t('workflow.resourceDrop') }}</small>
       <progress v-if="uploading" :aria-label="t('workflow.resourceUploading')" />
       <small v-if="uploading" role="status">{{ t('workflow.resourceUploading') }}</small>
       <p v-if="error.text.value" class="node-resource-error" role="alert" :title="error.text.value">{{ error.text.value }}</p>

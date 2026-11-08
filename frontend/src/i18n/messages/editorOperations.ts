@@ -2,7 +2,7 @@ export const editorOperationMessages = {
   'zh-CN': {
     editorMenu: '编辑',
     editorSelectionCount: '已选择 {count} 个节点',
-    editorSelectionHelp: 'Shift 点击切换多选，Shift 拖动空白框选。',
+
     editorCommand_undo: '撤销',
     editorCommand_redo: '重做',
     'editorCommand_select-all': '全选节点',
@@ -50,7 +50,7 @@ export const editorOperationMessages = {
   en: {
     editorMenu: 'Edit',
     editorSelectionCount: '{count} nodes selected',
-    editorSelectionHelp: 'Shift-click to toggle nodes; Shift-drag empty canvas to select a group.',
+
     editorCommand_undo: 'Undo',
     editorCommand_redo: 'Redo',
     'editorCommand_select-all': 'Select all nodes',

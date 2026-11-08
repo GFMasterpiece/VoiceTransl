@@ -3,8 +3,7 @@ export const workflowPanelMessages = {
     panelRun: '运行记录',
     panelArtifacts: '产物',
     panelLogs: '日志',
-    panelArtifactsHelp: '查看所选运行快照中的节点产物。下载前会检查文件是否仍然可用。',
-    panelLogsHelp: '查看所选运行及节点的时间、状态和错误。缺失的时间显示为未记录。',
+
     panelArtifactEmpty: '此运行尚无节点产物。',
     panelNoDownload: '此记录不提供文件下载。',
     panelSelectedRun: '所选运行',
@@ -27,8 +26,7 @@ export const workflowPanelMessages = {
     panelRun: 'Run history',
     panelArtifacts: 'Artifacts',
     panelLogs: 'Logs',
-    panelArtifactsHelp: 'View node artifacts from the selected run snapshot. Files are checked for availability before download.',
-    panelLogsHelp: 'View times, statuses, and errors for the selected run and its nodes. Missing times are shown as not recorded.',
+
     panelArtifactEmpty: 'This run has no node artifacts yet.',
     panelNoDownload: 'This record does not provide a file download.',
     panelSelectedRun: 'Selected run',

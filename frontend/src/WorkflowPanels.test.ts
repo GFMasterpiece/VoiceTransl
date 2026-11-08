@@ -262,7 +262,6 @@ describe('canvas run panels', () => {
     const error = '<script>real failure</script>'
     store.run = runBody({ status: 'failed', cancel_requested: true, error: { type: 'EXTENSION_ERROR', message: error }, nodes: [{ ...nodeRecord(), status: 'failed', artifact: null, error: { type: 'NODE_EXTENSION_ERROR', message: '真实节点错误' } }] })
     await settle()
-    expect(root!.textContent).toContain('查看所选运行及节点的时间、状态和错误')
     expect(root!.querySelector('[data-record="run-started"] time')?.textContent).toBe(t('workflow.notRecorded'))
     expect(root!.querySelector('[data-record="node:output:finished"] time')?.hasAttribute('datetime')).toBe(false)
     expect(root!.querySelector('[data-record="run-cancel"] time')?.textContent).toBe(t('workflow.notRecorded'))
@@ -271,7 +270,6 @@ describe('canvas run panels', () => {
     expect(root!.querySelector('script')).toBeNull()
     const before = JSON.stringify(store.run)
     setLocale('en'); await settle()
-    expect(root!.textContent).toContain('Missing times are shown as not recorded')
     expect(root!.textContent).toContain('Started time')
     expect(root!.textContent).toContain('真实节点错误')
     expect(JSON.stringify(store.run)).toBe(before)
