@@ -7,14 +7,12 @@ from app.domain import (
     JobStatus,
     LegacyPipelineConfig,
     Project,
-    ProviderProfile,
     SourceAsset,
     default_stages,
     default_workflow,
     workflow_snapshot,
 )
 from app.domain.project import PRIMARY_AUDIO_ID
-from app.domain.provider_profile import ProviderProfilesDocument
 from app.domain.schema import SchemaVersionError
 from app.domain.workflow import WorkflowRun
 from app.main import create_app
@@ -66,24 +64,6 @@ def test_job_rejects_missing_nested_config_version_and_preserves_bytes(tmp_path)
     assert path.read_bytes() == before
 
 
-def test_job_rejects_missing_provider_profile_version(tmp_path):
-    store, project_id = make_store(tmp_path)
-    job = make_job(project_id, LegacyPipelineConfig())
-    job.provider_profiles_snapshot = {
-        "profile": ProviderProfile(id="profile", provider_type="openai", display_name="Profile")
-    }
-    store.save_job(job)
-    path = tmp_path / "projects" / project_id / "job.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["provider_profiles_snapshot"]["profile"].pop("schema_version")
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    before = path.read_bytes()
-
-    with pytest.raises(SchemaVersionError):
-        store.load_job(project_id)
-    assert path.read_bytes() == before
-
-
 def test_mark_interrupted_does_not_rewrite_invalid_nested_version(tmp_path):
     store, project_id = make_store(tmp_path)
     job = make_job(project_id, LegacyPipelineConfig())
@@ -128,20 +108,6 @@ def test_persisted_top_level_version_missing_or_wrong_is_rejected(tmp_path, vers
     before = path.read_bytes()
     with pytest.raises(SchemaVersionError):
         store.load_project(project_id)
-    assert path.read_bytes() == before
-
-
-def test_provider_profiles_rejects_missing_nested_document_version(tmp_path):
-    store, _ = make_store(tmp_path)
-    profiles = [ProviderProfile(id="profile", provider_type="openai", display_name="Profile")]
-    store.save_provider_profiles(profiles)
-    path = tmp_path / "provider_profiles.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["profiles"][0].pop("schema_version")
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    before = path.read_bytes()
-    with pytest.raises(SchemaVersionError):
-        store.load_provider_profiles()
     assert path.read_bytes() == before
 
 
@@ -243,29 +209,6 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
 
 
 @pytest.mark.asyncio
-async def test_api_maps_profile_schema_errors(tmp_path):
-    app = create_app(tmp_path)
-    await create_api_project(app)
-    profiles_path = tmp_path / "provider_profiles.json"
-    profiles = ProviderProfilesDocument(
-        profiles=[ProviderProfile(id="profile", provider_type="openai", display_name="Profile")]
-    ).model_dump(mode="json")
-    profiles["schema_version"] = "2.0"
-    profiles_path.write_text(json.dumps(profiles), encoding="utf-8")
-    profiles_before = profiles_path.read_bytes()
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        for route in (
-            "/api/v1/provider-profiles",
-            "/api/v1/provider-profiles/profile",
-        ):
-            response = await client.get(route)
-            assert_schema_rejection(response, tmp_path)
-
-    assert profiles_path.read_bytes() == profiles_before
-
-
-@pytest.mark.asyncio
 async def test_explicit_request_schema_versions_are_clearly_rejected(tmp_path):
     app = create_app(tmp_path)
     project_id = await create_api_project(app)
@@ -282,15 +225,6 @@ async def test_explicit_request_schema_versions_are_clearly_rejected(tmp_path):
                     "expected_revision": 0,
                     "nodes": [],
                     "edges": [],
-                },
-            ),
-            await client.post(
-                "/api/v1/provider-profiles",
-                json={
-                    "schema_version": "2.0",
-                    "id": "profile",
-                    "provider_type": "openai",
-                    "display_name": "Profile",
                 },
             ),
         ):

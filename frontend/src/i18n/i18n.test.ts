@@ -8,7 +8,7 @@ import { workflowMessages } from './messages/workflow'
 import { workflowPanelMessages } from './messages/workflowPanels'
 import { editorOperationMessages } from './messages/editorOperations'
 import { batchMessages } from './messages/batch'
-import { profileMessages } from './messages/profiles'
+import { connectionMessages } from './messages/connections'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -25,7 +25,7 @@ function placeholders(text: string): string[] {
 
 describe('translation catalogs', () => {
   it.each([
-    ['profiles', profileMessages], ['batch', batchMessages], ['common', commonMessages], ['app', appMessages], ['workflow', workflowMessages], ['workflow-panel', workflowPanelMessages], ['workflow-editor', editorOperationMessages],
+    ['connections', connectionMessages], ['batch', batchMessages], ['common', commonMessages], ['app', appMessages], ['workflow', workflowMessages], ['workflow-panel', workflowPanelMessages], ['workflow-editor', editorOperationMessages],
   ] as const)('%s has matching keys and interpolation arguments', (name, catalog) => {
     const chinese = dictionary(catalog['zh-CN'])
     const english = dictionary(catalog.en)

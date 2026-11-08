@@ -4,9 +4,7 @@ import json
 import pytest
 from app.domain.node_execution import NodeExecutionError
 from app.domain.transcript import Segment, Transcript
-from app.domain.workflow import workflow_semantic_digest
 from app.main import create_app
-from app.nodes.qwen_asr import normalize
 from app.storage.secret_store import SecretStore
 from httpx import ASGITransport, AsyncClient
 
@@ -42,7 +40,7 @@ def graph(document, config=None):
         "expected_revision": document["revision"],
         "nodes": [
             document["nodes"][0],
-            {"id": "cloud", "type": "qwen_asr", "config": config or {"connection_mode": "inline"}},
+            {"id": "cloud", "type": "qwen_asr", "config": config or {}},
             {"id": "output", "type": "text_output", "config": {"format": "txt"}},
         ],
         "edges": [
@@ -104,7 +102,7 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         config = config_of(document)
         assert config["base_url"] == "https://maas.qianwenaiapi.com/api/v1"
         assert config["timeout_seconds"] == 3600
-        assert config["region"] is config["api_key_env"] is config["credential_ref"] is None
+        assert config["region"] is config["credential_ref"] is None
         validation = await client.post(
             f"/api/v1/projects/{pid}/workflow/validate",
             json={"nodes": document["nodes"], "edges": document["edges"]},
@@ -134,7 +132,7 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         completed = await run(client, app, pid, aids[0], saved)
         assert completed.status.value == "completed"
         assert cloud["calls"][-1]["api_key"] == KEY_A
-        assert cloud["calls"][-1]["profile"].default_timeout == 3600
+        assert cloud["calls"][-1]["connection"].default_timeout == 3600
         assert completed.workflow.provider_profiles_snapshot is None
         current = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()
         assert config_of(current)["credential_ref"] == ref
@@ -188,52 +186,6 @@ async def test_rotation_does_not_retarget_queued_batch_or_retry(tmp_path, cloud)
             ]
             == config_of(rotated)["credential_ref"]
         )
-    await app.state.batches.shutdown()
-    await app.state.jobs.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_inline_env_is_frozen_into_version_without_mutating_saved_graph(
-    tmp_path, cloud, monkeypatch
-):
-    app = create_app(tmp_path)
-    await app.state.jobs.semaphore.acquire()
-    monkeypatch.setenv("INLINE_BACKUP_KEY", KEY_A)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        pid, aids, document = await setup(client, 2)
-        saved = await save(
-            client,
-            pid,
-            graph(document, {"connection_mode": "inline", "api_key_env": "INLINE_BACKUP_KEY"}),
-        )
-        before = app.state.store._workflow_path(pid).read_bytes()
-        cloud["fail"].add(
-            app.state.store.scope(pid, aids[1]).source_path(
-                pid, app.state.store.audio(pid, aids[1]).source.path
-            )
-        )
-        created = await submit(client, pid, aids, saved)
-        batch = app.state.batches.get(pid, created["id"])
-        frozen = next(node for node in batch.workflow.nodes if node.id == "cloud")
-        assert frozen.config["credential_ref"]
-        assert frozen.config["api_key_env"] == "INLINE_BACKUP_KEY"
-        assert frozen.config["timeout_seconds"] == 3600
-        monkeypatch.setenv("INLINE_BACKUP_KEY", KEY_B)
-        app.state.jobs.semaphore.release()
-        assert (await finished(app, pid, created["id"])).status == "partial"
-        assert {call["api_key"] for call in cloud["calls"]} == {KEY_A}
-        assert app.state.store._workflow_path(pid).read_bytes() == before
-        cloud["fail"].clear()
-        retry = await client.post(
-            f"/api/v1/projects/{pid}/batches/{created['id']}/retry",
-            json={"request_id": "env-retry"},
-        )
-        assert retry.status_code == 202, retry.text
-        assert (await finished(app, pid, retry.json()["id"])).status == "completed"
-        assert cloud["calls"][-1]["api_key"] == KEY_A
-        latest = await run(client, app, pid, aids[0], saved)
-        assert latest.status.value == "completed"
-        assert cloud["calls"][-1]["api_key"] == KEY_B
     await app.state.batches.shutdown()
     await app.state.jobs.shutdown()
 
@@ -309,7 +261,7 @@ async def test_foreign_ref_and_missing_master_never_fallback_to_env(tmp_path, cl
         document = await save(
             client,
             pid,
-            graph(document, {"connection_mode": "inline", "api_key_env": "INLINE_BACKUP_KEY"}),
+            graph(document),
         )
         saved = await save(client, pid, update_body(document))
         copied = json.loads(json.dumps(saved))
@@ -335,20 +287,3 @@ async def test_foreign_ref_and_missing_master_never_fallback_to_env(tmp_path, cl
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "CREDENTIAL_MASTER_KEY_MISSING"
         assert not cloud["calls"] and not app.state.jobs.tasks
-
-
-def test_legacy_qwen_config_and_execution_signature_have_no_inline_defaults():
-    old = {
-        "provider_profile_id": "old",
-        "model": "same-protocol-model",
-        "language": "en",
-        "additional_parameters": {},
-    }
-    assert normalize(old) == old
-    from app.domain.workflow import WorkflowNode
-
-    nodes = [WorkflowNode(id="cloud", type="qwen_asr", config=old)]
-    assert workflow_semantic_digest(nodes, []) == workflow_semantic_digest(
-        [node.model_copy(update={"config": normalize(old)}) for node in nodes], []
-    )
-    assert "connection_mode" not in nodes[0].model_dump()["config"]

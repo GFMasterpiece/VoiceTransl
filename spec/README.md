@@ -25,6 +25,7 @@
 | [输入节点资源清单与编号输出](node-batch-input.md) | Implemented | 输入节点导入、统一单/批运行、输出前缀与稳定编号 |
 | [Qwen 录音文件识别](cloud-asr-qwen.md) | Implemented | 独立云端识别、节点内连接与密钥、临时上传及冻结快照 |
 | [Qwen 文件流式识别](cloud-asr-qwen-streaming.md) | Implemented | 独立 WebSocket 节点、每实例连接/密钥、WAV 文件流式传输及统一结果 |
+| [仅保留节点独立连接](node-connections-only.md) | Implemented | 移除 Profile/环境变量连接、全局管理及旧执行兼容，保留历史产物 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 整体目标；当前音频直通、Mock、编辑器、批次及Qwen能力见各独立规格 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | OpenAI协议尚未实现；首个云端节点采用独立Qwen规格 |
 

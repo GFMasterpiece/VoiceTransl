@@ -36,7 +36,6 @@ from .node_registry import (
     PORT_NAME,
     ports_are_compatible,
 )
-from .provider_profile import ProviderProfile
 from .schema import require_schema_version
 
 WORKFLOW_SCHEMA_VERSION = "1.0"
@@ -153,20 +152,13 @@ class WorkflowSnapshot(BaseModel):
     workflow_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(default_factory=list, max_length=MAX_WORKFLOW_NODES)
     edges: list[WorkflowEdge] = Field(default_factory=list, max_length=MAX_WORKFLOW_EDGES)
-    provider_profiles_snapshot: dict[str, ProviderProfile] | None = None
+    provider_profiles_snapshot: dict[str, object] | None = None
 
     @model_serializer(mode="wrap")
     def serialize_snapshot(self, handler):
         value = handler(self)
         if self.provider_profiles_snapshot is None:
             value.pop("provider_profiles_snapshot", None)
-        return value
-
-    @field_validator("provider_profiles_snapshot")
-    @classmethod
-    def validate_profile_keys(cls, value):
-        if value is not None and any(key != profile.id for key, profile in value.items()):
-            raise ValueError("provider profile snapshot key does not match profile ID")
         return value
 
     @field_validator("schema_version")
@@ -437,7 +429,10 @@ def _config_issue(prefix: str, error: ValidationError, *, node_id: str):
 def _config_error_issue(prefix: str, error: Exception, *, node_id: str):
     if isinstance(error, ValidationError):
         return _config_issue(prefix, error, node_id=node_id)
-    return _issue("INVALID_NODE_CONFIG", f"{prefix}: {error}", node_id=node_id)
+    from .inline_connection import LegacyConnectionConfigError
+
+    code = error.code if isinstance(error, LegacyConnectionConfigError) else "INVALID_NODE_CONFIG"
+    return _issue(code, f"{prefix}: {error}", node_id=node_id)
 
 
 def validate_workflow_graph(
@@ -749,32 +744,13 @@ def workflow_resource_inputs(nodes):
             yield node, binding
 
 
-def workflow_provider_profile_inputs(nodes):
-    """Resolve connection dependencies through registered node declarations."""
-    from .inline_connection import inline_connection_active
-
+def workflow_inline_connection_inputs(nodes):
     for node in nodes:
         definition = _nodes.NODE_DEFINITIONS.get(node.type)
         binding = (
-            (definition.presentation or {}).get("provider_profile_input") if definition else None
-        )
-        inline = (
             (definition.presentation or {}).get("inline_connection_input") if definition else None
         )
-        if inline_connection_active(inline, node.config):
-            continue
         if binding is not None:
-            yield node, binding
-
-
-def workflow_inline_connection_inputs(nodes):
-    from .inline_connection import inline_connection_active
-
-    for node in nodes:
-        definition = _nodes.NODE_DEFINITIONS.get(node.type)
-        presentation = definition.presentation or {} if definition else {}
-        binding = presentation.get("inline_connection_input")
-        if inline_connection_active(binding, node.config):
             yield node, binding, binding["provider_type"]
 
 

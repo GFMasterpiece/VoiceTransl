@@ -26,11 +26,6 @@ export const commonMessages = {
       WORKFLOW_OUTPUT_NOT_FOUND: '节点产物不存在',
       INVALID_PIPELINE_CONFIG: '阶段配置无效',
       LEGACY_CONFIG_READ_ONLY: '旧阶段配置仅可读取，不能保存。',
-      PROVIDER_PROFILE_NOT_FOUND: '连接配置不存在',
-      INVALID_PROVIDER_PROFILES: '连接配置无效',
-      PROVIDER_PROFILE_EXISTS: '连接配置已存在',
-      PROVIDER_PROFILE_ID_MISMATCH: '连接配置标识不一致',
-      PROVIDER_PROFILE_IN_USE: '连接配置正在使用，不能删除',
     },
   },
   en: {
@@ -60,11 +55,6 @@ export const commonMessages = {
       WORKFLOW_OUTPUT_NOT_FOUND: 'Node output not found',
       INVALID_PIPELINE_CONFIG: 'Invalid pipeline configuration',
       LEGACY_CONFIG_READ_ONLY: 'Legacy pipeline configuration is read-only and cannot be saved.',
-      PROVIDER_PROFILE_NOT_FOUND: 'Connection profile not found',
-      INVALID_PROVIDER_PROFILES: 'Invalid connection profiles',
-      PROVIDER_PROFILE_EXISTS: 'The connection profile already exists',
-      PROVIDER_PROFILE_ID_MISMATCH: 'The connection profile ID does not match',
-      PROVIDER_PROFILE_IN_USE: 'The connection profile is in use and cannot be deleted',
     },
   },
 }

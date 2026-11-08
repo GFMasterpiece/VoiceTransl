@@ -25,15 +25,13 @@
 - 复用加密存储与只写保存机制，但密钥版本仍绑定项目 ID、节点 ID 和独立 `provider_type=qwen_asr_streaming`。复用存储实现不代表共享连接或密钥；跨实例、跨类型、跨项目引用均拒绝。
 - 待保存密码只存在当前编辑会话私有缓冲区。复制、复制为新节点、粘贴、导入及导出剥离凭据引用，不复制明文；新节点需重新输入自己的 Key。删除、清除、撤销及重试不能让另一节点的凭据变化。
 - 保存图、修订及运行快照只包含非密钥连接与不可变引用。排队、批次子运行和失败重试沿用原连接及原 Key 版本，不读取后来修改的节点。
-- 已有 Filetrans/Profile 路径及历史数据保持原语义，不自动迁移或补写。
+- Filetrans 与 Streaming 均仅使用每节点连接；旧 Profile/环境变量执行兼容已按[独立连接规格](node-connections-only.md)移除，历史文件与产物不自动迁移、补写或删除。
 
 ## 目录与通用扩展
 
-- 持久化 schema 仍为 `1.0`；能力目录提升为 `1.10`，前端保留旧目录 `1.2–1.9` 的解释方式。
-- `presentation.inline_connection_input` 直接声明 `provider_type`、`label` 及可选 `data_handling`，不再依赖 Profile 声明提供类型。原字段角色继续保留；`mode_key/mode_value` 成对为 null 表示始终内联，`region_key/api_key_env_key` 为 null 表示没有对应字段。
-- 新节点声明端点、超时和凭据引用角色，没有模式、Profile、地域或环境变量配置；前端按声明渲染，调度器不判断 Qwen 类型。已有 Filetrans 仅增加目录展示元数据，不因此改写旧图或摘要。
-- 内联连接的非持久类型与旧 HTTP ProviderProfile 分开，后者的读取和校验契约不变。
-- 新节点 `data_handling` 的存储期限为未声明，`remote_cancel_pending_only=false`，并声明 `cancel_behavior=close_stream`。界面说明取消会关闭连接，不能撤回已经发出的音频；不套用 Filetrans 的临时上传或排队取消规则，不推断服务保留期限。
+- 持久化 schema 为 `1.0`，当前能力目录为 `1.11`。`presentation.inline_connection_input` 只声明 `provider_type`、`label`、`base_url_key`、`timeout_key`、可空 `region_key`、`credential_ref_key` 及可选 `data_handling`；没有 Profile、连接模式或环境变量角色。
+- Streaming 声明端点、超时和凭据角色，地域为空；Filetrans 使用相同通用声明，前端和调度器不按 Qwen 类型分支。内联连接使用不持久化的 `InlineConnection`，旧 Profile 专用模型与冻结器已删除。
+- Streaming 的存储期限未声明，`remote_cancel_pending_only=false`、`cancel_behavior=close_stream`；界面说明关闭连接不能撤回已发送音频，不套用 Filetrans 临时上传期限。
 
 ## 执行与结果
 
@@ -58,12 +56,14 @@
 - 假 WebSocket 完整覆盖握手、任务状态顺序、边发边收、语言/附加参数、finish 后结果、真实时间戳、最终句子去重及 TXT/字幕产物。
 - 覆盖 WAV 头与截断、声道/位深错误、非 WAV、混合采样率、未知同协议模型、超大/坏事件、任务 ID 不符、断线、各阶段取消、总超时、关闭清理及无重发。
 - 同图包含两个 Streaming 节点及 Filetrans 节点，验证地址和 Key 独立、跨实例引用拒绝、复制无密钥，以及轮换后的队列与重试仍使用原引用。
-- 兼容旧 Filetrans 图、Profile、运行/批次及旧目录，读取不改原字节/签名。新纯内联扩展不需要修改通用调度器或前端类型名单。
+- 旧运行/批次与产物被动读取不改原文件；旧 Profile 图明确拒绝，现有无旧字段的 Streaming 图继续使用自身凭据。纯节点连接扩展不修改通用调度器或前端类型名单。
 - 后端全量与 Ruff、前端全量与构建，并在 Windows 隔离服务/模拟平台中进行真实浏览器验收。未使用真实账号时，不宣称已完成真实服务、质量或计费验收；未实测的其他系统不视为通过。
 
-## 实际验证
+## 初版验收记录（1.10，旧连接兼容已退役）
 
 - Windows 后端全量 **644 passed, 4 skipped**，Ruff 检查及格式检查通过；Streaming 传输、节点及原 Filetrans 定向回归 **179 passed**，覆盖各阶段取消/超时、实际线程读取回收、限速、重定向拒绝、异常事件、旧图原字节与摘要、冻结序号/连接/凭据。
 - 前端全量 **457 passed**，最后双语错误码更新后相关 **71 passed**，构建通过；实际后端 1.10 目录可由前端解析，旧目录回归保留。
 - 真实 Headless Edge 连接隔离后端及假 HTTP/WebSocket 平台：同图两个 Streaming 与一个 Filetrans，各自密钥；两份 8k/16k WAV 批次及普通单运行、提交后轮换地址/Key仍用原快照、真实 SRT 时间、重复最终句子去重、复制无凭据、取消关闭连接、缺 Key 提交拒绝、中英切换保留私有输入与 390px 画布检查通过，浏览器异常为 0。测试仅使用合成音频及假密钥。
 - 未验证真实平台账号、质量、计费、长期保留策略或其他系统；4 项跳过不计为通过。
+
+当前目录 1.11 与旧连接移除的验证见[独立连接规格](node-connections-only.md)；上述初版测试数仅作历史记录。

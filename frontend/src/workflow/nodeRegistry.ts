@@ -109,12 +109,11 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
       const issues: NodeRegistryIssue[] = []
       const allowed = new Set(definition.fields.map((field) => field.key))
       const unexpected = Object.keys(config || {}).filter((key) => !allowed.has(key))
-      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: unexpected.join(', ') }) })
+      if (unexpected.length) issues.push({ code: definition.inlineConnectionInput ? 'LEGACY_CONNECTION_UNSUPPORTED' : 'INVALID_NODE_CONFIG', ...issueText(definition.inlineConnectionInput ? 'connections.rebuildCloudNode' : 'workflow.unknownFields', { p0: unexpected.join(', ') }) })
       for (const field of definition.fields) {
         const value = config?.[field.key]
         const inline = definition.inlineConnectionInput
-        if (value === null && inline && [inline.regionKey, inline.apiKeyEnvKey, inline.credentialRefKey].includes(field.key)) continue
-        if (definition.providerProfileInput?.configKey === field.key && inline && (inline.modeKey === null || config[inline.modeKey] === inline.modeValue)) continue
+        if (value === null && inline && [inline.regionKey, inline.credentialRefKey].includes(field.key)) continue
         if (value === undefined) {
           if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue
@@ -134,7 +133,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
           if (field.minimum !== null && value < field.minimum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
           if (field.maximum !== null && value > field.maximum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
         }
-        if (field.type === 'select' && !(value === '' && definition.providerProfileInput?.configKey === field.key) && !field.options.some((option) => option.value === value)) {
+        if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
           issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
         }
         if (typeof value === 'string') {

@@ -66,16 +66,16 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 - 持久化 JSON 使用 UTF-8 与显式 `schema_version=1.0`；仅接受相同版本，含嵌套快照。缺失或不同版本拒绝读取，恢复扫描跳过且不改写错误文件。
 - JSON 与产物使用同目录唯一临时文件，刷新、同步后 `os.replace()` 发布；失败清理本次临时文件，保留旧状态。
 - 存储路径为项目相对 POSIX 路径；解析后必须仍在授权目录。拒绝目录穿越、危险符号链接和 Windows 保留文件名，不能覆盖源文件或其他运行产物。
-- 当前节点不执行外部命令，不依赖旧桌面或本地模型工具；Qwen 云节点在执行边界解析独立加密凭据或服务端指定环境变量并调用配置服务，密钥及签名地址不进入图、快照、日志或产物。跨平台能力需由当前 Web 测试证明，不能根据旧桌面测试宣称已兼容；Windows 无符号链接权限导致的跳过不等于对应场景通过。
+- 当前节点不执行外部命令，不依赖旧桌面或本地模型工具；云节点仅解析自身的加密凭据版本并调用自身配置的服务，不读取 Profile 或环境变量密钥。秘密及签名地址不进入日志或产物。跨平台能力需由当前 Web 测试证明，平台条件跳过不等于对应场景通过。
 - 面向用户返回稳定错误码，不暴露 traceback、密钥或本机路径。运行数据和个人脚本不入库。
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、分类、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.10`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
+`GET /api/v1/capabilities` 从实时节点注册表发布分类、端口、类型、配置、约束与默认图。API 与持久化 schema 仍为 `1.0`，独立工作流目录为 `1.11`；字段边界从 Pydantic schema 派生，复杂语义由后端校验。目录不再读取全局 Profile 文件，也不派生旧连接选项；数量约束与验证共用权威值，客户端拒绝未知目录版本。
 
-目录 `1.9` 的 `presentation.inline_connection_input` 声明节点内连接的模式、地址、超时、地域、备用环境变量及凭据引用字段。新 Qwen 节点使用内联模式，旧缺模式的配置继续按 Profile 处理且不补写。实际密钥不属于配置 schema，只经保存请求的只写更新提交到标准 Fernet 加密存储；引用绑定项目、节点及 Provider，每次替换产生不可变版本。内联设置及引用随原图冻结，重试不读取当前密钥；旧 Profile 保留冻结非密钥设置、执行时读取环境变量的语义。密码缓冲不进入前端图与撤销，便携复制按声明清除引用。凭据先落盘再原子发布图，同请求重试幂等；失败允许无引用密文，不覆盖旧版本。密钥存储和备份边界见[连接文档](provider_profiles.md)。
+节点密钥通过只写更新提交到标准 Fernet 加密存储，图与快照只保留项目/节点/类型绑定的不可变引用。凭据先落盘再原子发布图，相同请求重试幂等；无引用密文可保留，不能清理仍可能被历史引用的版本。密码缓冲不进入前端图/撤销，复制及导入导出清除引用；队列与重试使用原版本，见[节点连接](node_connections.md)。
 
-目录 `1.10` 的内联声明独立提供 Provider 类型与标签，不要求 Profile 声明；模式角色成对为 null 表示始终内联，地域及环境变量角色可空，数据处理可声明 `cancel_behavior=close_stream`。非持久 `InlineConnection` 单独表达 HTTP/WebSocket 节点连接，不放宽旧 HTTP Profile 模型。新 Streaming 节点没有 Profile/env 继承，仅解析自身项目/节点/类型绑定的凭据版本；前端按声明渲染和移除便携引用，调度器无需按类型分支。旧图、快照及摘要不补字段，前端兼容目录 `1.2–1.9`。
+目录 `1.11` 的 `presentation.inline_connection_input` 仅声明 `provider_type/label/base_url_key/timeout_key/region_key/credential_ref_key` 和可选 `data_handling`；地域角色可空，不再有 Profile、模式或环境变量角色。非持久 `InlineConnection` 仅表达节点自身连接。通用执行器按声明冻结/读取，前端按声明渲染，不使用节点类型分支。旧连接目录与配置明确拒绝，不自动迁移；历史原始元数据与产物保持可读，不恢复执行兼容。
 
 Streaming 适配器使用单次 WebSocket 的 `run-task/task-started`、二进制音频、`result-generated`、`finish-task/task-finished` 协议；安全端点规则集中在其协议模块，配置及传输层共用。仅接受经有界头检查的 PCM16 单声道 WAV，按真实采样率限速发送并并发接收；完成后才发布统一 Transcript（stage=`raw`），真实毫秒转秒，最终句子按声道/编号去重并拒绝矛盾结果。取消及总超时会回收收发、进行中的读取和连接；无重连/重发，不提供麦克风、自动转码或实时字幕 UI。完整契约见[Streaming 规格](../spec/cloud-asr-qwen-streaming.md)。
 
@@ -85,7 +85,7 @@ Streaming 适配器使用单次 WebSocket 的 `run-task/task-started`、二进�
 
 `domain/node_contracts.py` 定义自描述契约，`domain/node_registry_core.py` 管理通用实时注册与目录派生，`domain/node_registry.py` 保留旧导入入口并显式组合内置类型与节点。各 `nodes/` 模块拥有配置、声明和执行入口；输出配置不再由目录按 `config_kind` 特判。节点通过 `register_node(NodeDefinition(...))` 关联配置校验、端口、终端标志与异步执行器；`register_port` 只定义稳定的端口 ID 与 `type_id` 绑定，另外声明目标端口需要的能力；`register_type` 定义逻辑数据类型、父类型、能力集合和运行时校验。端口身份不再承担数据类型身份：例如 `pcm_audio_out` 可以绑定到 `audio_pcm`，并通过父类型关系连接到要求 `audio` 的输入端口。能力目录发布 `{id, type_id, label, capability_requirements}` 端口对象和独立的 `data_types` 目录，工作流边只保存稳定的端口 ID，不保存展示名称；边端口 ID 与注册规则保持一致，最多 64 字符。执行器接收 `NodeExecutionContext`、读取命名 `NodeData` 并返回 `NodeResult`；运行时按注册表校验值是否满足逻辑类型。节点使用通用 `NodeExecutionError(code,message)` 报告可展示的失败，完成资源清理后通过 `NodeExecutionCancelled` 报告取消；调度器不依赖 ASR 等节点专用异常。`required_input_ports` 逐名声明必填输入，目录中的 `required_inbound` 为其长度；旧未声明命名要求的定义继续将旧计数 0 解释为全可选，其余按全部输入必填派生。调度按每条边的 `source_port → target_port` 组装命名输入，同时校验输入与全部已声明输出的运行时类型。未连接的可选输入不传入；连接了失败上游的可选输入也会阻断当前节点。文件复制、源音频定位与原子发布集中到 `application/workflow_media.py`，调度器不特判内置节点类型。新增已有数据类型的节点通过独立模块与组合入口注册接入，无需修改通用调度器。不能让客户端提交任意导入路径或代码。
 
-每次图运行仍为单源、单音频，批次在图外组织多份音频分别运行；多端口扩展不等同于混音或新增真实节点。每次节点结果仍至多保存一份 artifact 和一份 preview，多份持久导出结果使用独立输出节点。参数转连线与基础值节点见[参数规格](../spec/node-parameters.md)；动态字段、选定输出执行、持久缓存重跑、事件和子图仍分别细化，不作为当前能力；范围与验收见[节点模块化与多端口](../spec/node-modularity.md)。新数据源、视频及其他云端协议仍需独立规格。目录 `1.7` 新增声明式连接输入，普通运行/批次提交在 `workflow.provider_profiles_snapshot` 冻结所需非密钥连接，排队与重试只复制旧设置；注册声明驱动选项、引用检查和冻结器，调度器不按 Qwen 类型分支。旧快照缺字段省略，不补写。云协议使用可取消异步 HTTP、完整总超时与分块上传，取消等待本地回收并尝试一次有界远端取消，不能保证远端 RUNNING 停止或立即删临时文件。具体配置、数据处理声明和限制见[服务连接](provider_profiles.md)。
+每次图运行仍为单源、单音频，批次在图外组织多份音频；多端口不代表混音。每节点仍至多保存一份 artifact 和一份 preview，多份持久导出使用独立输出节点。参数连线、动态字段、选定输出执行、缓存、事件和子图分别见对应规格，不作为当前已实现能力。云协议分别使用可取消 HTTP 或 WebSocket、完整总超时和有界传输。旧 `provider_profiles_snapshot` 仅是被动历史元数据，不参与提交、重试或鉴权；旧服务连接已按[独立连接规格](../spec/node-connections-only.md)移除。
 
 ## 7. 文件夹导入与批次调度
 

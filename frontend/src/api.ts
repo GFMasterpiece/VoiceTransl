@@ -24,7 +24,7 @@ export async function parseApiError(response: Response): Promise<Error> {
   const serverMessage = typeof error?.message === 'string' && error.message.trim()
     ? error.message
     : typeof payload?.detail === 'string' && payload.detail.trim() ? payload.detail : undefined
-  const key = code ? [`common.api.${code}`, `profiles.error_${code}`].find(hasMessage) : undefined
+  const key = code ? [`common.api.${code}`, `connections.error_${code}`].find(hasMessage) : undefined
   const result = key && hasMessage(key)
     ? message(key, { status: response.status })
     : serverMessage ? new Error(serverMessage) : message('common.errors.requestFailed', { status: response.status })

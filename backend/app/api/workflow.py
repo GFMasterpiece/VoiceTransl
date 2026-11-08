@@ -4,8 +4,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
+from ..application.workflow_connections import (
+    ConnectionSnapshotError,
+    reject_connection_validation_errors,
+)
 from ..application.workflow_credentials import prepare_workflow_credentials
-from ..application.workflow_profiles import ProfileSnapshotError
 from ..domain import (
     WorkflowDocument,
     WorkflowEdge,
@@ -115,6 +118,10 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
     store = request.app.state.store
     issues = validate_workflow_graph(body.nodes, body.edges)
     issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
+    try:
+        reject_connection_validation_errors(issues)
+    except ConnectionSnapshotError as error:
+        raise HTTPException(422, detail=_error(error.code, str(error))) from None
     if issues:
         raise HTTPException(
             422,
@@ -170,7 +177,7 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
                 ):
                     return published
                 raise
-        except ProfileSnapshotError as error:
+        except ConnectionSnapshotError as error:
             status = (
                 409
                 if error.code == "CREDENTIAL_REQUEST_CONFLICT"
@@ -211,7 +218,7 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
     _audio(request, pid, aid)
     try:
         return await request.app.state.jobs.start_workflow(pid, aid, body.workflow_revision)
-    except ProfileSnapshotError as error:
+    except ConnectionSnapshotError as error:
         raise HTTPException(422, detail=_error(error.code, str(error))) from error
     except RuntimeError as error:
         if str(error) == "WORKFLOW_REVISION_CONFLICT":

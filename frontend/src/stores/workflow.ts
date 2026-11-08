@@ -7,9 +7,9 @@ import type { NodeType, NodeRegistry, PortName } from '../workflow/nodeRegistry'
 import { fetchCapabilities } from '../workflow/capabilities'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import { TransferError, validateTransferGraph } from '../workflow/editorTransfer'
-import { providerErrorLabel, type ProviderProfile } from './providerProfiles'
+import { providerErrorLabel } from '../workflow/providerErrors'
 import { workflowCredentials } from '../composables/workflowCredentials'
-import { inlineConnectionActive, inlineConnectionKeys } from '../workflow/providerConnections'
+import { inlineConnectionKeys } from '../workflow/providerConnections'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = string
@@ -74,7 +74,7 @@ export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { i
   return {
     width: Math.max(registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
       registry?.kind(node.type)?.fields.length ? WORKFLOW_NODE_FORM_WIDTH : 0,
-      registry?.kind(node.type)?.inlineConnectionInput || registry?.kind(node.type)?.providerProfileInput ? WORKFLOW_NODE_CONNECTION_WIDTH : 0,
+      registry?.kind(node.type)?.inlineConnectionInput ? WORKFLOW_NODE_CONNECTION_WIDTH : 0,
       dimension(node.size?.width), dimension(measuredMin?.width)),
     height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges) : WORKFLOW_NODE_HEIGHT,
       dimension(node.size?.height), dimension(measuredMin?.height)),
@@ -93,7 +93,7 @@ export interface WorkflowDocumentInput {
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
 }
-export interface WorkflowSnapshot extends WorkflowDocumentInput { provider_profiles_snapshot?: Record<string, ProviderProfile> | null }
+export interface WorkflowSnapshot extends WorkflowDocumentInput { provider_profiles_snapshot?: Record<string, unknown> | null }
 
 export interface WorkflowDocument extends WorkflowDocumentInput {
   schema_version: string
@@ -491,6 +491,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const dirty = computed(() => credentialPending.value || savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
     || savedLayoutSignature.value !== layoutSignature(draft.value))
+  const legacyConnectionUnsupported = computed(() => draft.value.nodes.some((node) => registry.value?.validateConfig(node.type, node.config).some((issue) => issue.code === 'LEGACY_CONNECTION_UNSUPPORTED')))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
   const activeSingleRun = computed(() => !!activeRun.value && !run.value?.batch_id)
@@ -501,29 +502,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const historyTransactionActive = computed(() => !!transaction.value)
   const currentOutputNode = computed(() => selectedNode.value && registry.value && isTerminalNode(selectedNode.value.type, registry.value) ? selectedNode.value : null)
   const runOutputs = computed(() => (run.value?.nodes || []).filter((node) => !!node.artifact))
-  const runMatchesDraft = computed(() => {
-    if (!run.value || !registry.value || credentialPending.value) return false
-    const currentSignature = executionSignature(draft.value, registry.value)
-    if (executionSignature(run.value.workflow, registry.value) === currentSignature) return true
-    if (!document.value || run.value.workflow_revision !== document.value.workflow_revision) return false
-    // Submitting an env-backed inline connection freezes a new credential ref in
-    // the run only. Normalize that derived ref for the same saved revision.
-    const snapshot = cloneDocument(run.value.workflow)
-    for (const node of snapshot.nodes) {
-      const inline = registry.value.kind(node.type)?.inlineConnectionInput
-      const current = draft.value.nodes.find((item) => item.id === node.id && item.type === node.type)
-      const saved = document.value.nodes.find((item) => item.id === node.id && item.type === node.type)
-      if (!inline || !inline.apiKeyEnvKey || !current || !saved || !inlineConnectionActive(registry.value.kind(node.type), current.config)
-        || typeof node.config[inline.credentialRefKey] !== 'string' || !node.config[inline.credentialRefKey]
-        || current.config[inline.credentialRefKey] || saved.config[inline.credentialRefKey]
-        || typeof saved.config[inline.apiKeyEnvKey] !== 'string' || !String(saved.config[inline.apiKeyEnvKey]).trim()
-        || current.config[inline.apiKeyEnvKey] !== saved.config[inline.apiKeyEnvKey]) continue
-      if (current.config[inline.credentialRefKey] === undefined) delete node.config[inline.credentialRefKey]
-      else node.config[inline.credentialRefKey] = current.config[inline.credentialRefKey]
-    }
-    return executionSignature(snapshot, registry.value) === currentSignature
-  })
-  watch(() => draft.value.nodes.filter((node) => inlineConnectionActive(registry.value?.kind(node.type), node.config)).map((node) => node.id),
+  const runMatchesDraft = computed(() => !!run.value && !!registry.value && !credentialPending.value
+    && executionSignature(run.value.workflow, registry.value) === executionSignature(draft.value, registry.value))
+  watch(() => draft.value.nodes.filter((node) => !!registry.value?.kind(node.type)?.inlineConnectionInput).map((node) => node.id),
     (ids) => credentials.reconcile(new Set(ids)), { flush: 'sync' })
 
   function currentKey() { return { id: projectId.value, audioId: audioId.value } }
@@ -912,6 +893,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function startRun() {
+    if (legacyConnectionUnsupported.value) { errorState.set(message('connections.error_LEGACY_CONNECTION_UNSUPPORTED')); return null }
     if (boundAudioIds.value && boundAudioIds.value.length !== 1) { errorState.set(message(boundAudioIds.value.length ? 'batch.multiRequiresBatch' : 'batch.empty')); return null }
     if (batchSubmitting.value) { errorState.set(message('batch.busy')); return null }
     if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
@@ -1385,7 +1367,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    credentialContext, credentialPending,
+    credentialContext, credentialPending, legacyConnectionUnsupported,
     capabilities, capabilitiesError, capabilitiesLoading, refreshCapabilities, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, boundAudioIds, setAudioContext,

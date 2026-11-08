@@ -6,9 +6,7 @@ import pytest
 from app.domain.inline_connection import InlineConnection
 from app.domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from app.domain.node_registry import NODE_DEFINITIONS, node_catalog, validate_node_definition
-from app.domain.provider_profile import ProviderProfile
 from app.domain.transcript import Segment, Transcript
-from app.domain.workflow import WorkflowDocument, workflow_semantic_digest, workflow_snapshot
 from app.main import create_app
 from app.nodes.qwen_asr_streaming import normalize
 from app.storage.secret_store import SecretStore
@@ -80,10 +78,7 @@ async def test_inline_only_draft_does_not_inherit_filetrans_profile_or_env(
         )
         assert validated.json()["valid"]
 
-        def no_profiles():
-            raise AssertionError("inline-only execution must not read global profiles")
-
-        monkeypatch.setattr(app.state.store, "load_provider_profiles", no_profiles)
+        assert not hasattr(app.state.store, "load_provider_profiles")
         rejected = await client.post(
             f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs",
             json={"workflow_revision": draft["workflow_revision"]},
@@ -107,7 +102,7 @@ async def test_inline_only_draft_does_not_inherit_filetrans_profile_or_env(
         assert completed.workflow.provider_profiles_snapshot is None
         assert stream["calls"][-1]["api_key"] == KEY_A
         assert isinstance(stream["calls"][-1]["connection"], InlineConnection)
-        assert stream["calls"][-1]["connection"].api_key_env is None
+        assert not hasattr(stream["calls"][-1]["connection"], "api_key_env")
         assert KEY_A not in json.dumps(completed.model_dump(mode="json"))
 
 
@@ -290,8 +285,8 @@ def test_streaming_catalog_is_independent_and_has_honest_data_handling():
     assert "provider_profile_input" not in node["presentation"]
     binding = node["presentation"]["inline_connection_input"]
     assert binding["provider_type"] == "qwen_asr_streaming"
-    assert binding["mode_key"] is binding["mode_value"] is None
-    assert binding["region_key"] is binding["api_key_env_key"] is None
+    assert binding["region_key"] is None
+    assert not {"mode_key", "mode_value", "api_key_env_key"} & set(binding)
     assert binding["data_handling"] == {
         "temporary_upload_retention_hours": None,
         "remote_cancel_pending_only": False,
@@ -305,51 +300,6 @@ def test_streaming_catalog_is_independent_and_has_honest_data_handling():
         for key in ("endpoint", "timeout_seconds", "credential_ref")
     )
     assert "api_key" not in fields and "api_key_env" not in fields
-
-
-@pytest.mark.asyncio
-async def test_legacy_filetrans_graph_and_snapshot_are_not_rewritten_by_new_catalog(tmp_path):
-    app = create_app(tmp_path)
-    app.state.store.save_provider_profiles(
-        [
-            ProviderProfile(
-                id="legacy",
-                provider_type="qwen_asr",
-                display_name="Legacy",
-                base_url="https://old.example/api",
-                api_key_env="OLD_FILETRANS_KEY",
-            )
-        ]
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        pid, _, document = await setup(client, 1)
-        saved = await save(
-            client,
-            pid,
-            graph(
-                document,
-                {
-                    "provider_profile_id": "legacy",
-                    "model": "old-compatible-model",
-                    "language": "ja",
-                    "additional_parameters": {},
-                },
-            ),
-        )
-        old = WorkflowDocument.model_validate(saved)
-        snapshot = workflow_snapshot(old)
-        before_snapshot = snapshot.model_dump_json()
-        before_digest = workflow_semantic_digest(old.nodes, old.edges)
-        path = app.state.store._workflow_path(pid)
-        before_file = path.read_bytes()
-        response = await client.get("/api/v1/capabilities")
-        assert response.json()["workflow"]["schema_version"] == "1.10"
-        assert (await client.get(f"/api/v1/projects/{pid}/workflow")).json() == saved
-        loaded = app.state.store.load_workflow(pid)
-        assert path.read_bytes() == before_file
-        assert workflow_semantic_digest(loaded.nodes, loaded.edges) == before_digest
-        assert workflow_snapshot(loaded).model_dump_json() == before_snapshot
-        assert not {"connection_mode", "credential_ref", "endpoint"} & set(config_of(saved))
 
 
 @pytest.mark.parametrize(

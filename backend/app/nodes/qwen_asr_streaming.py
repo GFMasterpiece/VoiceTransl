@@ -55,8 +55,8 @@ def normalize(config):
 async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..adapters.qwen_asr_streaming import QwenStreamingASRAdapter
     from ..application.workflow_asr import TranscriptData, _write_bytes
-    from ..application.workflow_profiles import (
-        ProfileSnapshotError,
+    from ..application.workflow_connections import (
+        ConnectionSnapshotError,
         inline_connection_from_snapshot,
     )
     from ..domain.workflow import WorkflowArtifact
@@ -66,7 +66,7 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
         connection, api_key = inline_connection_from_snapshot(
             context.store, context.run.workflow, context.node.id, context.run.project_id
         )
-    except ProfileSnapshotError as error:
+    except ConnectionSnapshotError as error:
         raise NodeExecutionError(error.code, str(error)) from None
     audio = next(
         (audio for audio in context.project.audios if audio.id == context.run.audio_id), None
@@ -138,12 +138,9 @@ def definition():
             "inline_connection_input": {
                 "provider_type": PROVIDER_TYPE,
                 "label": "Qwen Streaming",
-                "mode_key": None,
-                "mode_value": None,
                 "base_url_key": "endpoint",
                 "timeout_key": "timeout_seconds",
                 "region_key": None,
-                "api_key_env_key": None,
                 "credential_ref_key": "credential_ref",
                 "data_handling": {
                     "temporary_upload_retention_hours": None,

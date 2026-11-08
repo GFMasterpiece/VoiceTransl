@@ -30,16 +30,6 @@ def _require_nested(payload: Any, path: str, document: str) -> None:
     require_schema_version(payload.get("schema_version"), f"{document}.{path}")
 
 
-def _require_profile_snapshots(payload: dict, document: str) -> None:
-    profiles = payload.get("provider_profiles_snapshot")
-    if profiles is None:
-        return
-    if not isinstance(profiles, dict):
-        raise SchemaVersionError(f"{document}.provider_profiles_snapshot", None)
-    for profile_id, profile in profiles.items():
-        _require_nested(profile, f"provider_profiles_snapshot.{profile_id}", document)
-
-
 def validate_schema_payload(payload: Any, document: str = "document") -> None:
     if not isinstance(payload, dict):
         raise SchemaVersionError(document, None)
@@ -47,16 +37,8 @@ def validate_schema_payload(payload: Any, document: str = "document") -> None:
     if document == "job":
         if "config_snapshot" in payload and payload["config_snapshot"] is not None:
             _require_nested(payload["config_snapshot"], "config_snapshot", document)
-        _require_profile_snapshots(payload, document)
     elif document in {"workflow run", "batch"}:
         _require_nested(payload.get("workflow"), "workflow", document)
-        _require_profile_snapshots(payload["workflow"], f"{document}.workflow")
-    elif document == "provider profiles":
-        profiles = payload.get("profiles")
-        if not isinstance(profiles, list):
-            raise SchemaVersionError(f"{document}.profiles", None)
-        for index, profile in enumerate(profiles):
-            _require_nested(profile, f"profiles.{index}", document)
 
 
 __all__ = [

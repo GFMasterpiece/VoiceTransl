@@ -28,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.10"
+    assert body["workflow"]["schema_version"] == "1.11"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -227,30 +227,12 @@ def test_category_label_conflicts_are_rejected_at_registration_and_catalog(monke
         node_catalog()
 
 
-def test_inline_connection_mode_must_exist_in_declared_select_options():
-    definition = NODE_DEFINITIONS["qwen_asr"]
-    presentation = {
-        **definition.presentation,
-        "inline_connection_input": {
-            **definition.presentation["inline_connection_input"],
-            "mode_value": "unlisted_mode",
-        },
-    }
-    invalid = replace(definition, type="invalid_inline_mode", presentation=presentation)
-    with pytest.raises(ValueError, match="inline connection mode must be a declared option"):
-        register_node(invalid)
-    assert invalid.type not in NODE_DEFINITIONS
-
-
 @pytest.mark.parametrize(
     "role",
     [
-        "mode_key",
-        "mode_value",
         "base_url_key",
         "timeout_key",
         "region_key",
-        "api_key_env_key",
         "credential_ref_key",
     ],
 )

@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import math
-import os
 import re
 from contextvars import ContextVar
 from pathlib import Path
@@ -19,6 +18,7 @@ from uuid import uuid4
 
 import httpx
 
+from ..domain.inline_connection import InlineConnection
 from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..domain.transcript import Segment, Transcript
 from .qwen_protocol import (
@@ -28,6 +28,7 @@ from .qwen_protocol import (
     POLL_INTERVAL,
     TEMPORARY_UPLOAD_RETENTION_HOURS,
     validate_additional_parameters,
+    validate_base_url,
 )
 from .qwen_protocol import DEFAULT_MODEL as DEFAULT_MODEL
 
@@ -257,24 +258,18 @@ def parse_transcript(payload, *, project_id: str, language: str) -> Transcript:
 
 
 class _Session:
-    def __init__(self, profile, model, api_key=None):
-        self.profile, self.model = profile, model
+    def __init__(self, connection: InlineConnection, model: str, api_key: str):
+        self.model = model
         self.task_id = None
         self.cancel_attempted = False
         self.stage = "初始化"
-        if not profile.base_url:
-            raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen连接需要服务地址")
-        self.base = profile.base_url.rstrip("/")
-        parsed = urlsplit(self.base)
-        if parsed.query or parsed.fragment or parsed.username or parsed.password:
-            raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen服务地址不能包含查询参数或认证信息")
-        # None preserves the legacy env contract. An explicitly supplied empty
-        # or invalid value must fail, never fall back to another credential.
+        if not isinstance(connection, InlineConnection):
+            raise QwenASRError("QWEN_CONNECTION_INVALID", "Qwen需要当前节点的独立连接设置")
+        try:
+            self.base = validate_base_url(connection.base_url).rstrip("/")
+        except ValueError:
+            raise QwenASRError("QWEN_CONNECTION_INVALID", "Qwen节点服务地址无效") from None
         key = api_key
-        if key is None:
-            if not profile.api_key_env:
-                raise QwenASRError("QWEN_PROFILE_INVALID", "Qwen连接需要密钥或密钥环境变量名")
-            key = os.environ.get(profile.api_key_env)
         if not isinstance(key, str) or not key or any(ord(c) < 33 or ord(c) > 126 for c in key):
             raise QwenASRError("QWEN_CREDENTIALS_MISSING", "Qwen密钥未设置或格式无效")
         self.auth = {"Authorization": f"Bearer {key}"}
@@ -473,23 +468,23 @@ async def transcribe(
     audio_path,
     project_id,
     language,
-    profile,
+    connection: InlineConnection,
     model,
     additional_parameters,
     cancel_event,
-    api_key=None,
+    api_key: str,
 ):
     validate_additional_parameters(additional_parameters)
     if cancel_event.is_set():
         raise QwenASRCancelled()
-    session = _Session(profile, model, api_key)
+    session = _Session(connection, model, api_key)
     token = _PRIVATE_HTTP.set(True)
     work = asyncio.create_task(
         session.run(Path(audio_path), project_id, language, additional_parameters)
     )
     cancelled = asyncio.create_task(cancel_event.wait())
     try:
-        async with asyncio.timeout(profile.default_timeout):
+        async with asyncio.timeout(connection.default_timeout):
             done, _ = await asyncio.wait({work, cancelled}, return_when=asyncio.FIRST_COMPLETED)
             if cancelled in done or cancel_event.is_set():
                 raise QwenASRCancelled()

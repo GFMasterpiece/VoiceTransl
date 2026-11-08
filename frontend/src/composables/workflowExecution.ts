@@ -4,6 +4,7 @@ import { useWorkflowStore } from '../stores/workflow'
 export interface WorkflowExecution { reason: ComputedRef<string>; start: () => Promise<unknown> }
 export const workflowExecutionKey: InjectionKey<WorkflowExecution> = Symbol('workflowExecution')
 export function baseRunReason(store: ReturnType<typeof useWorkflowStore>) {
+  if (store.legacyConnectionUnsupported) return t('connections.error_LEGACY_CONNECTION_UNSUPPORTED')
   if (store.dirty) return t('workflow.saveBeforeRun')
   if (store.loading || store.saving || store.validating || store.resourceUploading || store.actionLoading || store.activeSingleRun) return t('batch.busy')
   if (!store.document || !store.registry || store.validationIssues.length) return t('batch.invalidGraph')

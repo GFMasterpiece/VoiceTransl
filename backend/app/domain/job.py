@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field, field_validator
 from .enums import JobStatus, PipelineStageName, StageStatus
 from .legacy_config import LegacyPipelineConfig
 from .project import PRIMARY_AUDIO_ID
-from .provider_profile import ProviderProfile
 from .schema import require_schema_version
 
 
@@ -45,8 +44,8 @@ class Job(BaseModel):
     # The exact non-secret configuration used for this run.  Older jobs do
     # not have this field and remain valid when loaded by Pydantic.
     config_snapshot: LegacyPipelineConfig | None = None
-    # Resolved, secret-free provider profiles used by this run.
-    provider_profiles_snapshot: dict[str, ProviderProfile] = Field(default_factory=dict)
+    # Passive historical metadata; never interpreted as an execution connection.
+    provider_profiles_snapshot: dict[str, object] = Field(default_factory=dict)
     # Local capability identities are captured at queue time. Runtime paths
     # remain external settings and are deliberately not persisted here.
     asr_backend_ids: list[str] = Field(default_factory=list)

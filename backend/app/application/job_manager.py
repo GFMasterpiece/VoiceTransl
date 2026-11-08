@@ -18,7 +18,11 @@ from ..domain.workflow import (
     workflow_parameter_sources,
     workflow_snapshot,
 )
-from .workflow_profiles import freeze_workflow_profiles, validate_frozen_workflow_profiles
+from .workflow_connections import (
+    freeze_workflow_connections,
+    reject_connection_validation_errors,
+    validate_frozen_workflow_connections,
+)
 from .workflow_runner import execute_workflow_run
 
 logger = logging.getLogger("voicetransl.jobs")
@@ -119,6 +123,7 @@ class JobManager:
                 issues.extend(
                     validate_workflow_resources(self.store.load_project(project_id), document.nodes)
                 )
+                reject_connection_validation_errors(issues)
                 if issues:
                     raise ValueError("invalid workflow")
                 validate_workflow_audio_selection(
@@ -132,9 +137,9 @@ class JobManager:
                     else workflow_snapshot(document)
                 )
                 if _snapshot is None:
-                    snapshot = freeze_workflow_profiles(self.store, snapshot, project_id)
+                    snapshot = freeze_workflow_connections(self.store, snapshot, project_id)
                 else:
-                    validate_frozen_workflow_profiles(snapshot, self.store, project_id)
+                    validate_frozen_workflow_connections(snapshot, self.store, project_id)
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",

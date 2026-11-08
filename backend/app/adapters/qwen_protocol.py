@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from urllib.parse import urlsplit
 
 DEFAULT_MODEL = "qwen-audio-3.1-asr-flash-filetrans"
 DEFAULT_BASE_URL = "https://maas.qianwenaiapi.com/api/v1"
@@ -13,6 +14,29 @@ POLL_INTERVAL = 2.0
 CANCEL_TIMEOUT = 2.0
 
 TEMPORARY_UPLOAD_RETENTION_HOURS = 48
+
+
+def validate_base_url(value):
+    """Shared Filetrans endpoint validation; errors never echo connection data."""
+    try:
+        if not isinstance(value, str) or not value or len(value) > 2048:
+            raise ValueError
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.port == 0
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+            or value != value.strip()
+            or any(ord(c) <= 32 or ord(c) == 127 for c in value)
+        ):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ValueError("Qwen节点服务地址无效") from None
+    return value
 
 
 def validate_additional_parameters(value):

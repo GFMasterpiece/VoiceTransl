@@ -14,7 +14,6 @@ from .node_contracts import NodeConfigCapability as NodeConfigCapability
 from .node_contracts import NodeDefinition as NodeDefinition
 from .node_contracts import PortDefinition as PortDefinition
 from .node_execution import NodeResult
-from .provider_profile import ProviderProfile
 
 TYPE_DEFINITIONS: dict[str, DataTypeDefinition] = {}
 PORT_DEFINITIONS: dict[str, PortDefinition] = {}
@@ -215,9 +214,8 @@ def _catalog_presentation(definition):
     binding = _resource_binding(definition)
     if binding is not None:
         presentation["resource_input"] = binding
-    profile_binding = _provider_profile_binding(definition)
-    if profile_binding is not None:
-        presentation["provider_profile_input"] = profile_binding
+    if "provider_profile_input" in presentation:
+        raise ValueError("provider profile declarations are no longer supported")
     inline = _inline_connection_binding(definition)
     if inline is not None:
         presentation["inline_connection_input"] = inline
@@ -228,30 +226,22 @@ def _inline_connection_binding(definition):
     binding = (definition.presentation or {}).get("inline_connection_input")
     if binding is None:
         return None
-    roles = {
-        "mode_key",
-        "base_url_key",
-        "timeout_key",
-        "region_key",
-        "api_key_env_key",
-        "credential_ref_key",
-    }
-    required = roles | {"mode_value", "provider_type", "label"}
+    roles = {"base_url_key", "timeout_key", "region_key", "credential_ref_key"}
+    required = roles | {"provider_type", "label"}
     if (
         not isinstance(binding, dict)
         or not required <= set(binding)
         or set(binding) - (required | {"data_handling"})
     ):
         raise ValueError("invalid inline connection declaration")
-    nullable = {"mode_key", "mode_value", "region_key", "api_key_env_key"}
     if any(
-        not (key in nullable and binding[key] is None)
+        not (key == "region_key" and binding[key] is None)
         and (
             not isinstance(binding[key], str)
             or not re.fullmatch(BINDING_IDENTIFIER_PATTERN, binding[key])
         )
-        for key in roles | {"mode_value", "provider_type"}
-    ) or ((binding["mode_key"] is None) != (binding["mode_value"] is None)):
+        for key in roles | {"provider_type"}
+    ):
         raise ValueError("invalid inline connection declaration")
     label = binding["label"]
     if (
@@ -267,19 +257,9 @@ def _inline_connection_binding(definition):
     fields = {item.key: item for item in definition.fields}
     for role in bound_roles:
         item = fields.get(binding[role])
-        expected = (
-            "integer" if role == "timeout_key" else "select" if role == "mode_key" else "string"
-        )
+        expected = "integer" if role == "timeout_key" else "string"
         if item is None or item.type != expected or item.input_port is not None:
             raise ValueError("inline connection fields cannot be connected parameters")
-    mode = fields.get(binding["mode_key"])
-    if mode is not None and not any(
-        option.get("value") == binding["mode_value"] for option in mode.options
-    ):
-        raise ValueError("inline connection mode must be a declared option")
-    profile = _provider_profile_binding(definition)
-    if profile is not None and profile["provider_type"] != binding["provider_type"]:
-        raise ValueError("inline and profile provider types must match")
     result = dict(binding)
     if "data_handling" in binding:
         handling = binding["data_handling"]
@@ -293,62 +273,6 @@ def _inline_connection_binding(definition):
             or ("cancel_behavior" in handling and handling["cancel_behavior"] != "close_stream")
         ):
             raise ValueError("invalid inline data handling declaration")
-        hours = handling["temporary_upload_retention_hours"]
-        try:
-            valid = hours is None or (
-                type(hours) in {int, float} and hours > 0 and math.isfinite(hours)
-            )
-        except OverflowError:
-            valid = False
-        if not valid:
-            raise ValueError("upload retention hours must be a positive finite number or null")
-        result["data_handling"] = dict(handling)
-    return result
-
-
-def _provider_profile_binding(definition):
-    binding = (definition.presentation or {}).get("provider_profile_input")
-    if binding is None:
-        return None
-    if (
-        not isinstance(binding, dict)
-        or set(binding) - {"config_key", "provider_type", "label", "defaults", "data_handling"}
-        or not {"config_key", "provider_type", "label", "defaults"} <= set(binding)
-        or any(
-            not isinstance(binding.get(key), str) or not binding[key].strip()
-            for key in ("config_key", "provider_type", "label")
-        )
-    ):
-        raise ValueError("invalid provider profile input declaration")
-    defaults = binding["defaults"]
-    if (
-        not isinstance(defaults, dict)
-        or set(defaults) != {"base_url", "api_key_env", "default_timeout"}
-        or not isinstance(defaults["base_url"], str)
-        or not isinstance(defaults["api_key_env"], str)
-        or type(defaults["default_timeout"]) is not int
-    ):
-        raise ValueError("invalid provider profile defaults")
-    ProviderProfile(
-        id="connection_defaults",
-        provider_type=binding["provider_type"],
-        display_name=binding["label"],
-        **defaults,
-    )
-    field = next((item for item in definition.fields if item.key == binding["config_key"]), None)
-    if field is None or field.type != "string":
-        raise ValueError("provider profile binding requires a declared string field")
-    if field.input_port is not None:
-        raise ValueError("provider profile bindings cannot be connected parameters")
-    result = {**binding, "defaults": dict(defaults)}
-    if "data_handling" in binding:
-        handling = binding["data_handling"]
-        if (
-            not isinstance(handling, dict)
-            or set(handling) != {"temporary_upload_retention_hours", "remote_cancel_pending_only"}
-            or type(handling["remote_cancel_pending_only"]) is not bool
-        ):
-            raise ValueError("invalid provider data handling declaration")
         hours = handling["temporary_upload_retention_hours"]
         try:
             valid = hours is None or (
@@ -422,7 +346,8 @@ def validate_node_definition(definition: NodeDefinition) -> None:
     if len(set(field_keys)) != len(field_keys):
         raise ValueError("configuration field keys must be unique")
     resource_input = _resource_binding(definition)
-    _provider_profile_binding(definition)
+    if "provider_profile_input" in (definition.presentation or {}):
+        raise ValueError("provider profile declarations are no longer supported")
     _inline_connection_binding(definition)
     bound_ports = [item.input_port for item in definition.fields if item.input_port is not None]
     if len(set(bound_ports)) != len(bound_ports):

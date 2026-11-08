@@ -1,23 +1,24 @@
 """Apply write-only key updates before publishing the one authoritative graph file."""
 
-from ..domain.inline_connection import inline_connection_active
 from ..domain.node_registry import NODE_DEFINITIONS
-from .workflow_profiles import ProfileSnapshotError, credential_operation
+from .workflow_connections import ConnectionSnapshotError, credential_operation
 
 
 def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, expected_revision):
     prepared = [node.model_copy(deep=True) for node in nodes]
     by_id = {node.id: node for node in prepared}
     if updates and not request_id:
-        raise ProfileSnapshotError("CREDENTIAL_REQUEST_ID_REQUIRED", "保存密钥需要请求标识，请重试")
+        raise ConnectionSnapshotError(
+            "CREDENTIAL_REQUEST_ID_REQUIRED", "保存密钥需要请求标识，请重试"
+        )
     seen = set()
     for update in updates:
         node = by_id.get(update.node_id)
         definition = NODE_DEFINITIONS.get(node.type) if node else None
         presentation = definition.presentation or {} if definition else {}
         binding = presentation.get("inline_connection_input")
-        if node is None or node.id in seen or not inline_connection_active(binding, node.config):
-            raise ProfileSnapshotError(
+        if node is None or node.id in seen or binding is None:
+            raise ConnectionSnapshotError(
                 "CREDENTIAL_UPDATE_INVALID", "密钥更新必须对应一个节点内连接"
             )
         seen.add(node.id)

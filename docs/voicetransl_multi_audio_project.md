@@ -79,13 +79,13 @@ data/projects/<project-id>/
 
 ## 云端连接快照
 
-`qwen_asr` 与原 Mock 节点独立，沿用同一单运行和批次接口。新节点在图中保存 `connection_mode=inline`、地址、超时、地域、备用环境变量及不透明凭据引用，实际密钥经 `credential_updates` 的 `set` / `clear` 进入独立加密存储，不进入节点 config。验证接口只检查图，允许无密钥草稿；运行前检查连接和凭据，明确绑定却不可用时不静默改用备用。引用绑定项目、节点及 Provider；每次替换创建不可变版本，批次和重试保留原引用。相同请求 ID 重试不得重复轮换，冲突不覆盖旧图。
+`qwen_asr` 与 Mock 独立，沿用同一单运行和批次接口。节点保存自身 `base_url/timeout_seconds/region/credential_ref` 以及模型、语言及附加参数；实际 Key 经 `credential_updates` 的 set/clear 存入独立加密存储，不进入 config。校验允许无密钥草稿，运行前必须有本节点有效引用，不读其他节点或环境变量。引用绑定项目/节点/类型，替换生成新版本，稳定请求 ID 重试不得重复轮换。
 
-缺少模式的旧节点继续按 Profile 声明冻结 `workflow.provider_profiles_snapshot`（键为 Profile ID，值为非密钥 Profile），执行时从冻结的环境变量名取值。批次对子运行和重试复制原快照，不读最新连接。缺字段旧记录保持未记录，不补写；旧云节点缺冻结连接明确拒绝执行。嵌套 Profile 同样要求显式 `schema_version=1.0`。
+全局 `/provider-profiles` CRUD 已删除，旧连接文件不再加载。Filetrans 的 `provider_profile_id/connection_mode/api_key_env` 不再接受；含这些字段的旧图可以读取，但保存、运行及重试须明确拒绝，需删除后重新添加节点。原文件不自动改写；历史 `provider_profiles_snapshot` 仅作为不参与执行的原始元数据保留，不补读最新连接。
 
-`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由。节点保存完整 `endpoint`、`timeout_seconds`、自由模型、语言、附加参数及可空 `credential_ref`；密钥经相同只写更新存储，但 Provider 类型独立且绑定各自节点，没有 Profile/env 继承。允许无密钥草稿，提交运行时缺自身有效凭据返回稳定错误，不读取其他节点。批次和重试冻结原地址及原 Key 版本；旧 Filetrans 文件/快照不补写。持久化仍 `1.0`，仅能力目录为 `1.10`。
+`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.11`。
 
-提交前的缺连接、停用、类型不符、缺地址/环境变量名及坏文件等由 API 返回稳定 422 错误；内联模式缺凭据在提交前拒绝，旧 Profile 路径缺实际环境变量值在节点执行时失败。Streaming 的 WAV 内容检查在节点执行时、握手前进行，错误使用安全 `QWEN_STREAM_*` 代码，不自动转码。新取消详情可保存在当前节点 error 中，最终运行仍为 cancelled，不表示远端已终止。Profile 删除检查公共可编辑图和旧配置引用；历史快照不单独阻止删除。详见[服务连接](provider_profiles.md)。
+运行提交时连接/凭据缺失或归属不符返回安全稳定错误，旧连接字段使用 `LEGACY_CONNECTION_UNSUPPORTED` 或同说明的配置校验错误。Streaming WAV 内容检查在执行时、握手前完成，使用 `QWEN_STREAM_*` 错误，不自动转码。取消详情可保存在节点 error 中，最终 cancelled 不代表远端终止，见[节点连接](node_connections.md)。
 
 ## 旧数据兼容边界
 

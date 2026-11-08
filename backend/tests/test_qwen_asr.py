@@ -10,9 +10,10 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from app.adapters import qwen_asr as qwen
+from app.domain.inline_connection import InlineConnection
 from app.domain.node_execution import NodeData, NodeExecutionContext
-from app.domain.provider_profile import ProviderProfile
 from app.nodes import qwen_asr as node
+from app.storage.secret_store import SecretStore
 
 SECRET = "sk-test-secret-do-not-persist"
 SIGNED = "https://result.example.test/result.json?Signature=SIGNED-SECRET"
@@ -157,15 +158,11 @@ def setup(tmp_path, monkeypatch):
     wire = Wire()
     path = tmp_path / "source.wav"
     path.write_bytes(b"a" * (qwen.CHUNK_SIZE * 4 + 11))
-    profile = ProviderProfile(
-        id="qwen-test",
+    connection = InlineConnection(
         provider_type="qwen_asr",
-        display_name="Test",
         base_url="https://control.example.test/api/v1",
-        api_key_env="QWEN_TEST_KEY",
         default_timeout=30,
     )
-    monkeypatch.setenv("QWEN_TEST_KEY", SECRET)
     monkeypatch.setattr(qwen, "POLL_INTERVAL", 0)
 
     def client(_self):
@@ -180,7 +177,8 @@ def setup(tmp_path, monkeypatch):
         audio_path=path,
         project_id="p1",
         language="ja",
-        profile=profile,
+        connection=connection,
+        api_key=SECRET,
         model=qwen.DEFAULT_MODEL,
         additional_parameters={},
         cancel_event=asyncio.Event(),
@@ -243,28 +241,93 @@ async def test_protocol_streaming_auth_isolation_and_real_transcript(setup, mode
 
 
 @pytest.mark.asyncio
-async def test_explicit_secret_overrides_env_without_entering_profile_or_metadata(setup, caplog):
+async def test_explicit_secret_never_enters_connection_or_metadata(setup, caplog, monkeypatch):
     wire, args = setup
     explicit = "sk-test-only-explicit-secret"
-    args["profile"] = args["profile"].model_copy(update={"api_key_env": None})
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "different-environment-secret")
+    args["api_key"] = explicit
     with caplog.at_level(logging.DEBUG):
-        transcript = await qwen.transcribe(**args, api_key=explicit)
+        transcript = await qwen.transcribe(**args)
     for request in wire.requests:
         assert request.headers.get("Authorization") == (
             f"Bearer {explicit}" if request.url.host == "control.example.test" else None
         )
-    assert explicit not in args["profile"].model_dump_json()
+    assert explicit not in args["connection"].model_dump_json()
     assert explicit not in transcript.model_dump_json() + caplog.text
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("explicit", ["", "bad key", "key\n", {}, 1])
-async def test_explicit_invalid_secret_never_falls_back_to_legacy_env(setup, explicit):
+@pytest.mark.parametrize("explicit", [None, "", "bad key", "key\n", {}, 1])
+async def test_explicit_invalid_secret_never_reads_environment(setup, explicit, monkeypatch):
     wire, args = setup
+    monkeypatch.setenv("DASHSCOPE_API_KEY", SECRET)
+    monkeypatch.setenv("QWEN_TEST_KEY", SECRET)
+    args["api_key"] = explicit
     with pytest.raises(qwen.QwenASRError) as caught:
-        await qwen.transcribe(**args, api_key=explicit)
+        await qwen.transcribe(**args)
     assert caught.value.code == "QWEN_CREDENTIALS_MISSING"
     assert not wire.requests
+
+
+@pytest.mark.asyncio
+async def test_omitted_secret_is_required_even_when_environment_has_key(setup, monkeypatch):
+    wire, args = setup
+    monkeypatch.setenv("DASHSCOPE_API_KEY", SECRET)
+    monkeypatch.setenv("QWEN_TEST_KEY", SECRET)
+    args.pop("api_key")
+    with pytest.raises(TypeError, match="api_key"):
+        await qwen.transcribe(**args)
+    assert not wire.requests and not wire.clients
+
+
+@pytest.mark.asyncio
+async def test_previous_profile_shaped_object_is_not_an_independent_connection(setup, monkeypatch):
+    wire, args = setup
+    monkeypatch.setenv("QWEN_TEST_KEY", SECRET)
+    args["connection"] = SimpleNamespace(
+        base_url="https://control.example.test/api/v1",
+        api_key_env="QWEN_TEST_KEY",
+        default_timeout=30,
+    )
+    with pytest.raises(qwen.QwenASRError) as caught:
+        await qwen.transcribe(**args)
+    assert caught.value.code == "QWEN_CONNECTION_INVALID"
+    assert SECRET not in str(caught.value)
+    assert not wire.requests and not wire.clients
+
+
+@pytest.mark.asyncio
+async def test_profile_keyword_is_no_longer_an_adapter_contract(setup):
+    wire, args = setup
+    args["profile"] = args.pop("connection")
+    with pytest.raises(TypeError, match="profile"):
+        await qwen.transcribe(**args)
+    assert not wire.requests and not wire.clients
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "wss://control.example.test/api/v1",
+        "https://user:password@control.example.test/api/v1",
+        f"https://control.example.test/api/v1?api_key={SECRET}",
+        "https://control.example.test/api/v1#fragment",
+        "https://control.example.test:0/api/v1",
+        "https://control.example.test:invalid/api/v1",
+        "https://control.example.test/api/with space",
+    ],
+)
+async def test_filetrans_connection_validation_shared_with_node(setup, base_url):
+    wire, args = setup
+    args["connection"] = args["connection"].model_copy(update={"base_url": base_url})
+    with pytest.raises(qwen.QwenASRError) as caught:
+        await qwen.transcribe(**args)
+    assert caught.value.code == "QWEN_CONNECTION_INVALID"
+    with pytest.raises(ValueError) as node_error:
+        node.normalize({"base_url": base_url})
+    assert SECRET not in str(caught.value) + str(node_error.value)
+    assert not wire.requests and not wire.clients
 
 
 @pytest.mark.parametrize(
@@ -295,12 +358,13 @@ def test_invalid_additional_parameters(parameters):
 
 def test_configuration_defaults_and_ports():
     config = node.normalize({})
-    assert config["provider_profile_id"] == config["language"] == ""
+    assert config["language"] == ""
+    assert "provider_profile_id" not in config and "api_key_env" not in config
     assert config["model"] == qwen.DEFAULT_MODEL and config["additional_parameters"] == {}
     definition = node.definition()
     fields = {field.key: field for field in definition.fields}
     assert fields["language"].input_port == "language"
-    assert fields["provider_profile_id"].input_port is None
+    assert fields["credential_ref"].input_port is None
     assert fields["model"].options == []
     assert fields["additional_parameters"].type == "json"
 
@@ -370,7 +434,7 @@ async def test_remote_cancel_is_once_and_never_claims_remote_stopped(setup, canc
 @pytest.mark.asyncio
 async def test_total_timeout_includes_multiple_stages_and_cleanup_is_bounded(setup, monkeypatch):
     wire, args = setup
-    args["profile"] = args["profile"].model_copy(update={"default_timeout": 0.04})
+    args["connection"] = args["connection"].model_copy(update={"default_timeout": 0.04})
     original = wire.handle
 
     async def delayed(request):
@@ -388,7 +452,7 @@ async def test_total_timeout_includes_multiple_stages_and_cleanup_is_bounded(set
 @pytest.mark.asyncio
 async def test_slow_remote_cancel_bounded_after_total_timeout(setup, monkeypatch):
     wire, args = setup
-    args["profile"] = args["profile"].model_copy(update={"default_timeout": 0.3})
+    args["connection"] = args["connection"].model_copy(update={"default_timeout": 0.3})
     wire.block_stage = "poll"
     original = wire.handle
 
@@ -487,13 +551,13 @@ async def test_subtask_and_status_must_be_valid(setup, response):
 
 
 @pytest.mark.asyncio
-async def test_runtime_upload_limit_and_missing_credentials(setup, monkeypatch):
+async def test_runtime_upload_limit_and_missing_credentials(setup):
     wire, args = setup
     wire.policy["max_file_size_mb"] = "0.001"
     with pytest.raises(qwen.QwenASRError) as caught:
         await qwen.transcribe(**args)
     assert caught.value.code == "QWEN_UPLOAD_TOO_LARGE" and wire.submissions == 0
-    monkeypatch.delenv("QWEN_TEST_KEY")
+    args["api_key"] = None
     with pytest.raises(qwen.QwenASRError) as caught:
         await qwen.transcribe(**args)
     assert caught.value.code == "QWEN_CREDENTIALS_MISSING" and len(wire.requests) == 1
@@ -554,16 +618,21 @@ def test_full_text_preserves_null_timestamps_and_exports_txt_only():
 
 
 @pytest.mark.asyncio
-async def test_node_uses_frozen_profile_and_publishes_real_transcript(setup, tmp_path, monkeypatch):
+async def test_node_uses_own_frozen_connection_and_publishes_real_transcript(setup, tmp_path):
     wire, args = setup
     from app.domain.workflow import WorkflowSnapshot
 
+    ref = SecretStore(tmp_path).create("p1", "asr1", "qwen_asr", SECRET, request_id="node-test")
+    config = {
+        "base_url": args["connection"].base_url,
+        "timeout_seconds": 30,
+        "credential_ref": ref,
+    }
     snapshot = WorkflowSnapshot(
         revision=1,
         workflow_revision=1,
-        nodes=[],
+        nodes=[{"id": "asr1", "type": "qwen_asr", "config": config}],
         edges=[],
-        provider_profiles_snapshot={args["profile"].id: args["profile"]},
     )
     target = tmp_path / "output" / "transcript.json"
     calls = []
@@ -573,9 +642,9 @@ async def test_node_uses_frozen_profile_and_publishes_real_transcript(setup, tmp
         return target
 
     context = NodeExecutionContext(
-        store=SimpleNamespace(workflow_artifact_path=artifact_path),
+        store=SimpleNamespace(workflow_artifact_path=artifact_path, data_dir=tmp_path),
         run=SimpleNamespace(workflow=snapshot, project_id="p1", audio_id="a1", id="r1"),
-        node=SimpleNamespace(id="asr1", config={"provider_profile_id": args["profile"].id}),
+        node=SimpleNamespace(id="asr1", config=dict(config)),
         inputs={"audio": NodeData("audio", SimpleNamespace(path=args["audio_path"]))},
         project=SimpleNamespace(
             audios=[SimpleNamespace(id="a1", source=SimpleNamespace(language="en"))]
@@ -591,7 +660,7 @@ async def test_node_uses_frozen_profile_and_publishes_real_transcript(setup, tmp
     assert calls == [("p1", "a1", "r1", "asr1", "transcript.json")]
     assert wire.submitted["parameters"]["language_hints"] == ["en"]
     assert result.outputs["transcript"].value.transcript.language == "en"
-    assert context.node.config == {"provider_profile_id": args["profile"].id}
+    assert context.node.config == config
 
 
 @pytest.mark.asyncio
@@ -673,7 +742,7 @@ async def test_upload_uses_policy_expiry_without_resubmission(setup):
 @pytest.mark.asyncio
 async def test_explicit_same_origin_local_http_service(setup):
     wire, args = setup
-    args["profile"] = args["profile"].model_copy(
+    args["connection"] = args["connection"].model_copy(
         update={"base_url": "http://127.0.0.1:8013/api/v1"}
     )
     wire.policy["upload_host"] = "http://127.0.0.1:8013/oss"
@@ -708,7 +777,6 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
 
     wire, args = setup
     app = create_app(tmp_path / "application-data")
-    app.state.store.save_provider_profiles([args["profile"]])
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://app"
     ) as client:
@@ -721,7 +789,8 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
                     "id": "qwen",
                     "type": "qwen_asr",
                     "config": {
-                        "provider_profile_id": args["profile"].id,
+                        "base_url": args["connection"].base_url,
+                        "timeout_seconds": 30,
                         "language": "en",
                         "model": "future-protocol-model",
                     },
@@ -758,6 +827,8 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
                     "target_port": "transcript",
                 },
             ],
+            "request_id": "save-test-key",
+            "credential_updates": [{"node_id": "qwen", "operation": "set", "api_key": SECRET}],
         }
         document = await save_graph(client, pid, 0, graph)
         if mode == "cancel":
@@ -768,10 +839,13 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
         )
         assert created.status_code == 202, created.text
         rid = created.json()["id"]
-        # Mutating the live profile after submission cannot redirect this run.
-        app.state.store.save_provider_profiles(
-            [args["profile"].model_copy(update={"base_url": "https://changed.example.test/api/v1"})]
-        )
+        # Mutating the saved node after submission cannot redirect this run.
+        changed = {
+            "nodes": json.loads(json.dumps(document["nodes"])),
+            "edges": document["edges"],
+        }
+        changed["nodes"][2]["config"]["base_url"] = "https://changed.example.test/api/v1"
+        await save_graph(client, pid, document["revision"], changed)
         if mode == "cancel":
             await asyncio.wait_for(wire.reached.wait(), 3)
             response = await client.post(

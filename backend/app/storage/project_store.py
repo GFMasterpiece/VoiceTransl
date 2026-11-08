@@ -14,8 +14,6 @@ from ..domain import (
     JobStatus,
     LegacyPipelineConfig,
     Project,
-    ProviderProfile,
-    ProviderProfilesDocument,
     Transcript,
     WorkflowDocument,
     WorkflowEdge,
@@ -584,57 +582,6 @@ class FileSystemProjectStore:
         )
         self._touch_project(project_id)
 
-    def _provider_profiles_path(self) -> Path:
-        path = self.data_dir / "provider_profiles.json"
-        if path.is_symlink():
-            raise ValueError("provider profiles must not be a symlink")
-        return path
-
-    def load_provider_profiles(self) -> list[ProviderProfile]:
-        """Load global profiles, returning an empty list for a fresh install."""
-
-        path = self._provider_profiles_path()
-        if not path.exists():
-            return []
-        document = ProviderProfilesDocument.model_validate(
-            self._load_json(path, "provider profiles")
-        )
-        return [profile.model_copy(deep=True) for profile in document.profiles]
-
-    def save_provider_profiles(self, profiles: list[ProviderProfile]) -> None:
-        document = ProviderProfilesDocument(profiles=profiles)
-        atomic_write_json(self._provider_profiles_path(), document.model_dump(mode="json"))
-
-    def provider_profile(self, profile_id: str) -> ProviderProfile | None:
-        return next(
-            (profile for profile in self.load_provider_profiles() if profile.id == profile_id),
-            None,
-        )
-
-    def provider_profile_in_use(self, profile_id: str) -> bool:
-        """Return whether an editable project config references a profile."""
-
-        from ..domain.workflow import workflow_provider_profile_inputs
-
-        for _, project in self._published_projects():
-            try:
-                workflow = self.load_workflow(project.id)
-            except (OSError, ValueError):
-                workflow = None
-            if workflow is not None and any(
-                node.config.get(binding["config_key"]) == profile_id
-                for node, binding in workflow_provider_profile_inputs(workflow.nodes)
-            ):
-                return True
-            for audio in project.audios:
-                try:
-                    config = self.scope(project.id, audio.id).load_pipeline_config(project.id)
-                except (FileNotFoundError, ProjectNotFound, ValueError):
-                    continue
-                if config.asr.provider_profile_id == profile_id:
-                    return True
-        return False
-
     def load_transcript(self, project_id: str, stage: str) -> Transcript:
         if stage not in {"raw", "aligned", "translated"}:
             raise ValueError("invalid transcript stage")
@@ -1091,15 +1038,3 @@ class AudioProjectStore(FileSystemProjectStore):
         self.project_dir(project_id)
         atomic_write_json(self.audio_dir() / "config.json", value.model_dump(mode="json"))
         self._touch_project(project_id)
-
-    def load_provider_profiles(self):
-        return self.parent.load_provider_profiles()
-
-    def save_provider_profiles(self, profiles):
-        return self.parent.save_provider_profiles(profiles)
-
-    def provider_profile(self, profile_id):
-        return self.parent.provider_profile(profile_id)
-
-    def provider_profile_in_use(self, profile_id):
-        return self.parent.provider_profile_in_use(profile_id)

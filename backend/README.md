@@ -52,9 +52,10 @@ Interrupted runs cannot resume and require a new run.
 
 The old fixed-stage `/run`, transcript, and output routes are retired. Legacy
 `/job` and configuration GET routes exist only for compatibility; they are not
-the current execution flow. Configuration PUT is read-only. Profile metadata
-CRUD and retained translation adapter code do not mean real providers are
-integrated into the current node workflow.
+the current execution flow. Configuration PUT is read-only. Global Profile
+CRUD and environment-key connection fallbacks have been removed; Qwen nodes
+require their own connection and saved key. Retained translation adapter code
+does not mean a translation node is available.
 
 ## Configuration, data, and logs
 
@@ -73,7 +74,7 @@ Git.
 
 See [architecture](../docs/architecture.md),
 [multi-audio resources and API](../docs/voicetransl_multi_audio_project.md), and
-[Profile compatibility](../docs/provider_profiles.md) for the authoritative
+[node connections](../docs/node_connections.md) for the authoritative
 contracts. The [translation adapter document](../docs/translation_providers.md)
 describes retained code, not a usable workflow node.
 

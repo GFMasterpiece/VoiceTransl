@@ -2,7 +2,7 @@ import { computed, ref, shallowRef } from 'vue'
 import { API_BASE_URL, parseApiError, type ApiError } from '../api'
 import { displayError, hasMessage, message, t } from '../i18n'
 import type { SourceOrigin } from '../stores/projects'
-import { providerErrorLabel } from '../stores/providerProfiles'
+import { providerErrorLabel } from '../workflow/providerErrors'
 import type { WorkflowSnapshot } from '../stores/workflow'
 import { randomRequestId } from './useBatchManifest'
 

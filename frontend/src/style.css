@@ -437,17 +437,17 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .provider-target small { color: var(--muted); }
 .cloud-workflow-notice { padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; background: var(--teal-soft); font-size: 12px; }
 .cloud-workflow-notice p { margin: 5px 0; }
-.profiles-dialog .canvas-dialog { width: min(860px, 100%); }
-.profile-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 9px 0; }
-.profile-list { max-height: 250px; overflow: auto; }
-.profile-record { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 9px 0; }
-.profile-record > div:first-child { min-width: 0; overflow-wrap: anywhere; }
-.profile-record small { display: block; margin-top: 4px; font-size: 11px; }
-.profile-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
-.profile-form label { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
-.profile-form input:not([type=checkbox]), .profile-form select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
-.profile-form .profile-check { display: flex; align-items: center; gap: 7px; }
-@media (max-width: 640px) { .profile-form { grid-template-columns: 1fr; }.profile-record { flex-direction: column; gap: 3px; }.profile-record .profile-actions { margin: 2px 0; } }
+
+
+
+
+
+
+
+
+
+
+@media (max-width: 640px) {  }
 @media (max-width: 640px) { .batch-fields > button { width: 100%; }.batch-actions { align-items: flex-start; }.batch-table { font-size: 11px; }.batch-table th, .batch-table td { padding: 6px; } }
 .project-create-modal .create-form { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .project-create-modal .text-input { margin-bottom: 0; }

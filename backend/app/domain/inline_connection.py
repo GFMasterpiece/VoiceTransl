@@ -1,4 +1,4 @@
-"""Secret-free node connections, independent of reusable HTTP provider profiles."""
+"""Secret-free connection settings owned by each node instance."""
 
 import re
 from urllib.parse import urlsplit
@@ -15,7 +15,6 @@ class InlineConnection(BaseModel):
     base_url: str = Field(min_length=1, max_length=2048)
     default_timeout: int = Field(ge=1, le=3600)
     region: str | None = Field(default=None, max_length=64)
-    api_key_env: str | None = Field(default=None, max_length=128)
 
     @field_validator("provider_type")
     @classmethod
@@ -43,16 +42,9 @@ class InlineConnection(BaseModel):
         parsed.port
         return value
 
-    @field_validator("api_key_env")
-    @classmethod
-    def validate_env(cls, value):
-        if value is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
-            raise ValueError("invalid environment variable name")
-        return value
 
+class LegacyConnectionConfigError(ValueError):
+    code = "LEGACY_CONNECTION_UNSUPPORTED"
 
-def inline_connection_active(binding, config):
-    """A null mode pair declares a connection with no alternative configuration source."""
-    return binding is not None and (
-        binding["mode_key"] is None or config.get(binding["mode_key"]) == binding["mode_value"]
-    )
+    def __init__(self):
+        super().__init__("旧服务连接配置已移除，请删除并重新添加该节点，然后在节点中填写连接和密钥")

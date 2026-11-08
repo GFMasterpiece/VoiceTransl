@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..application.workflow_profiles import ProfileSnapshotError
+from ..application.workflow_connections import ConnectionSnapshotError
 from ..domain.batch import BatchDetail, BatchItemList, BatchList, BatchSummary
 from ..domain.limits import MAX_BATCH_AUDIO_ITEMS
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError
@@ -52,7 +52,7 @@ def _batch(request, pid, bid, *, persisted=False):
 
 
 def _creation_error(error):
-    if isinstance(error, ProfileSnapshotError):
+    if isinstance(error, ConnectionSnapshotError):
         return HTTPException(422, detail=_error(error.code, str(error)))
     code = str(error)
     messages = {

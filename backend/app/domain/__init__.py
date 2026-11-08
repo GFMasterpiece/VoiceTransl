@@ -3,7 +3,6 @@ from .job import Job, JobError, StageState, default_stages
 from .legacy_config import LegacyPipelineConfig, default_legacy_pipeline_config
 from .node_config import MockASRNodeConfig, MockPreprocessNodeConfig
 from .project import AudioAsset, Project, SourceAsset
-from .provider_profile import ProviderProfile, ProviderProfilesDocument
 from .transcript import Segment, Transcript
 from .workflow import (
     ASR_NODE_TYPE,
@@ -60,8 +59,6 @@ __all__ = [
     "Project",
     "AudioAsset",
     "SourceAsset",
-    "ProviderProfile",
-    "ProviderProfilesDocument",
     "Segment",
     "Transcript",
     "LegacyPipelineConfig",
