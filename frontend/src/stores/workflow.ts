@@ -513,7 +513,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const inline = registry.value.kind(node.type)?.inlineConnectionInput
       const current = draft.value.nodes.find((item) => item.id === node.id && item.type === node.type)
       const saved = document.value.nodes.find((item) => item.id === node.id && item.type === node.type)
-      if (!inline || !current || !saved || !inlineConnectionActive(registry.value.kind(node.type), current.config)
+      if (!inline || !inline.apiKeyEnvKey || !current || !saved || !inlineConnectionActive(registry.value.kind(node.type), current.config)
         || typeof node.config[inline.credentialRefKey] !== 'string' || !node.config[inline.credentialRefKey]
         || current.config[inline.credentialRefKey] || saved.config[inline.credentialRefKey]
         || typeof saved.config[inline.apiKeyEnvKey] !== 'string' || !String(saved.config[inline.apiKeyEnvKey]).trim()

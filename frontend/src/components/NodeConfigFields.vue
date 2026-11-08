@@ -7,7 +7,7 @@ import { useProviderProfilesStore } from '../stores/providerProfiles'
 import ProviderTarget from './ProviderTarget.vue'
 import NodeProviderConnection from './NodeProviderConnection.vue'
 import NodeConfigField from './NodeConfigField.vue'
-import { inlineConnectionActive, inlineConnectionKeys } from '../workflow/providerConnections'
+import { connectionDataHandling, connectionTarget, inlineConnectionActive, inlineConnectionKeys } from '../workflow/providerConnections'
 
 const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: boolean; edges?: readonly WorkflowEdge[] }>()
 const emit = defineEmits<{ update: [config: Record<string, unknown>]; manageProfiles: [] }>()
@@ -15,7 +15,9 @@ const profiles = useProviderProfilesStore()
 const profileDescriptor = computed(() => props.registry.kind(props.node.type)?.providerProfileInput)
 const inlineDescriptor = computed(() => props.registry.kind(props.node.type)?.inlineConnectionInput)
 const inlineActive = computed(() => inlineConnectionActive(props.registry.kind(props.node.type), props.node.config))
-const inlineHost = computed(() => { try { return new URL(String(props.node.config[inlineDescriptor.value?.baseUrlKey || ''] || '')).host } catch { return '' } })
+const inlineHost = computed(() => connectionTarget(props.node.config[inlineDescriptor.value?.baseUrlKey || '']))
+const dataHandling = computed(() => connectionDataHandling(props.registry.kind(props.node.type), props.node.config))
+const inlineRegion = computed(() => inlineDescriptor.value?.regionKey ? props.node.config[inlineDescriptor.value.regionKey] : null)
 const profileId = computed(() => profileDescriptor.value && typeof props.node.config[profileDescriptor.value.configKey] === 'string' ? props.node.config[profileDescriptor.value.configKey] as string : '')
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
 const fields = computed(() => (props.registry.kind(props.node.type)?.fields || []).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey
@@ -66,11 +68,11 @@ function error(field: Field) {
       <NodeProviderConnection v-if="inlineDescriptor" :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
       <NodeConfigField v-for="field in connectionFields" :key="field.key" :field="field" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" :placeholder="t('profiles.choose')" @edit="edit(field, $event)" />
       <div class="node-provider-settings">
-        <div v-if="inlineActive" class="provider-target" :data-inline-provider-target="node.id"><strong>{{ t('profiles.target') }}</strong><span>{{ inlineHost || t('profiles.unknownTarget') }} · {{ node.config[inlineDescriptor!.regionKey] || t('profiles.unknownRegion') }}</span></div>
+        <div v-if="inlineActive" class="provider-target" :data-inline-provider-target="node.id"><strong>{{ t('profiles.target') }}</strong><span>{{ inlineHost || t('profiles.unknownTarget') }}<template v-if="inlineDescriptor?.regionKey"> · {{ inlineRegion || t('profiles.unknownRegion') }}</template></span></div>
         <ProviderTarget v-else-if="profileDescriptor" :id="profileId" :profile="profiles.items.find((profile) => profile.id === profileId)" :provider-type="profileDescriptor.providerType" :label="profileDescriptor.label" :loading="profiles.loading" />
         <p v-if="!inlineActive && profiles.error" class="node-field-error">{{ profiles.error }}</p>
         <button v-if="!inlineActive && profileDescriptor" type="button" class="text-button" data-open-profiles :disabled="locked" @click="emit('manageProfiles')">{{ t('profiles.manage') }}</button>
-        <details class="node-help-details" data-node-data-handling><summary>{{ t('profiles.dataHandling') }}</summary><div><p>{{ t('profiles.cloudNotice') }}</p><p v-if="profileDescriptor?.dataHandling?.temporaryUploadRetentionHours">{{ t('profiles.temporaryRetention', { hours: profileDescriptor.dataHandling.temporaryUploadRetentionHours }) }}</p><p v-if="profileDescriptor?.dataHandling?.remoteCancelPendingOnly">{{ t('profiles.cancelPendingOnly') }}</p></div></details>
+        <details class="node-help-details" data-node-data-handling><summary>{{ t('profiles.dataHandling') }}</summary><div><p>{{ t('profiles.cloudNotice') }}</p><p v-if="dataHandling?.temporaryUploadRetentionHours">{{ t('profiles.temporaryRetention', { hours: dataHandling.temporaryUploadRetentionHours }) }}</p><p v-if="dataHandling?.remoteCancelPendingOnly">{{ t('profiles.cancelPendingOnly') }}</p><p v-if="dataHandling?.cancelBehavior === 'close_stream'">{{ t('profiles.cancelClosesStream') }}</p></div></details>
       </div>
     </section>
     <section v-if="parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">

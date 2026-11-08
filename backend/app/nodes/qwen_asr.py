@@ -190,6 +190,12 @@ def definition():
         execute=execute,
         presentation={
             "inline_connection_input": {
+                "provider_type": "qwen_asr",
+                "label": "Qwen ASR",
+                "data_handling": {
+                    "temporary_upload_retention_hours": TEMPORARY_UPLOAD_RETENTION_HOURS,
+                    "remote_cancel_pending_only": True,
+                },
                 "mode_key": "connection_mode",
                 "mode_value": "inline",
                 "base_url_key": "base_url",

@@ -11,6 +11,7 @@ import { batchError } from './composables/useBatches'
 import CloudWorkflowNotice from './components/CloudWorkflowNotice.vue'
 import { workflowCredentials } from './composables/workflowCredentials'
 import { copySelection, parseWorkflowFile, preparePaste, serializeWorkflow } from './workflow/editorTransfer'
+import { connectionTarget } from './workflow/providerConnections'
 
 const profile = (id = 'connection-1', extra: Partial<ProviderProfile> = {}): ProviderProfile => ({ schema_version: '1.0', id, display_name: id, provider_type: 'extension_service',
   base_url: 'https://old.service.test/api', api_key_env: 'EXAMPLE_KEY', region: 'region-test', default_timeout: 37, enabled: true, ...extra })
@@ -42,13 +43,31 @@ function inlineCatalog(profiles: ProviderProfile[] = [profile()], legacy = false
   if (!legacy) Object.assign(value.workflow.default_graph.nodes[1].config, { mode: 'inline', endpoint: 'https://inline.service.test/api', timeout: 37, region: null, env: null, credential_handle: 'saved-ref' })
   return value
 }
+function streamingCatalog(profiles: ProviderProfile[] = [profile()]): any {
+  const value = inlineCatalog(profiles); value.workflow.schema_version = '1.10'
+  const old = value.workflow.nodes[1]
+  old.category = { id: 'speech_recognition', label: '语音识别' }
+  Object.assign(old.presentation.inline_connection_input, { provider_type: 'extension_service', label: 'File service', data_handling: old.presentation.provider_profile_input.data_handling })
+  const stream = structuredClone(old)
+  stream.type = 'qwen_asr_streaming'; stream.config.kind = 'qwen_asr_streaming'; stream.label = 'Qwen streaming'; stream.add_label = stream.label
+  delete stream.presentation.provider_profile_input
+  stream.presentation.inline_connection_input = { mode_key: null, mode_value: null, base_url_key: 'endpoint', timeout_key: 'timeout', region_key: null, api_key_env_key: null, credential_ref_key: 'credential_handle', provider_type: 'qwen_asr_streaming', label: 'Qwen Streaming ASR', data_handling: { temporary_upload_retention_hours: null, remote_cancel_pending_only: false, cancel_behavior: 'close_stream' } }
+  stream.config.fields = stream.config.fields.filter((field: any) => !['connection_ref', 'mode', 'region', 'env'].includes(field.key))
+  stream.config.fields.find((field: any) => field.key === 'model').default = 'qwen-audio-3.0-asr-flash-streaming'
+  stream.config.fields.find((field: any) => field.key === 'endpoint').default = 'wss://stream.service.test/api-ws/v1/inference'
+  value.workflow.nodes.push(stream)
+  const cloud = value.workflow.default_graph.nodes[1]
+  cloud.type = stream.type
+  cloud.config = { endpoint: 'wss://stream.service.test/api-ws/v1/inference', timeout: 37, credential_handle: null, model: 'qwen-audio-3.0-asr-flash-streaming', language: '', additional_parameters: {} }
+  return value
+}
 const response = (value: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => structuredClone(value) }) as Response
 async function settle() { for (let index = 0; index < 40; index++) await Promise.resolve(); await nextTick() }
 let app: VueApp | undefined
 let root: HTMLDivElement | undefined
-function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; failCatalog?: boolean; inline?: boolean; legacy?: boolean } = {}) {
+function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; failCatalog?: boolean; inline?: boolean; legacy?: boolean; streaming?: boolean } = {}) {
   const state = { profiles: options.profiles || [profile()], rejectSave: !!options.rejectSave, failCatalog: !!options.failCatalog, rejectWorkflow: false, loseSaveResponse: false }
-  const readCatalog = () => options.inline ? inlineCatalog(state.profiles, options.legacy) : catalog(state.profiles)
+  const readCatalog = () => options.streaming ? streamingCatalog(state.profiles) : options.inline ? inlineCatalog(state.profiles, options.legacy) : catalog(state.profiles)
   const initial = readCatalog()
   let document = { ...initial.workflow.default_graph, schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-07T00:00:00Z' }
   const savedRequests = new Map<string, any>()
@@ -69,7 +88,7 @@ function setup(options: { profiles?: ProviderProfile[]; rejectSave?: boolean; fa
     if (path.endsWith('/projects/p1')) return response(project)
     if (path.endsWith('/projects/p1/audios')) return response({ items: [audio] })
     if (path.endsWith('/workflow')) {
-      if (init?.method === 'PUT' && options.inline) {
+      if (init?.method === 'PUT' && (options.inline || options.streaming)) {
         const body = JSON.parse(String(init.body))
         if (state.rejectWorkflow) return response({ error: { code: 'CREDENTIAL_STORAGE_ERROR', message: 'Safe storage error' } }, 503)
         if (body.request_id && savedRequests.has(body.request_id)) return response(savedRequests.get(body.request_id))
@@ -484,6 +503,83 @@ describe('inline node credentials', () => {
     if (mutation === 'parameter') node.config.fields.find((field: any) => field.key === 'credential_handle').input_port = 'language'
     if (mutation === 'type') node.config.fields.find((field: any) => field.key === 'credential_handle').type = 'json'
     expect(() => readCapabilities(value)).toThrow()
+  })
+})
+
+describe('independent streaming node connections', () => {
+  it('renders an inline-only WSS connection without loading profiles, mode, region or env controls', async () => {
+    const { workflow, fetcher } = setup({ streaming: true }); await settle(); await openProject()
+    const node = root!.querySelector('[data-node-id=cloud]')!
+    expect(node.querySelector('[data-connection-mode], [data-open-profiles], [data-connection-field=env], [data-connection-field=region]')).toBeNull()
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/provider-profiles'))).toBe(false)
+    expect(node.querySelector('[data-inline-provider-target=cloud]')!.textContent).toContain('wss://stream.service.test/api-ws/v1/inference')
+    expect(node.textContent).toContain(t('profiles.cancelClosesStream'))
+    expect(node.textContent).not.toContain(t('profiles.cancelPendingOnly'))
+    expect(node.textContent).not.toContain('48')
+    expect(node.querySelector<HTMLInputElement>('[data-field=model]')!.value).toBe('qwen-audio-3.0-asr-flash-streaming')
+    expect(node.textContent).toContain('PCM16')
+    expect(workflow.registry!.validateConfig('qwen_asr_streaming', workflow.draft.nodes[1]!.config)).toEqual([])
+    setLocale('en'); await settle()
+    expect(node.textContent).toContain('Microphone input and live captions are not provided')
+    expect(node.textContent).not.toContain(t('profiles.keyNotStored'))
+  })
+  it('isolates two streaming credentials and a file service credential through failed Save and idempotent retry', async () => {
+    const { state, workflow, fetcher, pinia } = setup({ streaming: true }); await settle(); await openProject()
+    workflow.addNode('qwen_asr_streaming'); workflow.addNode('remote_extension'); await settle()
+    const nodes = workflow.draft.nodes.filter((node) => ['qwen_asr_streaming', 'remote_extension'].includes(node.type))
+    for (const [index, node] of nodes.entries()) {
+      const input = root!.querySelector<HTMLInputElement>(`[data-node-id="${node.id}"] [data-credential-input]`)!
+      expect(input.value).toBe('')
+      input.value = `private-instance-${index}`; input.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    }
+    expect(JSON.stringify(pinia.state.value)).not.toContain('private-instance-')
+    state.loseSaveResponse = true; await expect(workflow.save()).rejects.toThrow(); await settle()
+    for (const [index, node] of nodes.entries()) expect(root!.querySelector<HTMLInputElement>(`[data-node-id="${node.id}"] [data-credential-input]`)!.value).toBe(`private-instance-${index}`)
+    await workflow.save(); await settle()
+    const bodies = fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies[0]).toEqual(bodies[1])
+    expect(bodies[1].credential_updates).toEqual(nodes.map((node, index) => ({ node_id: node.id, operation: 'set', api_key: `private-instance-${index}` })))
+    for (const node of nodes) expect(root!.querySelector<HTMLInputElement>(`[data-node-id="${node.id}"] [data-credential-input]`)!.value).toBe('')
+    const input = root!.querySelector<HTMLInputElement>('[data-node-id=cloud] [data-credential-input]')!
+    input.value = 'pending-original'; input.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    const pasted = preparePaste(copySelection(workflow.draft, ['cloud'], workflow.registry!), workflow.draft, workflow.registry!)
+    expect(JSON.stringify(pasted)).not.toContain('credential_handle')
+    workflow.applyPastedGraph(pasted); await settle()
+    const copied = pasted.nodes[0]!
+    expect(root!.querySelector<HTMLInputElement>(`[data-node-id="${copied.id}"] [data-credential-input]`)!.value).toBe('')
+    expect(workflowCredentials(workflow.credentialContext).updates()).toEqual([{ node_id: 'cloud', operation: 'set', api_key: 'pending-original' }])
+    expect(serializeWorkflow(workflow.draft, workflow.registry!)).not.toContain('pending-original')
+  })
+  it('keeps safe complete frozen WSS endpoints and excludes URL credentials, query and fragment', async () => {
+    expect(connectionTarget('wss://user:secret@stream.service.test/path?token=hidden#key')).toBe('wss://stream.service.test/path')
+    const { workflow } = setup({ streaming: true }); await settle(); await openProject()
+    const frozen = JSON.parse(JSON.stringify(workflow.draft))
+    workflow.run = { id: 'done', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] }
+    expect(workflow.runMatchesDraft).toBe(true)
+    workflow.updateNode('cloud', { config: { ...workflow.draft.nodes[1]!.config, endpoint: 'wss://changed.service.test/another-path' } })
+    expect(workflow.runMatchesDraft).toBe(false)
+    const runButton = [...root!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes(t('workflow.panelRun')))!
+    runButton.click(); await settle()
+    const historical = root!.querySelector('[data-inline-provider-snapshot-target=cloud]')!
+    expect(historical.textContent).toContain('wss://stream.service.test/api-ws/v1/inference')
+    expect(historical.textContent).not.toContain('changed.service.test')
+  })
+  it.each(['half-mode', 'missing-provider', 'bad-handling', 'missing-env-role', 'bound-role'])('rejects malformed 1.10 inline metadata: %s', (mutation) => {
+    const value = streamingCatalog(); const node = value.workflow.nodes[value.workflow.nodes.length - 1]
+    const descriptor = node.presentation.inline_connection_input
+    if (mutation === 'half-mode') descriptor.mode_value = 'inline'
+    if (mutation === 'missing-provider') delete descriptor.provider_type
+    if (mutation === 'bad-handling') descriptor.data_handling.cancel_behavior = 'pretend_remote_stops'
+    if (mutation === 'missing-env-role') delete descriptor.api_key_env_key
+    if (mutation === 'bound-role') node.config.fields.find((field: any) => field.key === 'credential_handle').input_port = 'language'
+    expect(() => readCapabilities(value)).toThrow()
+  })
+  it('keeps safe Streaming HTTP status and accurate cancellation diagnostics in both locales', () => {
+    for (const locale of ['zh-CN', 'en']) {
+      setLocale(locale)
+      expect(workflowErrorLabel({ type: 'QWEN_STREAM_AUTH_FAILED', message: 'HTTP 401' })).toContain('401')
+      expect(batchError({ type: 'QWEN_STREAM_CANCELLED', message: 'safe fallback' })).toBe(t('profiles.error_QWEN_STREAM_CANCELLED'))
+    }
   })
 })
 

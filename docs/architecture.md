@@ -22,6 +22,7 @@
 | `preprocess` | `audio` → `audio` | 仅 `provider=mock`，复制直接上游原字节，不转换采样率/声道 |
 | `asr` | `audio`、可选 `language` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
 | `qwen_asr` | `audio`、可选 `language` → `transcript` | 独立连接、自由模型名、语言及附加参数；临时上传、异步识别并转换真实文本/时间戳 |
+| `qwen_asr_streaming` | `audio`、可选 `language` → `transcript` | 每实例独立 WebSocket 地址/Key；PCM16 单声道 WAV 按真实采样率流式发送，任务完成后输出最终转写 |
 | `audio_output` | `audio`、可选 `filename_stem` → 终端 | 安全前缀（默认 `audio-copy`）及 `naming_mode`；新节点默认编号，缺模式旧图原名，复制直接上游字节 |
 | `text_output` | `transcript`、可选 `filename_stem/text_format` → 终端 | 安全前缀（默认 `transcript`）、`naming_mode` 和 `format`（TXT/SRT/VTT/LRC），导出统一转写文本 |
 | `audio_preview` | `audio` → 终端 | 无配置，保存该次输入的预览副本，供节点内播放器读取 |
@@ -70,9 +71,13 @@ Mock ASR 的语言只标记示例结果及片段的语言，不翻译固定示�
 
 ## 6. 能力来源与扩展边界
 
-`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、分类、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.9`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
+`GET /api/v1/capabilities` 从 `domain/node_registry.py` 的实时注册表及工作流领域规则发布节点、分类、端口、数据类型、配置字段、图约束与默认图。顶层 API schema 保持 `1.0`；独立的 `workflow.schema_version` 当前为 `1.10`，字段 shape 改变时提升，客户端拒绝未知版本。数值/字符串边界和描述从 Pydantic schema 派生，复杂语义校验以 validator id 描述，不由前端复制。图数量约束和后端验证共用权威值；集合数量限制由 `domain/limits.py` 集中用于图验证及批次请求，服务端作最终裁决。
 
 目录 `1.9` 的 `presentation.inline_connection_input` 声明节点内连接的模式、地址、超时、地域、备用环境变量及凭据引用字段。新 Qwen 节点使用内联模式，旧缺模式的配置继续按 Profile 处理且不补写。实际密钥不属于配置 schema，只经保存请求的只写更新提交到标准 Fernet 加密存储；引用绑定项目、节点及 Provider，每次替换产生不可变版本。内联设置及引用随原图冻结，重试不读取当前密钥；旧 Profile 保留冻结非密钥设置、执行时读取环境变量的语义。密码缓冲不进入前端图与撤销，便携复制按声明清除引用。凭据先落盘再原子发布图，同请求重试幂等；失败允许无引用密文，不覆盖旧版本。密钥存储和备份边界见[连接文档](provider_profiles.md)。
+
+目录 `1.10` 的内联声明独立提供 Provider 类型与标签，不要求 Profile 声明；模式角色成对为 null 表示始终内联，地域及环境变量角色可空，数据处理可声明 `cancel_behavior=close_stream`。非持久 `InlineConnection` 单独表达 HTTP/WebSocket 节点连接，不放宽旧 HTTP Profile 模型。新 Streaming 节点没有 Profile/env 继承，仅解析自身项目/节点/类型绑定的凭据版本；前端按声明渲染和移除便携引用，调度器无需按类型分支。旧图、快照及摘要不补字段，前端兼容目录 `1.2–1.9`。
+
+Streaming 适配器使用单次 WebSocket 的 `run-task/task-started`、二进制音频、`result-generated`、`finish-task/task-finished` 协议；安全端点规则集中在其协议模块，配置及传输层共用。仅接受经有界头检查的 PCM16 单声道 WAV，按真实采样率限速发送并并发接收；完成后才发布统一 Transcript（stage=`raw`），真实毫秒转秒，最终句子按声道/编号去重并拒绝矛盾结果。取消及总超时会回收收发、进行中的读取和连接；无重连/重发，不提供麦克风、自动转码或实时字幕 UI。完整契约见[Streaming 规格](../spec/cloud-asr-qwen-streaming.md)。
 
 目录 `1.8` 的每个节点发布可空 `category={id,label}`，由节点声明；共享内置类别集中在 `domain/node_categories.py`，注册核心校验标识、标签及同ID一致性。Qwen与Mock识别均归语音识别。前端根据声明分组及搜索，不维护节点到类别的第二份映射；未知类别保留后端标签，旧目录及缺分类扩展显示未分类。分类仅是展示元数据，不进入持久图、运行快照或执行语义；前端兼容 `1.2–1.7` 原目录。
 

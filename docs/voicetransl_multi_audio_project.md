@@ -83,7 +83,9 @@ data/projects/<project-id>/
 
 缺少模式的旧节点继续按 Profile 声明冻结 `workflow.provider_profiles_snapshot`（键为 Profile ID，值为非密钥 Profile），执行时从冻结的环境变量名取值。批次对子运行和重试复制原快照，不读最新连接。缺字段旧记录保持未记录，不补写；旧云节点缺冻结连接明确拒绝执行。嵌套 Profile 同样要求显式 `schema_version=1.0`。
 
-提交前的缺连接、停用、类型不符、缺地址/环境变量名及坏文件等由API返回稳定422错误；缺实际密钥在节点执行时失败。新取消详情可保存在当前节点error中，最终运行仍为cancelled，不表示远端已终止。Profile删除检查公共可编辑图和旧配置引用；历史快照不单独阻止删除。详见[服务连接](provider_profiles.md)。
+`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由。节点保存完整 `endpoint`、`timeout_seconds`、自由模型、语言、附加参数及可空 `credential_ref`；密钥经相同只写更新存储，但 Provider 类型独立且绑定各自节点，没有 Profile/env 继承。允许无密钥草稿，提交运行时缺自身有效凭据返回稳定错误，不读取其他节点。批次和重试冻结原地址及原 Key 版本；旧 Filetrans 文件/快照不补写。持久化仍 `1.0`，仅能力目录为 `1.10`。
+
+提交前的缺连接、停用、类型不符、缺地址/环境变量名及坏文件等由 API 返回稳定 422 错误；内联模式缺凭据在提交前拒绝，旧 Profile 路径缺实际环境变量值在节点执行时失败。Streaming 的 WAV 内容检查在节点执行时、握手前进行，错误使用安全 `QWEN_STREAM_*` 代码，不自动转码。新取消详情可保存在当前节点 error 中，最终运行仍为 cancelled，不表示远端已终止。Profile 删除检查公共可编辑图和旧配置引用；历史快照不单独阻止删除。详见[服务连接](provider_profiles.md)。
 
 ## 旧数据兼容边界
 

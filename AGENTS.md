@@ -41,8 +41,9 @@
 - 项目保存公共可编辑图，运行绑定一个音频；旧公共/逐音频阶段配置只读兼容，不参与节点运行，不合并时间轴。
 - HTTP 服务及领域模型使用 FastAPI 和 Pydantic。
 - Web 当前运行入口为节点工作流；默认图只有 `audio_input -> audio_output`，通过 `audio` 端口连接。Mock 节点与独立 `qwen_asr` 云端节点分别维护，不把旧 Provider 配置恢复到 Mock。
-- WebSocket 只用于通知，REST 与文件才是真实状态来源。
-- Qwen 云端识别以 `spec/cloud-asr-qwen.md` 为范围；其他历史 Provider 和本地模型不代表当前可用能力。
+- 前端旧 WebSocket 只用于通知，REST 与文件才是真实状态来源；云适配器可按专门协议使用 WebSocket 传输。
+- Qwen 录音文件与文件流式识别分别以 `spec/cloud-asr-qwen.md` 和 `spec/cloud-asr-qwen-streaming.md` 为范围；其他历史 Provider 和本地模型不代表当前可用能力。
+- `qwen_asr_streaming` 每个实例独立配置完整 WebSocket 地址和密钥，不读取 Profile、环境变量或其他节点的连接；复制不携带凭据。首版仅处理 PCM16 单声道 WAV，采样率读文件头，任务完成后输出统一转写；不包含麦克风和实时字幕界面，不自动转码。取消须回收连接及文件读取，不保证撤回已发送音频。
 - Mock 节点不读取密钥；Qwen 节点支持直接输入连接及 API Key，真实密钥通过只写保存请求进入服务端独立加密凭据存储，图、修订及运行快照仅保留绑定项目/节点的不透明版本引用。浏览器私有密码缓冲不得进入通用草稿、撤销、本地存储或测量克隆；导入导出及复制按目录声明剥离引用。旧 Profile / 环境变量路径保留原语义，实际密钥不得进入响应、产物或日志。
 - Provider Profile 通过目录声明集成到节点；普通运行/批次提交冻结非密钥设置，排队和重试只复制原快照，不补读当前连接。删除检查公共图及旧引用，旧 Job 快照保持可读。`openai_transcribe` 不代表已有云端执行器。
 

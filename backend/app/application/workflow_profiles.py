@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from ..domain.inline_connection import InlineConnection
 from ..domain.provider_profile import ProviderProfile
 from ..domain.schema import SchemaVersionError
 
@@ -123,9 +124,7 @@ def _inline_profile(node, binding, provider_type):
     if not node.config.get(binding["base_url_key"]):
         raise ProfileSnapshotError("PROVIDER_PROFILE_BASE_URL_MISSING", "节点未配置服务地址")
     try:
-        profile = ProviderProfile(
-            id=node.id,
-            display_name=node.id,
+        profile = InlineConnection(
             provider_type=provider_type,
             base_url=node.config.get(binding["base_url_key"]),
             default_timeout=node.config.get(binding["timeout_key"]),
@@ -136,7 +135,6 @@ def _inline_profile(node, binding, provider_type):
         raise ProfileSnapshotError(
             "INLINE_CONNECTION_INVALID", "节点连接设置无效或不完整"
         ) from None
-    _validate_connection(profile, provider_type, require_env=False)
     return profile
 
 
@@ -149,14 +147,14 @@ def _freeze_inline_connections(store, snapshot, project_id):
         if definition.normalize_config is not None:
             node.config = definition.normalize_config(dict(node.config))
         profile = _inline_profile(node, binding, provider_type)
-        node.config.update(
-            {
-                binding["base_url_key"]: profile.base_url,
-                binding["timeout_key"]: profile.default_timeout,
-                binding["region_key"]: profile.region,
-                binding["api_key_env_key"]: profile.api_key_env,
-            }
-        )
+        for role, value in (
+            ("base_url_key", profile.base_url),
+            ("timeout_key", profile.default_timeout),
+            ("region_key", profile.region),
+            ("api_key_env_key", profile.api_key_env),
+        ):
+            if binding[role] is not None:
+                node.config[binding[role]] = value
         ref_key = binding["credential_ref_key"]
         ref = node.config.get(ref_key)
         if ref:
@@ -165,7 +163,10 @@ def _freeze_inline_connections(store, snapshot, project_id):
             key = os.environ.get(profile.api_key_env, "") if profile.api_key_env else ""
             if not key:
                 raise ProfileSnapshotError(
-                    "CREDENTIAL_REQUIRED", "请在节点中保存 API Key 或配置备用环境变量"
+                    "CREDENTIAL_REQUIRED",
+                    "请在此节点中保存 API Key"
+                    if binding["api_key_env_key"] is None
+                    else "请在节点中保存 API Key 或配置备用环境变量",
                 )
             node.config[ref_key] = credential_operation(
                 store,

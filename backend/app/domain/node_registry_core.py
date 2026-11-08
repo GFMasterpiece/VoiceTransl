@@ -236,31 +236,74 @@ def _inline_connection_binding(definition):
         "api_key_env_key",
         "credential_ref_key",
     }
+    required = roles | {"mode_value", "provider_type", "label"}
     if (
         not isinstance(binding, dict)
-        or set(binding) != roles | {"mode_value"}
-        or any(
-            not isinstance(value, str) or not re.fullmatch(BINDING_IDENTIFIER_PATTERN, value)
-            for value in binding.values()
-        )
+        or not required <= set(binding)
+        or set(binding) - (required | {"data_handling"})
     ):
         raise ValueError("invalid inline connection declaration")
-    if len({binding[key] for key in roles}) != len(roles):
+    nullable = {"mode_key", "mode_value", "region_key", "api_key_env_key"}
+    if any(
+        not (key in nullable and binding[key] is None)
+        and (
+            not isinstance(binding[key], str)
+            or not re.fullmatch(BINDING_IDENTIFIER_PATTERN, binding[key])
+        )
+        for key in roles | {"mode_value", "provider_type"}
+    ) or ((binding["mode_key"] is None) != (binding["mode_value"] is None)):
+        raise ValueError("invalid inline connection declaration")
+    label = binding["label"]
+    if (
+        not isinstance(label, str)
+        or not 1 <= len(label) <= 128
+        or label != label.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in label)
+    ):
+        raise ValueError("invalid inline connection label")
+    bound_roles = {role for role in roles if binding[role] is not None}
+    if len({binding[key] for key in bound_roles}) != len(bound_roles):
         raise ValueError("inline connection fields must be distinct")
     fields = {item.key: item for item in definition.fields}
-    for role in roles:
+    for role in bound_roles:
         item = fields.get(binding[role])
         expected = (
             "integer" if role == "timeout_key" else "select" if role == "mode_key" else "string"
         )
         if item is None or item.type != expected or item.input_port is not None:
             raise ValueError("inline connection fields cannot be connected parameters")
-    mode = fields[binding["mode_key"]]
-    if not any(option.get("value") == binding["mode_value"] for option in mode.options):
+    mode = fields.get(binding["mode_key"])
+    if mode is not None and not any(
+        option.get("value") == binding["mode_value"] for option in mode.options
+    ):
         raise ValueError("inline connection mode must be a declared option")
-    if _provider_profile_binding(definition) is None:
-        raise ValueError("inline connections require a declared provider type")
-    return dict(binding)
+    profile = _provider_profile_binding(definition)
+    if profile is not None and profile["provider_type"] != binding["provider_type"]:
+        raise ValueError("inline and profile provider types must match")
+    result = dict(binding)
+    if "data_handling" in binding:
+        handling = binding["data_handling"]
+        if (
+            not isinstance(handling, dict)
+            or not {"temporary_upload_retention_hours", "remote_cancel_pending_only"}
+            <= set(handling)
+            or set(handling)
+            - {"temporary_upload_retention_hours", "remote_cancel_pending_only", "cancel_behavior"}
+            or type(handling["remote_cancel_pending_only"]) is not bool
+            or ("cancel_behavior" in handling and handling["cancel_behavior"] != "close_stream")
+        ):
+            raise ValueError("invalid inline data handling declaration")
+        hours = handling["temporary_upload_retention_hours"]
+        try:
+            valid = hours is None or (
+                type(hours) in {int, float} and hours > 0 and math.isfinite(hours)
+            )
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError("upload retention hours must be a positive finite number or null")
+        result["data_handling"] = dict(handling)
+    return result
 
 
 def _provider_profile_binding(definition):

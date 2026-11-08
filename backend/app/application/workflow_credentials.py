@@ -1,5 +1,6 @@
 """Apply write-only key updates before publishing the one authoritative graph file."""
 
+from ..domain.inline_connection import inline_connection_active
 from ..domain.node_registry import NODE_DEFINITIONS
 from .workflow_profiles import ProfileSnapshotError, credential_operation
 
@@ -15,12 +16,7 @@ def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, 
         definition = NODE_DEFINITIONS.get(node.type) if node else None
         presentation = definition.presentation or {} if definition else {}
         binding = presentation.get("inline_connection_input")
-        if (
-            node is None
-            or node.id in seen
-            or binding is None
-            or node.config.get(binding["mode_key"]) != binding["mode_value"]
-        ):
+        if node is None or node.id in seen or not inline_connection_active(binding, node.config):
             raise ProfileSnapshotError(
                 "CREDENTIAL_UPDATE_INVALID", "密钥更新必须对应一个节点内连接"
             )
@@ -29,7 +25,7 @@ def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, 
         if update.operation == "clear":
             node.config.pop(ref_key, None)
         else:
-            provider_type = presentation["provider_profile_input"]["provider_type"]
+            provider_type = binding["provider_type"]
             node.config[ref_key] = credential_operation(
                 store,
                 "create",
@@ -54,7 +50,7 @@ def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, 
                 "validate_ref",
                 project_id,
                 node.id,
-                presentation["provider_profile_input"]["provider_type"],
+                binding["provider_type"],
                 ref,
             )
     return prepared

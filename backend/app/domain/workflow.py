@@ -751,6 +751,8 @@ def workflow_resource_inputs(nodes):
 
 def workflow_provider_profile_inputs(nodes):
     """Resolve connection dependencies through registered node declarations."""
+    from .inline_connection import inline_connection_active
+
     for node in nodes:
         definition = _nodes.NODE_DEFINITIONS.get(node.type)
         binding = (
@@ -759,19 +761,21 @@ def workflow_provider_profile_inputs(nodes):
         inline = (
             (definition.presentation or {}).get("inline_connection_input") if definition else None
         )
-        if inline is not None and node.config.get(inline["mode_key"]) == inline["mode_value"]:
+        if inline_connection_active(inline, node.config):
             continue
         if binding is not None:
             yield node, binding
 
 
 def workflow_inline_connection_inputs(nodes):
+    from .inline_connection import inline_connection_active
+
     for node in nodes:
         definition = _nodes.NODE_DEFINITIONS.get(node.type)
         presentation = definition.presentation or {} if definition else {}
         binding = presentation.get("inline_connection_input")
-        if binding is not None and node.config.get(binding["mode_key"]) == binding["mode_value"]:
-            yield node, binding, presentation["provider_profile_input"]["provider_type"]
+        if inline_connection_active(binding, node.config):
+            yield node, binding, binding["provider_type"]
 
 
 def validate_workflow_audio_selection(

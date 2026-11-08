@@ -57,14 +57,16 @@ export interface CapabilityNode {
   preview?: { renderer: string } | null
 }
 export interface InlineConnectionInput {
-  modeKey: string; modeValue: string; baseUrlKey: string; timeoutKey: string; regionKey: string; apiKeyEnvKey: string; credentialRefKey: string
+  modeKey: string | null; modeValue: string | null; baseUrlKey: string; timeoutKey: string; regionKey: string | null; apiKeyEnvKey: string | null; credentialRefKey: string
+  providerType?: string; label?: string; dataHandling?: ProviderDataHandling | null
 }
+export interface ProviderDataHandling { temporaryUploadRetentionHours?: number | null; remoteCancelPendingOnly?: boolean | null; cancelBehavior?: 'close_stream' | null }
 export interface ProviderProfileInput {
   configKey: string
   providerType: string
   label: string
   defaults: { base_url: string; api_key_env: string; default_timeout: number }
-  dataHandling?: { temporaryUploadRetentionHours?: number | null; remoteCancelPendingOnly?: boolean | null } | null
+  dataHandling?: ProviderDataHandling | null
 }
 export interface CapabilityAsr {
   providers: readonly CapabilityOption[]
@@ -175,7 +177,17 @@ function dataType(value: unknown): CapabilityDataType {
   return { id, label, parentTypeId, capabilities }
 }
 
-function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false, categories = false, inlineConnections = false): CapabilityNode {
+function handling(value: unknown, stream = false): ProviderDataHandling | null {
+  if (value == null) return null
+  const item = object(value, 'profiles.invalidCapability')
+  if (Object.keys(item).some((key) => !['temporary_upload_retention_hours', 'remote_cancel_pending_only', ...(stream ? ['cancel_behavior'] : [])].includes(key))
+    || (item.temporary_upload_retention_hours != null && (typeof item.temporary_upload_retention_hours !== 'number' || !Number.isFinite(item.temporary_upload_retention_hours) || item.temporary_upload_retention_hours <= 0))
+    || (item.remote_cancel_pending_only != null && typeof item.remote_cancel_pending_only !== 'boolean')
+    || (stream && item.cancel_behavior != null && item.cancel_behavior !== 'close_stream')) fail('profiles.invalidCapability')
+  return { temporaryUploadRetentionHours: item.temporary_upload_retention_hours as number | null | undefined, remoteCancelPendingOnly: item.remote_cancel_pending_only as boolean | null | undefined,
+    ...(stream ? { cancelBehavior: item.cancel_behavior as 'close_stream' | null | undefined } : {}) }
+}
+function node(value: unknown, namedInputs = false, parameters = false, collections = false, profiles = false, categories = false, inlineConnections = false, directProviders = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
   let category: CapabilityNode['category'] = null
   if (categories && item.category !== null) {
@@ -212,15 +224,20 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   if (inlineConnections && presentation.inline_connection_input != null) {
     const inline = object(presentation.inline_connection_input, 'profiles.invalidCapability')
     const keys = ['mode_key', 'mode_value', 'base_url_key', 'timeout_key', 'region_key', 'api_key_env_key', 'credential_ref_key']
-    if (Object.keys(inline).length !== keys.length || Object.keys(inline).some((key) => !keys.includes(key))
-      || keys.some((key) => !safeIdentifier(inline[key]))) fail('profiles.invalidCapability')
-    const bound = keys.filter((key) => key !== 'mode_value').map((key) => inline[key])
+    const nullableKeys = directProviders ? ['mode_key', 'mode_value', 'region_key', 'api_key_env_key'] : []
+    const requiredKeys = [...keys, ...(directProviders ? ['provider_type', 'label'] : [])]
+    if (requiredKeys.some((key) => !Object.prototype.hasOwnProperty.call(inline, key)) || Object.keys(inline).some((key) => ![...requiredKeys, ...(directProviders ? ['data_handling'] : [])].includes(key))
+      || keys.some((key) => !(nullableKeys.includes(key) && inline[key] === null) && !safeIdentifier(inline[key]))
+      || ((inline.mode_key === null) !== (inline.mode_value === null))
+      || (directProviders && (!safeIdentifier(inline.provider_type) || typeof inline.label !== 'string' || !inline.label.trim()))) fail('profiles.invalidCapability')
+    const bound = keys.filter((key) => key !== 'mode_value' && inline[key] !== null).map((key) => inline[key])
     if (new Set(bound).size !== bound.length || bound.some((key) => !parsedFields.some((field) => field.key === key && field.inputPort === null))) fail('profiles.invalidCapability')
     const mode = parsedFields.find((field) => field.key === inline.mode_key)!
-    if (mode.type !== 'select' || !mode.options.some((option) => option.value === inline.mode_value)
+    if ((inline.mode_key !== null && (mode.type !== 'select' || !mode.options.some((option) => option.value === inline.mode_value)))
       || parsedFields.find((field) => field.key === inline.timeout_key)?.type !== 'integer'
-      || ['base_url_key', 'region_key', 'api_key_env_key', 'credential_ref_key'].some((key) => parsedFields.find((field) => field.key === inline[key])?.type !== 'string')) fail('profiles.invalidCapability')
-    inlineConnectionInput = { modeKey: String(inline.mode_key), modeValue: String(inline.mode_value), baseUrlKey: String(inline.base_url_key), timeoutKey: String(inline.timeout_key), regionKey: String(inline.region_key), apiKeyEnvKey: String(inline.api_key_env_key), credentialRefKey: String(inline.credential_ref_key) }
+      || ['base_url_key', 'region_key', 'api_key_env_key', 'credential_ref_key'].some((key) => inline[key] !== null && parsedFields.find((field) => field.key === inline[key])?.type !== 'string')) fail('profiles.invalidCapability')
+    inlineConnectionInput = { modeKey: inline.mode_key as string | null, modeValue: inline.mode_value as string | null, baseUrlKey: String(inline.base_url_key), timeoutKey: String(inline.timeout_key), regionKey: inline.region_key as string | null, apiKeyEnvKey: inline.api_key_env_key as string | null, credentialRefKey: String(inline.credential_ref_key),
+      ...(directProviders ? { providerType: String(inline.provider_type), label: String(inline.label), dataHandling: handling(inline.data_handling, true) } : {}) }
   }
   let providerProfileInput: ProviderProfileInput | null = null
   if (profiles && presentation.provider_profile_input != null) {
@@ -235,13 +252,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
       || !Number.isInteger(defaults.default_timeout) || Number(defaults.default_timeout) < 1) fail('profiles.invalidCapability')
     try { const url = new URL(defaults.base_url); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) fail('profiles.invalidCapability') } catch { fail('profiles.invalidCapability') }
     providerProfileInput = { configKey: profile.config_key, providerType: profile.provider_type, label: profile.label, defaults: defaults as ProviderProfileInput['defaults'] }
-    if (profile.data_handling != null) {
-      const handling = object(profile.data_handling, 'profiles.invalidCapability')
-      if (Object.keys(handling).some((key) => !['temporary_upload_retention_hours', 'remote_cancel_pending_only'].includes(key))
-        || (handling.temporary_upload_retention_hours != null && (typeof handling.temporary_upload_retention_hours !== 'number' || !Number.isFinite(handling.temporary_upload_retention_hours) || handling.temporary_upload_retention_hours <= 0))
-        || (handling.remote_cancel_pending_only != null && typeof handling.remote_cancel_pending_only !== 'boolean')) fail('profiles.invalidCapability')
-      providerProfileInput.dataHandling = { temporaryUploadRetentionHours: handling.temporary_upload_retention_hours as number | null | undefined, remoteCancelPendingOnly: handling.remote_cancel_pending_only as boolean | null | undefined }
-    }
+    if (profile.data_handling != null) providerProfileInput.dataHandling = handling(profile.data_handling)
   }
   if (collections && resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key'].includes(key))
     || (resource.collection_key !== null && (!safeIdentifier(resource.collection_key) || resource.collection_key === resource.config_key
@@ -286,10 +297,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9'].includes(String(workflow.schema_version)), ['1.7', '1.8', '1.9'].includes(String(workflow.schema_version)), ['1.8', '1.9'].includes(String(workflow.schema_version)), workflow.schema_version === '1.9'))
+  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10'].includes(String(workflow.schema_version)), ['1.7', '1.8', '1.9', '1.10'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10'].includes(String(workflow.schema_version)), ['1.9', '1.10'].includes(String(workflow.schema_version)), workflow.schema_version === '1.10'))
   const categoryLabels = new Map<string, string>()
   for (const entry of nodes) if (entry.category) {
     if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')

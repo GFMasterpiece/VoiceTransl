@@ -360,7 +360,7 @@ async def test_capabilities_options_are_dynamic_filtered_and_do_not_modify_graph
                 app.state.store.save_provider_profiles(profiles)
             response = await client.get("/api/v1/capabilities")
             assert response.status_code == 200, response.text
-            assert response.json()["workflow"]["schema_version"] == "1.9"
+            assert response.json()["workflow"]["schema_version"] == "1.10"
             node = next(
                 node
                 for node in response.json()["workflow"]["nodes"]

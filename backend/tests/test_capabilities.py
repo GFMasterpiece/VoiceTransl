@@ -28,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.9"
+    assert body["workflow"]["schema_version"] == "1.10"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -60,6 +60,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "boolean_value",
         "source_info",
         "qwen_asr",
+        "qwen_asr_streaming",
     }
     assert {
         category: {node["type"] for node in nodes.values() if node["category"]["id"] == category}
@@ -67,7 +68,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     } == {
         "input": {"audio_input", "source_info"},
         "preprocessing": {"preprocess"},
-        "speech_recognition": {"asr", "qwen_asr"},
+        "speech_recognition": {"asr", "qwen_asr", "qwen_asr_streaming"},
         "preview": {"audio_preview", "text_preview"},
         "output": {"audio_output", "text_output"},
         "parameters": {"string_value", "integer_value", "number_value", "boolean_value"},

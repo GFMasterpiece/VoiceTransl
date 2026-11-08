@@ -114,7 +114,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
         const value = config?.[field.key]
         const inline = definition.inlineConnectionInput
         if (value === null && inline && [inline.regionKey, inline.apiKeyEnvKey, inline.credentialRefKey].includes(field.key)) continue
-        if (definition.providerProfileInput?.configKey === field.key && inline && config[inline.modeKey] === inline.modeValue) continue
+        if (definition.providerProfileInput?.configKey === field.key && inline && (inline.modeKey === null || config[inline.modeKey] === inline.modeValue)) continue
         if (value === undefined) {
           if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue

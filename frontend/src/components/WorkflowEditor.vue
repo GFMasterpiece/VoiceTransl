@@ -25,6 +25,7 @@ import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
 import { useProviderProfilesStore } from '../stores/providerProfiles'
 import { groupNodeKinds } from '../workflow/nodeCategories'
+import { inlineConnectionActive } from '../workflow/providerConnections'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[]; externalDialogOpen?: boolean }>()
@@ -35,7 +36,10 @@ const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
 const store = useWorkflowStore()
 const profiles = useProviderProfilesStore()
-watch(() => store.capabilities?.nodes.some((node) => !!node.providerProfileInput), (value) => { if (value && !profiles.loaded && !profiles.loading) void profiles.load().catch(() => {}) }, { immediate: true })
+watch(() => store.draft.nodes.some((node) => {
+  const kind = store.registry?.kind(node.type)
+  return !!kind?.providerProfileInput && !inlineConnectionActive(kind, node.config)
+}), (value) => { if (value && !profiles.loaded && !profiles.loading) void profiles.load().catch(() => {}) }, { immediate: true })
 watch(() => resourceBusy.value || batch.manifest.uploading.value, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
