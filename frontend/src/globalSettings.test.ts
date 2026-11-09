@@ -81,8 +81,8 @@ it('ignores an old GET after a newer GET and settings save when creating nodes',
 })
 
 
-it('keeps global creation defaults active for the rerun-capable catalog', () => {
-  const { store, credentials } = setup(); store.capabilities!.schemaVersion = '1.14'
+it.each(['1.14', '1.15'])('keeps global creation defaults active for the rerun-capable catalog %s', version => {
+  const { store, credentials } = setup(); store.capabilities!.schemaVersion = version
   store.addNode('extension')
   expect(store.selectedNode!.config.model).toBe('future-model')
   expect(credentials.updates()[0]).toMatchObject({ operation: 'use_default', default_credential_version: 'frozen-token' })

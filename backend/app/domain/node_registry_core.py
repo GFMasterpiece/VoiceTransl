@@ -326,6 +326,8 @@ def _validate_categories(definitions):
 
 
 def validate_node_definition(definition: NodeDefinition) -> None:
+    if type(definition.debug_only) is not bool:
+        raise ValueError("node debug_only must be a boolean")
     if not isinstance(definition.execution_version, str) or not definition.execution_version:
         raise ValueError("node execution version must be a non-empty string")
     _validate_categories((*NODE_DEFINITIONS.values(), definition))
@@ -452,6 +454,7 @@ def node_catalog() -> list[dict[str, object]]:
         {
             "type": item.type,
             "label": item.label,
+            "debug_only": item.debug_only,
             "category": _category(item),
             "input_ports": list(item.input_ports),
             "output_ports": list(item.output_ports),

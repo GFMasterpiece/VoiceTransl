@@ -135,7 +135,7 @@ async def test_provider_routes_and_storage_are_gone_and_corrupt_old_file_is_igno
             assert (await client.request(method, f"/api/v1{path}")).status_code == 404
         response = await client.get("/api/v1/capabilities")
         assert response.status_code == 200
-        assert response.json()["workflow"]["schema_version"] == "1.14"
+        assert response.json()["workflow"]["schema_version"] == "1.15"
         for node in response.json()["workflow"]["nodes"]:
             assert "provider_profile_input" not in (node["presentation"] or {})
             binding = (node["presentation"] or {}).get("inline_connection_input")

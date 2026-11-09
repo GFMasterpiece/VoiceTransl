@@ -68,6 +68,7 @@ class NodeDefinition:
     category: NodeCategory | None = None
     settings_default_fields: tuple[str, ...] = ()
     execution_version: str = "1"
+    debug_only: bool = False
 
     @property
     def required_ports(self) -> tuple[str, ...]:

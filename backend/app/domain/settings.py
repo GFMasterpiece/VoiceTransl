@@ -22,6 +22,11 @@ def default_definitions():
     return {key: item for key, item in NODE_DEFINITIONS.items() if item.settings_default_fields}
 
 
+def default_fields(definition):
+    fields = {field.key: field for field in definition.fields}
+    return [fields[key] for key in definition.settings_default_fields]
+
+
 def normalize_defaults(values, *, allow_missing=False):
     definitions = default_definitions()
     if set(values) - set(definitions) or (not allow_missing and set(values) != set(definitions)):

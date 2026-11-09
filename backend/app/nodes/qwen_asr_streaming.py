@@ -129,8 +129,12 @@ def definition():
         output_ports=("transcript",),
         terminal=False,
         config_kind=PROVIDER_TYPE,
-        settings_default_fields=tuple(
-            key for key in QwenStreamingASRConfig.model_fields if key != "credential_ref"
+        settings_default_fields=(
+            "endpoint",
+            "timeout_seconds",
+            "model",
+            "language",
+            "additional_parameters",
         ),
         fields=fields_from_model(
             QwenStreamingASRConfig,

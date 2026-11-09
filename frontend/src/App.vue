@@ -235,7 +235,7 @@ onUnmounted(() => {
       <a class="brand" href="#" :aria-label="t('app.brandHome')" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><div class="topbar-status"><span class="status-dot"></span>{{ t('app.connected') }}</div>
       <button v-if="homeCapabilitiesFailed" class="secondary-button compact-button" type="button" data-settings-retry :disabled="homeCapabilitiesLoading" @click="loadHomeCapabilities">{{ t('settings.retryCapabilities') }}</button>
-      <button v-if="['1.13', '1.14'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings @click="settingsOpen = true">{{ t('settings.title') }}</button>
+      <button v-if="['1.13', '1.14', '1.15'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings @click="settingsOpen = true">{{ t('settings.title') }}</button>
       <select class="locale-picker" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
     </header>
 

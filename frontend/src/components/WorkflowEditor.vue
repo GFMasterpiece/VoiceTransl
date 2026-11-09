@@ -25,7 +25,8 @@ import { measureNodeContent, type NodeContentMinimum } from '../workflow/measure
 import { useNodeRerun } from '../composables/useNodeRerun'
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
-import { groupNodeKinds } from '../workflow/nodeCategories'
+import { debugMode } from '../composables/editorPreferences'
+import { groupNodeKinds, isNodeVisible } from '../workflow/nodeCategories'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
@@ -133,7 +134,7 @@ const minZoom = .01
 function nodeWidth(node: WorkflowNode) { return store.getNodeSize(node).width }
 function nodeHeight(node: WorkflowNode) { return store.getNodeSize(node).height }
 const registry = computed(() => store.registry)
-const nodeKinds = computed(() => registry.value?.kinds || [])
+const nodeKinds = computed(() => (registry.value?.kinds || []).filter(kind => isNodeVisible(kind, debugMode.value)))
 const connectPointer = ref<{ x: number; y: number } | null>(null)
 const connectPointerId = ref<number | null>(null)
 function outputPortsForNode(type: string) { return registry.value?.outputPortsForNode(type) || [] }
@@ -926,7 +927,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
-      <button v-if="contextMenu.nodeId && store.capabilities?.schemaVersion === '1.14'" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <button v-if="contextMenu.nodeId && ['1.14', '1.15'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-else role="menuitem" type="button" data-context-command="paste" :disabled="commandDisabled('paste')" @click="runContextCommand('paste')">{{ t('workflow.editorCommand_paste') }}</button>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>

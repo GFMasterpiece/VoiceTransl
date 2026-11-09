@@ -14,7 +14,6 @@ function modeChange(event: Event) { emit('mode', (event.target as HTMLSelectElem
     <AudioManifest v-if="mode === 'collection'" :manifest="manifest" :audios="audios" :locked="locked" />
     <template v-else>
       <NodeResourceInput :project-id="projectId" :audios="audios" :value="value" :source-language="sourceLanguage" :resource-type="resourceType" :locked="locked" @bind="emit('bind', $event)" @uploaded="emit('uploaded', $event)" @busy="emit('busy', $event)" />
-      <button type="button" class="secondary-button" data-collection-enable :disabled="locked" @click="emit('mode', 'collection')">{{ t('batch.modeCollection') }}</button>
     </template>
   </div>
 </template>

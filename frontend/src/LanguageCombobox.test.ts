@@ -254,3 +254,21 @@ it.each(['1.13', '1.14'])('preserves language metadata and strict shape in catal
   value.languages[0].names.extra = 'invalid'
   expect(() => readCapabilities(value)).toThrow()
 })
+
+
+it('parses required debug flags only in catalog 1.15 and preserves old catalog behavior', () => {
+  const value = catalog(); value.workflow.schema_version = '1.15'
+  value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
+  value.workflow.nodes[1].debug_only = true
+  const parsed = readCapabilities(value)
+  expect(parsed.nodes[1]!.debugOnly).toBe(true)
+  expect(parsed.languages).toEqual(languages)
+  value.workflow.schema_version = '1.14'
+  expect(readCapabilities(value).nodes[1]!.debugOnly).toBe(false)
+})
+it.each([undefined, null, 'true', 1, {}, []])('rejects an invalid required debug flag in catalog 1.15: %s', flag => {
+  const value = catalog(); value.workflow.schema_version = '1.15'
+  value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
+  value.workflow.nodes[0].debug_only = flag
+  expect(() => readCapabilities(value)).toThrow()
+})

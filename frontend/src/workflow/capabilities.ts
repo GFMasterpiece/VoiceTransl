@@ -36,6 +36,7 @@ export interface CapabilityField {
   description: string
 }
 export interface CapabilityNode {
+  debugOnly?: boolean
   inlineConnectionInput?: InlineConnectionInput | null
   category?: { id: string; label: string } | null
   type: string
@@ -184,8 +185,9 @@ function handling(value: unknown, stream = false): ProviderDataHandling | null {
   return { temporaryUploadRetentionHours: item.temporary_upload_retention_hours as number | null | undefined, remoteCancelPendingOnly: item.remote_cancel_pending_only as boolean | null | undefined,
     ...(stream ? { cancelBehavior: item.cancel_behavior as 'close_stream' | null | undefined } : {}) }
 }
-function node(value: unknown, namedInputs = false, parameters = false, collections = false, categories = false, inlineConnections = false, suggestions = false): CapabilityNode {
+function node(value: unknown, namedInputs = false, parameters = false, collections = false, categories = false, inlineConnections = false, suggestions = false, debugMetadata = false): CapabilityNode {
   const item = object(value, 'workflow.capNode')
+  if (debugMetadata && typeof item.debug_only !== 'boolean') fail('workflow.capNode')
   let category: CapabilityNode['category'] = null
   if (categories && item.category !== null) {
     const declared = object(item.category, 'workflow.capCategory')
@@ -253,6 +255,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
     outputPorts,
     terminal: item.terminal === true,
     isSource: item.is_source === true,
+    debugOnly: debugMetadata ? item.debug_only as boolean : false,
     isParameterSource: parameters && item.is_parameter_source === true,
     maxInstances,
     requiredInbound,
@@ -289,10 +292,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.12', '1.13', '1.14'].includes(String(workflow.schema_version))))
+  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15'].includes(String(workflow.schema_version)), ['1.11', '1.12', '1.13', '1.14', '1.15'].includes(String(workflow.schema_version)), ['1.12', '1.13', '1.14', '1.15'].includes(String(workflow.schema_version)), workflow.schema_version === '1.15'))
   const categoryLabels = new Map<string, string>()
   for (const entry of nodes) if (entry.category) {
     if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')
@@ -356,7 +359,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
     schemaVersion: String(workflow.schema_version),
-    ...(['1.12', '1.13', '1.14'].includes(String(workflow.schema_version)) ? { languages: languages(root.languages) } : {}),
+    ...(['1.12', '1.13', '1.14', '1.15'].includes(String(workflow.schema_version)) ? { languages: languages(root.languages) } : {}),
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,

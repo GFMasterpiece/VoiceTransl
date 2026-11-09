@@ -142,8 +142,13 @@ def definition():
         output_ports=("transcript",),
         terminal=False,
         config_kind="qwen_asr",
-        settings_default_fields=tuple(
-            key for key in QwenASRConfig.model_fields if key != "credential_ref"
+        settings_default_fields=(
+            "base_url",
+            "timeout_seconds",
+            "region",
+            "model",
+            "language",
+            "additional_parameters",
         ),
         fields=fields_from_model(
             QwenASRConfig,

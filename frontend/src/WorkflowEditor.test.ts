@@ -1,3 +1,4 @@
+import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY } from './composables/editorPreferences'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -2894,7 +2895,7 @@ describe('resource collection and shared execution', () => {
     }, createPinia(), { audios, onBatchUploaded: (value: any) => audios.push(value) })
     return { audios }
   }
-  async function enableCollection() { root!.querySelector<HTMLButtonElement>('[data-collection-enable]')!.click(); await settle() }
+  async function enableCollection() { expect(root!.querySelector('[data-collection-enable]')).toBeNull(); const mode = root!.querySelector<HTMLSelectElement>('[data-collection-mode]')!; mode.value = 'collection'; mode.dispatchEvent(new Event('change', { bubbles: true })); await settle() }
   async function chooseFiles(files = [new File(['RIFF'], '录音.wav')]) {
     const language = root!.querySelector<HTMLInputElement>('[data-batch-language]')!
     language.value = 'ja'; language.dispatchEvent(new Event('input', { bubbles: true })); await nextTick()
@@ -3213,5 +3214,39 @@ describe('node rerun planning UI', () => {
     store.updateNodeConfig('output', { filename_stem: 'changed' }); await openRerun()
     expect(root!.querySelector('.node-rerun-dialog')!.textContent).toContain(t('workflow.saveBeforeRun'))
     expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/workflow-runs/plan'))).toHaveLength(1)
+  })
+})
+
+
+describe('declarative debug node visibility', () => {
+  afterEach(() => { setDebugMode(false); window.localStorage.removeItem(DEBUG_MODE_STORAGE_KEY) })
+  it('hides debug declarations in both add menus while preserving and duplicating existing debug nodes', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    store.addNode('asr'); const existing = store.selectedNodeId!
+    store.capabilities!.schemaVersion = '1.15'
+    store.capabilities!.nodes.forEach(kind => { kind.debugOnly = kind.type === 'asr' || kind.type === 'preprocess' })
+    const extension = JSON.parse(JSON.stringify(store.capabilities!.nodes.find(kind => kind.type === 'asr')!))
+    extension.type = 'unusual_extension'; extension.debugOnly = true
+    store.capabilities!.nodes = [...store.capabilities!.nodes, extension]
+    await settle(); expect(debugMode.value).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-add-node]')!.click(); await settle()
+    expect(root!.querySelector('[data-add-kind=asr]')).toBeNull(); expect(root!.querySelector('[data-add-kind=unusual_extension]')).toBeNull()
+    expect(root!.querySelector('[data-add-kind=audio_output]')).not.toBeNull()
+    setDebugMode(true); await settle()
+    expect(root!.querySelector('[data-add-kind=asr]')).not.toBeNull(); expect(root!.querySelector('[data-add-kind=unusual_extension]')).not.toBeNull()
+    expect(window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY)).toBe('true')
+    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    setDebugMode(false); await settle()
+    expect(store.draft.nodes.some(node => node.id === existing)).toBe(true)
+    expect(root!.querySelector(`[data-node-id="${existing}"]`)).not.toBeNull()
+    store.selectNode(existing)
+    root!.querySelector('.workflow-svg')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, bubbles: true, cancelable: true })); await settle()
+    expect(store.draft.nodes.filter(node => node.type === 'asr')).toHaveLength(2)
+    root!.querySelector('.workflow-svg')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 250 })); await settle()
+    const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!; search.value = 'asr'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(root!.querySelector('[data-add-kind=asr]')).toBeNull()
+    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    node('asr').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await settle()
+    expect(root!.querySelector('[data-rerun-node]')).not.toBeNull()
   })
 })

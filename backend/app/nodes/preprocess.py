@@ -49,6 +49,7 @@ def definition() -> NodeDefinition:
         output_ports=(AUDIO_PORT,),
         terminal=False,
         config_kind="preprocess",
+        debug_only=True,
         fields=fields_from_model(
             MockPreprocessNodeConfig,
             widgets={"provider": ("select", [{"value": "mock", "label": "Mock"}])},

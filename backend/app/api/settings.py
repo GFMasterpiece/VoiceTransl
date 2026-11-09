@@ -6,7 +6,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
-from ..domain.settings import GlobalSettings, SettingsResponse, default_definitions, global_fields
+from ..domain.settings import (
+    GlobalSettings,
+    SettingsResponse,
+    default_definitions,
+    default_fields,
+    global_fields,
+)
 from ..storage.secret_store import SecretStoreError
 from ..storage.settings_store import SettingsConflict
 
@@ -52,11 +58,7 @@ def response(document):
         "node_defaults": {
             key: {
                 "label": definition.label,
-                "fields": [
-                    field
-                    for field in definition.fields
-                    if field.key in definition.settings_default_fields
-                ],
+                "fields": default_fields(definition),
                 "config": document.node_defaults[key],
                 "credential_configured": key in document.credentials,
                 "credential_version": document.credentials.get(key),

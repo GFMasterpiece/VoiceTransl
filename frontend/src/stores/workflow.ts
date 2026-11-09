@@ -798,7 +798,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (['1.13', '1.14'].includes(capabilities.value.schemaVersion)) await loadSettings()
+      if (['1.13', '1.14', '1.15'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
       draft.value = createDefaultWorkflow(registry.value)
       const response = await fetch(endpoint(projectPath(id)))
@@ -1164,7 +1164,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1182,14 +1182,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = ['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }

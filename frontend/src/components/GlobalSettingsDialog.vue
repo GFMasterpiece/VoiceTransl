@@ -4,6 +4,8 @@ import CanvasDialog from './CanvasDialog.vue'
 import NodeConfigField from './NodeConfigField.vue'
 import { t, displayError, hasMessage, locale, setLocale } from '../i18n'
 import { loadSettings, saveSettings, type GlobalSettings } from '../composables/globalSettings'
+import { debugMode, setDebugMode } from '../composables/editorPreferences'
+import { isNodeVisible, nodeCategoryLabel } from '../workflow/nodeCategories'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import type { Capabilities, CapabilityField, CapabilityLanguage } from '../workflow/capabilities'
 const props = defineProps<{ open: boolean; credentialTypes: readonly string[]; capabilities?: Capabilities | null; languages?: readonly CapabilityLanguage[] }>()
@@ -35,7 +37,29 @@ onBeforeUnmount(() => { loadGeneration++; clearSecrets() })
 const selected = computed(() => active.value ? draft.value?.node_defaults[active.value] : null)
 const registry = computed(() => props.capabilities ? createNodeRegistry(props.capabilities) : null)
 function nodeLabel(type: string, fallback: string) { return registry.value?.kind(type)?.label || fallback }
+interface SettingsGroup { id: string | null; label: string; types: string[] }
+const rememberedTypes = new Map<string | null, string>()
+const groups = computed(() => {
+  const result = new Map<string | null, SettingsGroup>()
+  for (const type of Object.keys(draft.value?.node_defaults || {})) {
+    const kind = registry.value?.kind(type)
+    if (!isNodeVisible(kind || undefined, debugMode.value)) continue
+    const category = kind?.category
+    const id = category?.id ?? null
+    if (!result.has(id)) result.set(id, { id, label: nodeCategoryLabel(category), types: [] })
+    result.get(id)!.types.push(type)
+  }
+  return [...result.values()]
+})
+const activeGroup = computed(() => groups.value.find(group => group.types.includes(active.value)))
+function selectType(type: string) { active.value = type; const group = groups.value.find(group => group.types.includes(type)); if (group) rememberedTypes.set(group.id, type) }
+function selectCategory(group: SettingsGroup) { const previous = rememberedTypes.get(group.id); selectType(previous && group.types.includes(previous) ? previous : group.types[0]!) }
+watch(groups, visible => { if (active.value && !visible.some(group => group.types.includes(active.value))) active.value = '' }, { flush: 'sync' })
 const fields = computed(() => (selected.value?.fields || draft.value?.global_fields || []).map(field => ({ ...field, label: selected.value ? registry.value?.kind(active.value)?.fields.find(item => item.key === field.key)?.label || field.label : hasMessage(`settings.${field.key}`) ? t(`settings.${field.key}`) : field.label })))
+const connectionKeys = computed(() => { const descriptor = registry.value?.kind(active.value)?.inlineConnectionInput; return descriptor ? [descriptor.baseUrlKey, descriptor.timeoutKey, descriptor.regionKey].filter((key): key is string => !!key) : [] })
+const connectionFields = computed(() => connectionKeys.value.flatMap(key => fields.value.filter(field => field.key === key)))
+const parameterFields = computed(() => fields.value.filter(field => !connectionKeys.value.includes(field.key)))
+const hasConnection = computed(() => !!selected.value && (!!connectionFields.value.length || props.credentialTypes.includes(active.value)))
 const config = computed(() => selected.value?.config || draft.value?.global || {})
 function text(field: CapabilityField) { const value = config.value[field.key]; return value == null ? '' : field.type === 'json' && typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value) }
 function edit(field: CapabilityField, input: string) {
@@ -46,6 +70,7 @@ function edit(field: CapabilityField, input: string) {
   if (!input && field.default === null) value = null
   config.value[field.key] = value
 }
+function changeDebugMode(event: Event) { setDebugMode((event.target as HTMLInputElement).checked) }
 function changeLocale(event: Event) { setLocale((event.target as HTMLSelectElement).value) }
 function secret() { void secretVersion.value; return secrets.get(active.value) }
 function secretText() { const entry = secret(); return entry?.operation === 'set' ? entry.api_key : '' }
@@ -64,18 +89,29 @@ async function save() {
 </script>
 <template>
   <CanvasDialog class="global-settings-dialog" :open="open" :title="t('settings.title')" :close-disabled="saving" @close="close">
-    <nav class="settings-tabs" data-settings-tabs :aria-label="t('settings.title')"><button type="button" :class="{ active: !active }" :disabled="busy" @click="active = ''">{{ t('settings.general') }}</button><button v-for="(node, type) in draft?.node_defaults || {}" :key="type" type="button" :class="{ active: active === type }" :disabled="busy" @click="active = String(type)">{{ nodeLabel(String(type), node.label) }}</button></nav>
+    <nav class="settings-tabs" data-settings-tabs :aria-label="t('settings.title')"><button type="button" data-settings-general :class="{ active: !active }" :disabled="busy" @click="active = ''">{{ t('settings.general') }}</button><button v-for="group in groups" :key="group.id ?? ''" type="button" :data-settings-category="group.id ?? ''" :class="{ active: activeGroup?.id === group.id && !!active }" :disabled="busy" @click="selectCategory(group)">{{ group.label }}</button></nav>
     <div class="settings-content" data-settings-content>
       <div v-if="error" class="alert" role="alert">{{ error }}</div>
       <p v-if="busy && !draft" role="status">{{ t('settings.loading') }}</p>
       <div class="settings-fields">
-        <label v-if="!active" class="node-config-row"><span class="node-config-label">{{ t('app.language') }}</span><select class="locale-picker" data-settings-locale :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></label>
+        <template v-if="!active">
+          <label class="node-config-row"><span class="node-config-label">{{ t('app.language') }}</span><select class="locale-picker" data-settings-locale :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></label>
+          <label class="settings-debug-control"><span>{{ t('settings.debugMode') }}</span><input type="checkbox" data-settings-debug :checked="debugMode" @change="changeDebugMode" /></label>
+        </template>
+        <label v-if="activeGroup" class="node-config-row"><span class="node-config-label">{{ t('settings.nodeType') }}</span><select data-settings-node-type :value="active" :disabled="busy" :aria-label="t('settings.nodeType')" @change="selectType(($event.target as HTMLSelectElement).value)"><option v-for="type in activeGroup.types" :key="type" :value="type">{{ nodeLabel(type, draft!.node_defaults[type]!.label) }}</option></select></label>
         <template v-if="draft">
-          <NodeConfigField v-for="field in fields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
-          <div v-if="selected && credentialTypes.includes(active)" class="node-credential-group">
-            <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-settings-key autocomplete="new-password" :aria-label="t('connections.apiKey')" :value="secretText()" :disabled="busy" :placeholder="t('connections.keyUnchanged')" @input="editSecret(($event.target as HTMLInputElement).value)" /></label>
-            <p class="node-credential-status" role="status">{{ secret()?.operation === 'clear' ? t('connections.keyClearing') : secret()?.operation === 'set' ? t('connections.keyPending') : selected.credential_configured ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p><button type="button" class="text-button" :disabled="busy" @click="clearSecret">{{ t('connections.clearKey') }}</button>
-          </div>
+          <section v-if="hasConnection" class="settings-field-section" data-settings-section="connection">
+            <h4 class="node-config-section-title">{{ t('connections.connectionSettings') }}</h4>
+            <NodeConfigField v-for="field in connectionFields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
+            <div v-if="selected && credentialTypes.includes(active)" class="node-credential-group">
+              <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-settings-key autocomplete="new-password" :aria-label="t('connections.apiKey')" :value="secretText()" :disabled="busy" :placeholder="t('connections.keyUnchanged')" @input="editSecret(($event.target as HTMLInputElement).value)" /></label>
+              <p class="node-credential-status" role="status">{{ secret()?.operation === 'clear' ? t('connections.keyClearing') : secret()?.operation === 'set' ? t('connections.keyPending') : selected.credential_configured ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p><button type="button" class="text-button" :disabled="busy" @click="clearSecret">{{ t('connections.clearKey') }}</button>
+            </div>
+          </section>
+          <section v-if="parameterFields.length" class="settings-field-section" :data-settings-section="active ? 'parameters' : 'general'">
+            <h4 v-if="hasConnection" class="node-config-section-title">{{ t('connections.processingParameters') }}</h4>
+            <NodeConfigField v-for="field in parameterFields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
+          </section>
         </template>
       </div>
     </div>

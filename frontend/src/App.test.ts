@@ -773,7 +773,7 @@ describe('batch dialog navigation', () => {
 })
 
 
-it.each(['1.13', '1.14'])('retries failed home capabilities and opens settings without reloading projects or graphs (%s)', async (version) => {
+it.each(['1.13', '1.14', '1.15'])('retries failed home capabilities and opens settings without reloading projects or graphs (%s)', async (version) => {
   const capabilities = readCapabilities({ schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [{ type: 'extension', label: 'Extension', input_ports: [], output_ports: [], config: { kind: 'none', fields: [] } }], ports: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } })
   capabilities.schemaVersion = version
   const capabilitiesRequest = vi.spyOn(capabilitiesApi, 'fetchCapabilities').mockRejectedValueOnce(new TypeError('offline')).mockResolvedValue(capabilities)

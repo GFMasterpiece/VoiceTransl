@@ -39,6 +39,7 @@ def definition() -> NodeDefinition:
         terminal=False,
         config_kind="asr",
         settings_default_fields=("language",),
+        debug_only=True,
         fields=fields_from_model(
             MockASRNodeConfig,
             widgets={"provider": ("select", [{"value": "mock", "label": "Mock"}])},
