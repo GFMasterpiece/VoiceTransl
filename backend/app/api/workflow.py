@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from ..application.workflow_connections import (
     ConnectionSnapshotError,
-    reject_connection_validation_errors,
 )
 from ..application.workflow_credentials import prepare_workflow_credentials
 from ..application.workflow_reuse import ReuseError, ReuseIssue, ReusePlan, prepare_reuse
@@ -20,7 +19,8 @@ from ..domain import (
     WorkflowValidationResponse,
     validate_workflow_graph,
 )
-from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
+from ..domain.schema import CONFIGURATION_SCHEMA_VERSION as SCHEMA_VERSION
+from ..domain.schema import SchemaVersionError, require_schema_version
 from ..domain.workflow import (
     WorkflowRerunRequest,
     normalize_workflow_graph,
@@ -137,10 +137,6 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
     store = request.app.state.store
     issues = validate_workflow_graph(body.nodes, body.edges)
     issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
-    try:
-        reject_connection_validation_errors(issues)
-    except ConnectionSnapshotError as error:
-        raise HTTPException(422, detail=_error(error.code, str(error))) from None
     if issues:
         raise HTTPException(
             422,
@@ -259,6 +255,15 @@ async def plan_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reques
                 store,
                 workflow_snapshot(document),
                 pid,
+                node_ids=set(prepared.plan.execute_node_ids),
+            )
+            from ..application.configuration_evaluator import validate_configuration_snapshot
+
+            await validate_configuration_snapshot(
+                store,
+                workflow_snapshot(document),
+                pid,
+                aid,
                 node_ids=set(prepared.plan.execute_node_ids),
             )
             return prepared.plan

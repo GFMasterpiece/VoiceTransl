@@ -41,10 +41,3 @@ class InlineConnection(BaseModel):
         # Parsing the port also rejects malformed authorities without using the URL in errors.
         parsed.port
         return value
-
-
-class LegacyConnectionConfigError(ValueError):
-    code = "LEGACY_CONNECTION_UNSUPPORTED"
-
-    def __init__(self):
-        super().__init__("旧服务连接配置已移除，请删除并重新添加该节点，然后在节点中填写连接和密钥")

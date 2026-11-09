@@ -16,7 +16,7 @@ from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
 from .application.batch_manager import BatchManager
 from .config import LOOPBACK_ORIGIN_REGEX, load_settings
-from .domain.schema import SCHEMA_VERSION, SchemaVersionError
+from .domain.schema import SchemaVersionError, document_version
 from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
 from .storage.settings_store import SettingsStore
@@ -72,13 +72,15 @@ def create_app(data_dir=None):
     )
     logger = logging.getLogger("voicetransl.api")
 
-    def schema_version_response() -> JSONResponse:
+    def schema_version_response(document: str) -> JSONResponse:
         return JSONResponse(
             status_code=422,
             content={
                 "error": {
                     "code": "UNSUPPORTED_SCHEMA_VERSION",
-                    "message": (f"不支持该数据版本，当前仅支持 schema_version {SCHEMA_VERSION!r}"),
+                    "message": (
+                        f"不支持该数据版本，当前仅支持 schema_version {document_version(document)!r}"
+                    ),
                     "details": None,
                 }
             },
@@ -87,7 +89,7 @@ def create_app(data_dir=None):
     @app.exception_handler(SchemaVersionError)
     async def schema_version_error(_request: Request, exc: SchemaVersionError):
         logger.warning("Unsupported schema version for %s: %r", exc.document, exc.version)
-        return schema_version_response()
+        return schema_version_response(exc.document)
 
     @app.exception_handler(HTTPException)
     async def http_error(_request: Request, exc: HTTPException):
@@ -117,7 +119,7 @@ def create_app(data_dir=None):
         for error in exc.errors():
             context = error.get("ctx")
             if isinstance(context, dict) and isinstance(context.get("error"), SchemaVersionError):
-                return schema_version_response()
+                return schema_version_response(context["error"].document)
         details = [
             {
                 "loc": list(error.get("loc", ())),

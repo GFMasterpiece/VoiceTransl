@@ -23,7 +23,6 @@ from ..domain.workflow import (
 from ..storage.batch_store import BatchStore
 from .workflow_connections import (
     freeze_workflow_connections,
-    reject_connection_validation_errors,
     validate_frozen_workflow_connections,
 )
 
@@ -85,7 +84,6 @@ class BatchManager:
                     raise RuntimeError("WORKFLOW_REVISION_CONFLICT")
                 issues = validate_workflow_graph(document.nodes, document.edges)
                 issues.extend(validate_workflow_resources(project, document.nodes))
-                reject_connection_validation_errors(issues)
                 if issues:
                     raise ValueError("INVALID_WORKFLOW")
                 snapshot = workflow_snapshot(document).model_copy(deep=True)
@@ -105,6 +103,10 @@ class BatchManager:
             audios = {audio.id: audio for audio in project.audios}
             if any(aid not in audios for aid in audio_ids):
                 raise ValueError("AUDIO_NOT_FOUND")
+            from .configuration_evaluator import validate_configuration_snapshot
+
+            for aid in audio_ids:
+                await validate_configuration_snapshot(self.projects, snapshot, pid, aid)
             if any(self.jobs.audio_busy(pid, aid) for aid in audio_ids):
                 raise RuntimeError("AUDIO_BUSY")
             old_items = {item.audio_id: item for item in retry.items} if retry else {}
@@ -118,9 +120,7 @@ class BatchManager:
                 items.append(
                     BatchItem(
                         index=index,
-                        sequence=(old.sequence if old.sequence is not None else old.index + 1)
-                        if old
-                        else index + 1,
+                        sequence=old.sequence if old else index + 1,
                         audio_id=aid,
                         audio_name=old.audio_name if old else audio.source.original_name,
                         source_language=old.source_language if old else audio.source.language,
@@ -224,7 +224,7 @@ class BatchManager:
                     item.audio_id,
                     batch.workflow,
                     batch.id,
-                    sequence=item.sequence if item.sequence is not None else item.index + 1,
+                    sequence=item.sequence,
                 )
                 task = self.jobs.tasks.get((batch.project_id, item.audio_id))
                 item.run_id = run.id

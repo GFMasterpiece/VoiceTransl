@@ -236,16 +236,22 @@ async def test_source_info_parameter_naming_records_and_immutable_history(tmp_pa
                 dict(id="input", type="audio_input", config={}),
                 dict(id="info", type="source_info", config={}),
                 dict(id="info2", type="source_info", config={}),
-                dict(id="output", type="audio_output", config={"filename_stem": "manual"}),
-                dict(id="asr", type="asr", config={"language": "ja"}),
+                dict(
+                    id="output",
+                    type="audio_output",
+                    config={"filename_stem": "manual", "naming_mode": "exact"},
+                ),
+                dict(id="asr", type="asr", config={}),
+                dict(id="context", type="asr_context", config={"language": "ja"}),
                 dict(id="text", type="text_output", config={}),
             ],
             "edges": [
                 edge("audio", "input", "audio", "output", "audio"),
                 edge("stem", "info", "stem", "output", "filename_stem"),
                 edge("audio-asr", "input", "audio", "asr", "audio"),
-                edge("language", "info2", "source_language", "asr", "language"),
+                edge("language", "info2", "source_language", "context", "language"),
                 edge("transcript", "asr", "transcript", "text", "transcript"),
+                edge("context", "context", "asr_context", "asr", "asr_context"),
             ],
         }
         document = await save_graph(client, pid, 0, graph)
@@ -263,7 +269,7 @@ async def test_source_info_parameter_naming_records_and_immutable_history(tmp_pa
             "source_port": "stem",
             "target_port": "filename_stem",
         }
-        assert records["asr"]["effective_config"]["language"] == "en-US"
+        assert records["context"]["effective_config"]["language"] == "en-US"
         run_url = f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{run['id']}"
         history = (await client.get(run_url)).content
         graph["nodes"] = [node for node in graph["nodes"] if node["id"] != "info"]

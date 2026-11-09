@@ -102,14 +102,14 @@ async function save() {
         <template v-if="draft">
           <section v-if="hasConnection" class="settings-field-section" data-settings-section="connection">
             <h4 class="node-config-section-title">{{ t('connections.connectionSettings') }}</h4>
+            <NodeConfigField v-for="field in parameterFields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
             <NodeConfigField v-for="field in connectionFields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
             <div v-if="selected && credentialTypes.includes(active)" class="node-credential-group">
               <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-settings-key autocomplete="new-password" :aria-label="t('connections.apiKey')" :value="secretText()" :disabled="busy" :placeholder="t('connections.keyUnchanged')" @input="editSecret(($event.target as HTMLInputElement).value)" /></label>
               <p class="node-credential-status" role="status">{{ secret()?.operation === 'clear' ? t('connections.keyClearing') : secret()?.operation === 'set' ? t('connections.keyPending') : selected.credential_configured ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p><button type="button" class="text-button" :disabled="busy" @click="clearSecret">{{ t('connections.clearKey') }}</button>
             </div>
           </section>
-          <section v-if="parameterFields.length" class="settings-field-section" :data-settings-section="active ? 'parameters' : 'general'">
-            <h4 v-if="hasConnection" class="node-config-section-title">{{ t('connections.processingParameters') }}</h4>
+          <section v-if="!hasConnection && parameterFields.length" class="settings-field-section" :data-settings-section="active ? 'parameters' : 'general'">
             <NodeConfigField v-for="field in parameterFields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
           </section>
         </template>

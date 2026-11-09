@@ -1,6 +1,6 @@
 """Typed literal parameter roots; no special handling in the scheduler."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.node_categories import PARAMETERS
 from ..domain.node_contracts import NodeDefinition, fields_from_model
@@ -12,7 +12,7 @@ class _ValueConfig(BaseModel):
 
 
 class StringValueConfig(_ValueConfig):
-    value: str = ""
+    value: str = Field(default="", json_schema_extra={"widget": "multiline"})
 
 
 class IntegerValueConfig(_ValueConfig):
@@ -50,6 +50,9 @@ def _definition(type_id: str, label: str, config_model: type[BaseModel]) -> Node
         normalize_config=normalize,
         validate_config=normalize,
         execute=execute,
+        evaluation_kind="configuration",
+        evaluate_config=execute,
+        can_start_without_inputs=True,
     )
 
 

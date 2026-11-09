@@ -34,7 +34,7 @@ def output_graph(mode=None, stem="sample", *, wired=False, format_name="srt"):
     graph = {
         "nodes": [
             dict(id="input", type="audio_input", config={}),
-            dict(id="asr", type="asr", config={"language": "ja"}),
+            dict(id="asr", type="asr", config={}),
             dict(id="audio", type="audio_output", config=dict(config)),
             dict(id="text", type="text_output", config={**config, "format": format_name}),
         ],
@@ -57,20 +57,20 @@ def output_graph(mode=None, stem="sample", *, wired=False, format_name="srt"):
 
 
 @pytest.mark.parametrize("model", [AudioOutputConfig, TextOutputConfig])
-def test_missing_mode_reads_exact_while_catalog_new_node_default_is_prefix(model):
-    assert model().naming_mode == "exact"
+def test_missing_mode_and_catalog_consistently_default_to_prefix(model):
+    assert model().naming_mode == "prefix_sequence"
     definition = NODE_DEFINITIONS["text_output" if model is TextOutputConfig else "audio_output"]
     field = next(item for item in definition.fields if item.key == "naming_mode")
-    assert field.default == "exact"
+    assert field.default == "prefix_sequence"
     assert field.creation_default == "prefix_sequence"
     assert field.type == "select"
     assert [option["value"] for option in field.options] == ["exact", "prefix_sequence"]
     assert field.input_port is None
     assert "naming_mode" not in definition.input_ports
-    assert definition.normalize_config({})["naming_mode"] == "exact"
+    assert definition.normalize_config({})["naming_mode"] == "prefix_sequence"
 
 
-@pytest.mark.parametrize("mode", [None, "exact"])
+@pytest.mark.parametrize("mode", ["exact"])
 def test_legacy_exact_batch_needs_no_sequence(mode):
     config = {"filename_stem": "unchanged"}
     if mode:
@@ -111,7 +111,8 @@ def test_unsafe_prefix_rejected_before_number_can_hide_it(stem, mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "mode,expected", [(None, "sample"), ("exact", "sample"), ("prefix_sequence", "sample_00001")]
+    "mode,expected",
+    [(None, "sample_00001"), ("exact", "sample"), ("prefix_sequence", "sample_00001")],
 )
 async def test_audio_and_text_exact_or_numbered_suffixes_and_parameter_records(
     tmp_path, mode, expected
@@ -129,7 +130,7 @@ async def test_audio_and_text_exact_or_numbered_suffixes_and_parameter_records(
             assert record["artifact"]["filename"] == expected + extension
             assert record["config"]["filename_stem"] == "manual"
             assert record["effective_config"]["filename_stem"] == "sample"
-            assert record["effective_config"]["naming_mode"] == (mode or "exact")
+            assert record["effective_config"]["naming_mode"] == (mode or "prefix_sequence")
             assert record["parameter_sources"]["filename_stem"]["source_node_id"] == "prefix"
             assert record["parameter_sources"]["naming_mode"] == {"kind": "config"}
         assert (
@@ -196,31 +197,28 @@ async def test_missing_sequence_fails_both_numbered_outputs_without_artifacts(tm
 
 
 @pytest.mark.asyncio
-async def test_old_persisted_graph_and_run_read_without_rewriting_or_renaming(tmp_path):
+async def test_current_explicit_exact_graph_and_run_restart_without_rewriting_or_renaming(tmp_path):
     app = create_app(tmp_path)
     app.state.jobs.delay_ms = 0
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aid = await create_project(client)
-        graph = output_graph()
+        graph = output_graph("exact")
         document = WorkflowDocument(project_id=pid, nodes=graph["nodes"], edges=graph["edges"])
-        workflow_path = app.state.store.project_dir(pid) / "workflow.json"
+        workflow_path = app.state.store.project_dir(pid) / "workflow-v2.json"
         workflow_path.write_text(document.model_dump_json(), encoding="utf-8")
         old_workflow = workflow_path.read_bytes()
         loaded = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()
-        assert all("naming_mode" not in node["config"] for node in loaded["nodes"])
+        assert all(
+            node["config"]["naming_mode"] == "exact"
+            for node in loaded["nodes"]
+            if node["type"] in {"audio_output", "text_output"}
+        )
         run, records = await run_graph(app, client, pid, aid, loaded)
         assert records["audio"]["artifact"]["filename"] == "sample.wav"
         assert records["text"]["artifact"]["filename"] == "sample.srt"
         assert workflow_path.read_bytes() == old_workflow
     run_path = app.state.store.workflow_run_dir(pid, aid, run["id"]) / "run.json"
     payload = json.loads(run_path.read_text(encoding="utf-8"))
-    payload.pop("batch_item_sequence", None)
-    for record in payload["nodes"]:
-        record["config"].pop("naming_mode", None)
-        if record["effective_config"]:
-            record["effective_config"].pop("naming_mode", None)
-        if record["parameter_sources"]:
-            record["parameter_sources"].pop("naming_mode", None)
     run_path.write_text(json.dumps(payload), encoding="utf-8")
     old_run = run_path.read_bytes()
     restarted = create_app(tmp_path)

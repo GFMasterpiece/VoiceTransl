@@ -22,7 +22,6 @@ from ..domain.workflow import (
 from .adjustable_limiter import AdjustableLimiter
 from .workflow_connections import (
     freeze_workflow_connections,
-    reject_connection_validation_errors,
     validate_frozen_workflow_connections,
 )
 from .workflow_reuse import digest, prepare_reuse, reject
@@ -164,7 +163,6 @@ class JobManager:
                 issues.extend(
                     validate_workflow_resources(self.store.load_project(project_id), document.nodes)
                 )
-                reject_connection_validation_errors(issues)
                 if issues:
                     raise ValueError("invalid workflow")
                 validate_workflow_audio_selection(
@@ -194,6 +192,15 @@ class JobManager:
                     )
                 else:
                     validate_frozen_workflow_connections(snapshot, self.store, project_id)
+                from .configuration_evaluator import validate_configuration_snapshot
+
+                await validate_configuration_snapshot(
+                    self.store,
+                    snapshot,
+                    project_id,
+                    audio_id,
+                    node_ids=set(reuse.plan.execute_node_ids) if reuse else None,
+                )
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",

@@ -30,7 +30,7 @@ class AudioOutputConfig(BaseModel):
         default=DEFAULT_FILENAME_STEM, min_length=1, max_length=128, description="名称 / 前缀"
     )
     naming_mode: Literal["exact", "prefix_sequence"] = Field(
-        default="exact",
+        default="prefix_sequence",
         description="前缀模式附加固定文件序号，例如 prefix_00001；完整名称模式不附加序号",
         json_schema_extra={"creation_default": "prefix_sequence"},
     )

@@ -9,7 +9,23 @@ from httpx import ASGITransport, AsyncClient
 
 from test_batches import setup
 from test_inline_credentials import cloud as cloud
-from test_inline_credentials import graph, run, save, update_body
+from test_inline_credentials import graph as base_graph
+from test_inline_credentials import run, save, update_body
+
+
+def graph(document):
+    body = base_graph(document)
+    body["nodes"].append({"id": "cloud_context", "type": "asr_context", "config": {}})
+    body["edges"].append(
+        {
+            "id": "context",
+            "source": "cloud_context",
+            "source_port": "asr_context",
+            "target": "cloud",
+            "target_port": "asr_context",
+        }
+    )
+    return body
 
 
 async def cloud_graph(client, app, count=1):
@@ -60,6 +76,12 @@ async def test_output_rerun_uses_new_saved_config_and_copies_results_without_clo
         document["nodes"].extend(
             [
                 {"id": "other_cloud", "type": "qwen_asr", "config": {}},
+                {
+                    "id": "other_connection",
+                    "type": "service_connection",
+                    "config": {"protocol": "qwen_filetrans", "endpoint": "https://example.com/api"},
+                },
+                {"id": "other_model", "type": "model_config", "config": {"model_name": "other"}},
                 {"id": "other_out", "type": "text_output", "config": {"format": "txt"}},
             ]
         )
@@ -81,6 +103,24 @@ async def test_output_rerun_uses_new_saved_config_and_copies_results_without_clo
                 },
             ]
         )
+        document["edges"].extend(
+            [
+                {
+                    "id": "oc",
+                    "source": "other_connection",
+                    "source_port": "connection",
+                    "target": "other_model",
+                    "target_port": "connection",
+                },
+                {
+                    "id": "om",
+                    "source": "other_model",
+                    "source_port": "model",
+                    "target": "other_cloud",
+                    "target_port": "model",
+                },
+            ]
+        )
         document = await save(
             client,
             pid,
@@ -93,7 +133,12 @@ async def test_output_rerun_uses_new_saved_config_and_copies_results_without_clo
         body = rerun_body(document, source)
         preview = await plan(client, pid, aids[0], body)
         assert preview["valid"], preview
-        assert preview["execute_node_ids"] == ["output"]
+        assert set(preview["execute_node_ids"]) == {
+            "output",
+            "cloud_connection",
+            "cloud_model",
+            "cloud_context",
+        }
         assert set(preview["reuse_node_ids"]) == {"input", "cloud"}
         result = await submit(client, app, pid, aids[0], body)
         assert result.status.value == "completed", result.error
@@ -137,8 +182,8 @@ async def test_changed_ancestor_config_implementation_and_same_size_source_rejec
         assert preview["issues"][0]["code"] == "RERUN_UPSTREAM_CHANGED"
         monkeypatch.setitem(NODE_DEFINITIONS, "qwen_asr", old_definition)
         for node in document["nodes"]:
-            if node["id"] == "cloud":
-                node["config"]["model"] = "other-compatible-model"
+            if node["id"] == "cloud_model":
+                node["config"]["model_name"] = "other-compatible-model"
         edited = await save(
             client,
             pid,
@@ -151,8 +196,8 @@ async def test_changed_ancestor_config_implementation_and_same_size_source_rejec
         preview = await plan(client, pid, aids[0], rerun_body(edited, source))
         assert preview["issues"][0]["code"] == "RERUN_UPSTREAM_CHANGED"
         # Restore config so the next rejection specifically exercises source bytes.
-        original = next(n for n in source.workflow.nodes if n.id == "cloud").config
-        next(n for n in edited["nodes"] if n["id"] == "cloud")["config"] = original
+        original = next(n for n in source.workflow.nodes if n.id == "cloud_model").config
+        next(n for n in edited["nodes"] if n["id"] == "cloud_model")["config"] = original
         edited = await save(
             client,
             pid,
@@ -212,7 +257,7 @@ async def test_parameter_descendants_reuse_side_ancestor_and_changed_parameter_r
                     "id": "lang-edge",
                     "source": "lang",
                     "source_port": "string",
-                    "target": "cloud",
+                    "target": "cloud_context",
                     "target_port": "language",
                 },
                 {
@@ -232,8 +277,16 @@ async def test_parameter_descendants_reuse_side_ancestor_and_changed_parameter_r
         # source_info is an independent necessary ancestor at the merge.
         preview = await plan(client, pid, aids[0], rerun_body(document, source, "lang"))
         assert preview["valid"], preview
-        assert set(preview["execute_node_ids"]) == {"lang", "cloud", "output"}
-        assert set(preview["reuse_node_ids"]) == {"input", "name"}
+        assert set(preview["execute_node_ids"]) == {
+            "lang",
+            "cloud",
+            "output",
+            "cloud_context",
+            "cloud_connection",
+            "cloud_model",
+            "name",
+        }
+        assert set(preview["reuse_node_ids"]) == {"input"}
         result = await submit(client, app, pid, aids[0], rerun_body(document, source, "lang"))
         assert result.status.value == "completed", result.error
         assert len(cloud["calls"]) == 2
@@ -250,7 +303,7 @@ async def test_parameter_descendants_reuse_side_ancestor_and_changed_parameter_r
         )
         preview = await plan(client, pid, aids[0], rerun_body(document, source))
         assert not preview["valid"]
-        assert preview["issues"][0]["node_id"] == "lang"
+        assert preview["issues"][0]["node_id"] == "cloud"
 
 
 @pytest.mark.asyncio
@@ -298,7 +351,9 @@ async def test_batch_item_rerun_preserves_sequence_without_mutating_batch(tmp_pa
         pid, aids, document = await setup(client, 2)
         body = graph(document)
         body["nodes"][0]["config"]["audio_ids"] = aids
-        body["nodes"][-1]["config"].update(filename_stem="sub", naming_mode="prefix_sequence")
+        next(n for n in body["nodes"] if n["id"] == "output")["config"].update(
+            filename_stem="sub", naming_mode="prefix_sequence"
+        )
         document = await save(client, pid, body)
         document = await save(client, pid, update_body(document))
         batch = await submit_batch(client, pid, aids, document)
@@ -405,7 +460,7 @@ async def test_layout_edge_ids_irrelevant_but_manual_connected_fallback_is_finge
                 "id": "l",
                 "source": "lang",
                 "source_port": "string",
-                "target": "cloud",
+                "target": "cloud_context",
                 "target_port": "language",
             }
         )
@@ -426,7 +481,9 @@ async def test_layout_edge_ids_irrelevant_but_manual_connected_fallback_is_finge
             },
         )
         assert (await plan(client, pid, aids[0], rerun_body(document, source)))["valid"]
-        next(n for n in document["nodes"] if n["id"] == "cloud")["config"]["language"] = "en"
+        next(n for n in document["nodes"] if n["id"] == "cloud_context")["config"]["language"] = (
+            "en"
+        )
         document = await save(
             client,
             pid,

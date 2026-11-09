@@ -4,7 +4,9 @@ from . import (
     asr,
     audio_input,
     audio_output,
+    configuration_values,
     llm_translate,
+    model_configuration,
     preprocess,
     preview,
     qwen_asr,
@@ -16,8 +18,13 @@ from . import (
 
 
 def builtin_definitions():
+    from .service_protocols import register_builtin_protocols
+
+    register_builtin_protocols()
     return (
         audio_input.definition(),
+        *configuration_values.builtin_definitions(),
+        *model_configuration.definitions(),
         preprocess.definition(),
         asr.definition(),
         qwen_asr.definition(),

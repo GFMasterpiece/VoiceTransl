@@ -16,7 +16,6 @@ const fields = computed(() => (props.registry.kind(props.node.type)?.fields || [
 const visibleKeys = computed(() => new Set(workflowVisibleFields(props.node, props.registry, props.edges).map((field) => field.key)))
 const parameterFields = fields
 const hasConnection = computed(() => !!inlineDescriptor.value)
-const legacyIssue = computed(() => props.registry.validateConfig(props.node.type, props.node.config).find((issue) => issue.code === 'LEGACY_CONNECTION_UNSUPPORTED'))
 
 type Field = (typeof fields.value)[number]
 function connection(field: Field) { return field.inputPort ? props.edges?.find((edge) => edge.target === props.node.id && edge.target_port === field.inputPort) : undefined }
@@ -56,11 +55,10 @@ function error(field: Field) {
   <div class="node-config-fields" @pointerdown.stop @click.stop @dblclick.stop @keydown.stop @keyup.stop @wheel.stop>
     <section v-if="hasConnection" class="node-config-section" data-node-section="connection">
       <h4 class="node-config-section-title">{{ t('connections.connectionSettings') }}</h4>
-      <p v-if="legacyIssue" class="node-field-error" role="alert" data-cloud-rebuild>{{ legacyIssue.message }}</p>
-      <NodeProviderConnection v-else :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
+      <NodeConfigField v-for="field in parameterFields" :key="field.key" :field="field" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
+      <NodeProviderConnection :node="node" :registry="registry" :locked="locked" @update="emit('update', $event)" />
     </section>
-    <section v-if="parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
-      <h4 v-if="hasConnection" class="node-config-section-title">{{ t('connections.processingParameters') }}</h4>
+    <section v-if="!hasConnection && parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
       <NodeConfigField v-for="field in parameterFields" :key="field.key" :field="field" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
     </section>
   </div>

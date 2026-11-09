@@ -91,7 +91,36 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
             )
         ):
             raise TypeError("node input violates its declared port contract")
-    result = await definition.execute(context)
+    from ..domain.configuration import validate_model
+
+    for port, operation in definition.binding_inputs.items():
+        validate_model(context, context.input(port).value, operation)
+    if definition.validate_inputs:
+        definition.validate_inputs(context)
+    if definition.evaluation_kind == "configuration":
+        from .configuration_evaluator import evaluate_configuration_graph
+
+        seed = {
+            edge.source: {} for edge in context.run.workflow.edges if edge.target == context.node.id
+        }
+        for edge in context.run.workflow.edges:
+            if edge.target == context.node.id:
+                source = context.inputs[edge.target_port]
+                seed[edge.source][edge.source_port] = NodeData(
+                    edge.source_port, source.value, source.type_id
+                )
+        result = (
+            await evaluate_configuration_graph(
+                context.store,
+                context.run,
+                context.project,
+                context.cancel_event,
+                required_ids={context.node.id},
+                outputs=seed,
+            )
+        )[context.node.id]
+    else:
+        result = await definition.execute(context)
     validate_node_result(definition, result)
     if result.artifact is not None and not isinstance(result.artifact, WorkflowArtifact):
         raise TypeError("node artifact must be WorkflowArtifact")

@@ -47,7 +47,12 @@ def execution_config(node, inputs, record=None):
     config = deepcopy(node.config)
     for item in definition.fields:
         if item.input_port is not None and item.input_port in inputs:
-            config[item.key] = deepcopy(inputs[item.input_port].value)
+            value = inputs[item.input_port].value
+            from ..domain.node_registry import PORT_DEFINITIONS, TYPE_DEFINITIONS
+
+            type_id = inputs[item.input_port].type_id or PORT_DEFINITIONS[item.input_port].type_id
+            projection = TYPE_DEFINITIONS[type_id].config_value
+            config[item.key] = deepcopy(projection(value) if projection else value)
     json.dumps(config, allow_nan=False)
     if record is not None:
         record.effective_config = deepcopy(config)
@@ -121,6 +126,13 @@ def graph_sets(snapshot, from_node_id):
             if edge.source not in execute and edge.source not in ancestors:
                 ancestors.add(edge.source)
                 queue.append(edge.source)
+    configuration = {
+        node.id
+        for node in snapshot.nodes
+        if node.id in ancestors and NODE_DEFINITIONS[node.type].evaluation_kind == "configuration"
+    }
+    execute.update(configuration)
+    ancestors.difference_update(configuration)
     return ReusePlan(
         execute_node_ids=[i for i in ids if i in execute],
         reuse_node_ids=[i for i in ids if i in ancestors],
@@ -211,6 +223,57 @@ async def prepare_reuse(store, project_id, audio_id, snapshot, request):
     incoming, order = _dependency_edges(topology)
     outputs, checkpoints = {}, {}
     for node_id in order:
+        if (
+            node_id in plan.execute_node_ids
+            and NODE_DEFINITIONS[node_by_id[node_id].type].evaluation_kind == "configuration"
+        ):
+            from .configuration_evaluator import (
+                configuration_descriptor,
+                evaluate_configuration_graph,
+            )
+
+            try:
+                result = (
+                    await evaluate_configuration_graph(
+                        store,
+                        topology,
+                        store.load_project(project_id),
+                        event,
+                        required_ids={node_id},
+                        outputs=outputs,
+                    )
+                ).get(node_id)
+                if result is not None:
+                    inputs = {
+                        edge.target_port: NodeData(
+                            edge.target_port,
+                            outputs[edge.source][edge.source_port].value,
+                            outputs[edge.source][edge.source_port].type_id,
+                        )
+                        for edge in incoming.get(node_id, [])
+                    }
+                    effective = execution_config(node_by_id[node_id], inputs)
+                    fingerprint = node_fingerprint(
+                        node_by_id[node_id],
+                        effective,
+                        incoming.get(node_id, []),
+                        checkpoints,
+                        identity,
+                    )
+                    outputs[node_id] = result.outputs
+                    if fingerprint:
+                        checkpoints[node_id] = await configuration_descriptor(result, fingerprint)
+            except Exception as error:
+                from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
+
+                if isinstance(error, NodeExecutionCancelled):
+                    raise
+                if isinstance(error, NodeExecutionError):
+                    reject(plan, error.code, str(error), node_id)
+                reject(
+                    plan, "RERUN_CONFIGURATION_INVALID", "配置无法重新求值，请检查配置连线", node_id
+                )
+            continue
         if node_id not in plan.reuse_node_ids:
             continue
         node = node_by_id[node_id]

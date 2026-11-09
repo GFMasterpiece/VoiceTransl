@@ -1,3 +1,5 @@
+import { emptySettings } from './fixtures'
+import { catalogFixture, nodeFixture, fieldFixture } from './fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { cloneDocument, useWorkflowStore, type WorkflowDocument, type WorkflowDocumentInput, type WorkflowNode, type WorkflowRun } from '../stores/workflow'
@@ -10,21 +12,21 @@ const graph = (): WorkflowDocumentInput => ({
   ],
   edges: [{ id: 'original-edge', source: 'source', source_port: 'audio', target: 'process', target_port: 'audio' }],
 })
-const capabilities = readCapabilities({
+const capabilities = readCapabilities(catalogFixture({
   schema_version: '1.0', workflow: {
-    schema_version: '1.3',
+    schema_version: "1.16",
     nodes: [
-      { type: 'future_source', label: 'Source', is_source: true, removable: false, max_instances: 1, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } },
-      { type: 'future_processor', label: 'Processor', input_ports: ['audio'], output_ports: ['audio'], removable: true, config: { kind: 'extension', fields: [
-        { key: 'label', type: 'string', default: 'original' }, { key: 'amount', type: 'number' },
-      ] } },
+      nodeFixture({ type: 'future_source', label: 'Source', is_source: true, removable: false, max_instances: 1, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } }),
+      nodeFixture({ type: 'future_processor', label: 'Processor', input_ports: ['audio'], output_ports: ['audio'], removable: true, config: { kind: 'extension', fields: [
+        fieldFixture({ key: 'label', type: 'string', default: 'original' }), fieldFixture({ key: 'amount', type: 'number' }),
+      ] } }),
     ],
     ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
     default_graph: graph(),
   }, asr: { providers: [] }, export: { formats: [], naming_modes: [] },
-})
+}))
 const documentBody = (value = graph()): WorkflowDocument => ({
-  ...cloneDocument(value), schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-06T00:00:00Z',
+  ...cloneDocument(value), schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-06T00:00:00Z',
 })
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(value)) }) as Response
 let store: ReturnType<typeof useWorkflowStore>
@@ -175,8 +177,8 @@ describe('editor graph history', () => {
     store.capabilities = {
       ...structuredClone(capabilities), nodes: capabilities.nodes.map((node) => node.type === 'future_processor' ? {
         ...node, resourceInput: { resourceType: 'audio', configKey: 'label' }, fields: [
-          field, { ...field, key: 'enabled', type: 'boolean', default: false },
-          { ...field, key: 'choice', type: 'select', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] },
+          field, fieldFixture({ ...field, key: 'enabled', type: 'boolean', default: false }),
+          fieldFixture({ ...field, key: 'choice', type: 'select', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }),
         ],
       } : node),
     }
@@ -348,7 +350,7 @@ describe('editor graph history', () => {
     store.beginDraftEditing()
     expect(store.canUndo).toBe(false)
     store.updateNodeConfig('process', { label: 'three' })
-    vi.stubGlobal('fetch', vi.fn(async () => response(documentBody())))
+    vi.stubGlobal('fetch', vi.fn(async (path: unknown) => response(String(path).endsWith('/settings') ? emptySettings() : documentBody())))
     await store.load('p1', null)
     expect(store.canUndo).toBe(false)
     expect(store.canRedo).toBe(false)

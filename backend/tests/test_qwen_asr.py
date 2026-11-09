@@ -13,6 +13,7 @@ from app.adapters import qwen_asr as qwen
 from app.domain.inline_connection import InlineConnection
 from app.domain.node_execution import NodeData, NodeExecutionContext
 from app.nodes import qwen_asr as node
+from app.nodes.model_configuration import normalize_service
 from app.storage.secret_store import SecretStore
 
 SECRET = "sk-test-secret-do-not-persist"
@@ -325,7 +326,7 @@ async def test_filetrans_connection_validation_shared_with_node(setup, base_url)
         await qwen.transcribe(**args)
     assert caught.value.code == "QWEN_CONNECTION_INVALID"
     with pytest.raises(ValueError) as node_error:
-        node.normalize({"base_url": base_url})
+        normalize_service({"protocol": "qwen_filetrans", "endpoint": base_url})
     assert SECRET not in str(caught.value) + str(node_error.value)
     assert not wire.requests and not wire.clients
 
@@ -358,15 +359,25 @@ def test_invalid_additional_parameters(parameters):
 
 def test_configuration_defaults_and_ports():
     config = node.normalize({})
-    assert config["language"] == ""
+    assert config == {}
     assert "provider_profile_id" not in config and "api_key_env" not in config
-    assert config["model"] == qwen.DEFAULT_MODEL and config["additional_parameters"] == {}
     definition = node.definition()
-    fields = {field.key: field for field in definition.fields}
-    assert fields["language"].input_port == "language"
-    assert fields["credential_ref"].input_port is None
-    assert fields["model"].options == []
-    assert fields["additional_parameters"].type == "json"
+    assert definition.fields == ()
+    assert definition.required_ports == ("audio", "model")
+    assert definition.binding_inputs == {"model": "asr_file"}
+    assert set(definition.input_ports) == {"audio", "model", "asr_context", "asr_options"}
+    from app.domain.node_registry import NODE_DEFINITIONS
+
+    context_fields = {field.key: field for field in NODE_DEFINITIONS["asr_context"].fields}
+    model_fields = {field.key: field for field in NODE_DEFINITIONS["model_config"].fields}
+    connection_fields = {
+        field.key: field for field in NODE_DEFINITIONS["service_connection"].fields
+    }
+    assert context_fields["language"].input_port == "language"
+    assert connection_fields["credential_ref"].input_port is None
+    assert model_fields["model_name"].options == []
+    assert model_fields["additional_parameters"].type == "json"
+    assert model_fields["additional_parameters"].input_type_id == "json_object"
 
 
 @pytest.mark.asyncio
@@ -620,19 +631,57 @@ def test_full_text_preserves_null_timestamps_and_exports_txt_only():
 @pytest.mark.asyncio
 async def test_node_uses_own_frozen_connection_and_publishes_real_transcript(setup, tmp_path):
     wire, args = setup
+    from app.application.configuration_evaluator import evaluate_configuration_graph
     from app.domain.workflow import WorkflowSnapshot
 
-    ref = SecretStore(tmp_path).create("p1", "asr1", "qwen_asr", SECRET, request_id="node-test")
-    config = {
-        "base_url": args["connection"].base_url,
-        "timeout_seconds": 30,
+    ref = SecretStore(tmp_path).create(
+        "p1", "connection", "service_connection", SECRET, request_id="node-test"
+    )
+    connection_config = {
+        "protocol": "qwen_filetrans",
+        "endpoint": args["connection"].base_url,
         "credential_ref": ref,
     }
     snapshot = WorkflowSnapshot(
         revision=1,
         workflow_revision=1,
-        nodes=[{"id": "asr1", "type": "qwen_asr", "config": config}],
-        edges=[],
+        nodes=[
+            {"id": "connection", "type": "service_connection", "config": connection_config},
+            {"id": "model", "type": "model_config", "config": {"model_name": args["model"]}},
+            {"id": "context", "type": "asr_context", "config": {}},
+            {"id": "options", "type": "asr_options", "config": {"timeout_seconds": 30}},
+            {"id": "asr1", "type": "qwen_asr", "config": {}},
+        ],
+        edges=[
+            {
+                "id": "cm",
+                "source": "connection",
+                "source_port": "connection",
+                "target": "model",
+                "target_port": "connection",
+            },
+            {
+                "id": "ma",
+                "source": "model",
+                "source_port": "model",
+                "target": "asr1",
+                "target_port": "model",
+            },
+            {
+                "id": "ca",
+                "source": "context",
+                "source_port": "asr_context",
+                "target": "asr1",
+                "target_port": "asr_context",
+            },
+            {
+                "id": "oa",
+                "source": "options",
+                "source_port": "asr_options",
+                "target": "asr1",
+                "target_port": "asr_options",
+            },
+        ],
     )
     target = tmp_path / "output" / "transcript.json"
     calls = []
@@ -641,14 +690,23 @@ async def test_node_uses_own_frozen_connection_and_publishes_real_transcript(set
         calls.append(parts)
         return target
 
+    store = SimpleNamespace(workflow_artifact_path=artifact_path, data_dir=tmp_path)
+    run = SimpleNamespace(workflow=snapshot, project_id="p1", audio_id="a1", id="r1")
+    project = SimpleNamespace(
+        audios=[SimpleNamespace(id="a1", source=SimpleNamespace(language="en"))]
+    )
+    packets = await evaluate_configuration_graph(store, run, project, args["cancel_event"])
     context = NodeExecutionContext(
-        store=SimpleNamespace(workflow_artifact_path=artifact_path, data_dir=tmp_path),
-        run=SimpleNamespace(workflow=snapshot, project_id="p1", audio_id="a1", id="r1"),
-        node=SimpleNamespace(id="asr1", config=dict(config)),
-        inputs={"audio": NodeData("audio", SimpleNamespace(path=args["audio_path"]))},
-        project=SimpleNamespace(
-            audios=[SimpleNamespace(id="a1", source=SimpleNamespace(language="en"))]
-        ),
+        store=store,
+        run=run,
+        node=snapshot.nodes[-1],
+        inputs={
+            "audio": NodeData("audio", SimpleNamespace(path=args["audio_path"])),
+            "model": packets["model"].outputs["model"],
+            "asr_context": packets["context"].outputs["asr_context"],
+            "asr_options": packets["options"].outputs["asr_options"],
+        },
+        project=project,
         cancel_event=args["cancel_event"],
     )
     result = await node.execute(context)
@@ -660,7 +718,8 @@ async def test_node_uses_own_frozen_connection_and_publishes_real_transcript(set
     assert calls == [("p1", "a1", "r1", "asr1", "transcript.json")]
     assert wire.submitted["parameters"]["language_hints"] == ["en"]
     assert result.outputs["transcript"].value.transcript.language == "en"
-    assert context.node.config == config
+    assert context.node.config == {}
+    assert snapshot.nodes[0].config == connection_config
 
 
 @pytest.mark.asyncio
@@ -788,13 +847,23 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
                 {
                     "id": "qwen",
                     "type": "qwen_asr",
+                    "config": {},
+                },
+                {
+                    "id": "connection",
+                    "type": "service_connection",
                     "config": {
-                        "base_url": args["connection"].base_url,
-                        "timeout_seconds": 30,
-                        "language": "en",
-                        "model": "future-protocol-model",
+                        "protocol": "qwen_filetrans",
+                        "endpoint": args["connection"].base_url,
                     },
                 },
+                {
+                    "id": "model",
+                    "type": "model_config",
+                    "config": {"model_name": "future-protocol-model"},
+                },
+                {"id": "context", "type": "asr_context", "config": {"language": "en"}},
+                {"id": "options", "type": "asr_options", "config": {"timeout_seconds": 30}},
                 {
                     "id": "output",
                     "type": "text_output",
@@ -816,8 +885,36 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
                     "id": "language",
                     "source": "lang",
                     "source_port": "string",
-                    "target": "qwen",
+                    "target": "context",
                     "target_port": "language",
+                },
+                {
+                    "id": "cm",
+                    "source": "connection",
+                    "source_port": "connection",
+                    "target": "model",
+                    "target_port": "connection",
+                },
+                {
+                    "id": "mq",
+                    "source": "model",
+                    "source_port": "model",
+                    "target": "qwen",
+                    "target_port": "model",
+                },
+                {
+                    "id": "cq",
+                    "source": "context",
+                    "source_port": "asr_context",
+                    "target": "qwen",
+                    "target_port": "asr_context",
+                },
+                {
+                    "id": "oq",
+                    "source": "options",
+                    "source_port": "asr_options",
+                    "target": "qwen",
+                    "target_port": "asr_options",
                 },
                 {
                     "id": "text",
@@ -828,7 +925,9 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
                 },
             ],
             "request_id": "save-test-key",
-            "credential_updates": [{"node_id": "qwen", "operation": "set", "api_key": SECRET}],
+            "credential_updates": [
+                {"node_id": "connection", "operation": "set", "api_key": SECRET}
+            ],
         }
         document = await save_graph(client, pid, 0, graph)
         if mode == "cancel":
@@ -844,7 +943,9 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
             "nodes": json.loads(json.dumps(document["nodes"])),
             "edges": document["edges"],
         }
-        changed["nodes"][2]["config"]["base_url"] = "https://changed.example.test/api/v1"
+        next(item for item in changed["nodes"] if item["id"] == "connection")["config"][
+            "endpoint"
+        ] = "https://changed.example.test/api/v1"
         await save_graph(client, pid, document["revision"], changed)
         if mode == "cancel":
             await asyncio.wait_for(wire.reached.wait(), 3)
@@ -857,9 +958,15 @@ async def test_registered_node_real_run_parameter_line_history_and_cancel(setup,
         records = {record["node_id"]: record for record in run["nodes"]}
         assert wire.submitted["parameters"]["language_hints"] == ["fr"]
         assert all(request.url.host != "changed.example.test" for request in wire.requests)
-        assert run["workflow"]["nodes"][2]["config"]["language"] == "en"
-        assert records["qwen"]["effective_config"]["language"] == "fr"
-        assert records["qwen"]["parameter_sources"]["language"]["kind"] == "connection"
+        assert (
+            next(item for item in run["workflow"]["nodes"] if item["id"] == "context")["config"][
+                "language"
+            ]
+            == "en"
+        )
+        assert records["context"]["effective_config"]["language"] == "fr"
+        assert records["context"]["parameter_sources"]["language"]["kind"] == "connection"
+        assert records["qwen"]["effective_config"] == {}
         if mode == "cancel":
             assert run["status"] == "cancelled"
             assert records["qwen"]["error"]["type"] == "QWEN_ASR_CANCELLED"

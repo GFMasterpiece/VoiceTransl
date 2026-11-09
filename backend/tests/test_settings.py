@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 def save_body(settings, **changes):
     settings = deepcopy(settings)
     body = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "expected_revision": settings["revision"],
         "request_id": "settings-test",
         "global": settings["global"],
@@ -26,14 +26,21 @@ def test_settings_roundtrip_revision_restart_and_runtime(tmp_path):
     initial = client.get("/api/v1/settings").json()
     assert initial["revision"] == 0
     assert set(initial["node_defaults"]) == {
-        "asr",
-        "qwen_asr",
-        "qwen_asr_streaming",
-        "llm_translate",
+        "service_connection",
+        "model_config",
+        "translation_context",
+        "asr_context",
+        "translation_options",
+        "asr_options",
+        "json_value",
+        "text_join",
+        "json_merge",
     }
-    assert [field["key"] for field in initial["node_defaults"]["asr"]["fields"]] == ["language"]
+    assert [field["key"] for field in initial["node_defaults"]["asr_context"]["fields"]] == [
+        "language"
+    ]
     body = save_body(initial, **{"global": {"max_concurrent": 4, "upload_concurrency": 7}})
-    body["node_defaults"]["qwen_asr"]["model"] = "future-compatible-model"
+    body["node_defaults"]["model_config"]["model_name"] = "future-compatible-model"
     saved = client.put("/api/v1/settings", json=body)
     assert saved.status_code == 200, saved.text
     assert saved.json()["revision"] == 1
@@ -52,29 +59,33 @@ def test_default_secret_versions_are_private_immutable_and_owned(tmp_path):
     body = save_body(
         initial,
         credential_updates=[
-            {"node_type": "qwen_asr", "operation": "set", "api_key": "default-key-ONE"}
+            {"node_type": "service_connection", "operation": "set", "api_key": "default-key-ONE"}
         ],
     )
     saved = client.put("/api/v1/settings", json=body)
     assert saved.status_code == 200, saved.text
     assert "default-key-ONE" not in saved.text
-    token = saved.json()["node_defaults"]["qwen_asr"]["credential_version"]
+    token = saved.json()["node_defaults"]["service_connection"]["credential_version"]
     secrets = SecretStore(tmp_path)
-    assert secrets.read_default("qwen_asr", "qwen_asr", token) == "default-key-ONE"
+    assert (
+        secrets.read_default("service_connection", "service_connection", token) == "default-key-ONE"
+    )
     with pytest.raises(SecretStoreError):
-        secrets.read_default("qwen_asr_streaming", "qwen_asr_streaming", token)
+        secrets.read_default("other_connection", "other_connection", token)
     assert client.put("/api/v1/settings", json=body).status_code == 200
     body["credential_updates"][0]["api_key"] = "DIFFERENT"
     assert client.put("/api/v1/settings", json=body).status_code == 409
     clear = save_body(
         saved.json(),
         request_id="clear-key",
-        credential_updates=[{"node_type": "qwen_asr", "operation": "clear"}],
+        credential_updates=[{"node_type": "service_connection", "operation": "clear"}],
     )
-    assert not client.put("/api/v1/settings", json=clear).json()["node_defaults"]["qwen_asr"][
-        "credential_configured"
-    ]
-    assert secrets.read_default("qwen_asr", "qwen_asr", token) == "default-key-ONE"
+    assert not client.put("/api/v1/settings", json=clear).json()["node_defaults"][
+        "service_connection"
+    ]["credential_configured"]
+    assert (
+        secrets.read_default("service_connection", "service_connection", token) == "default-key-ONE"
+    )
     for path in tmp_path.rglob("*"):
         if path.is_file():
             assert b"default-key-ONE" not in path.read_bytes()
@@ -87,7 +98,7 @@ def test_settings_failed_write_and_invalid_values_do_not_publish(tmp_path, monke
     body["global"]["upload_concurrency"] = 33
     assert client.put("/api/v1/settings", json=body).status_code == 422
     body = save_body(initial)
-    body["node_defaults"]["qwen_asr"]["credential_ref"] = "illegal"
+    body["node_defaults"]["service_connection"]["credential_ref"] = "illegal"
     assert client.put("/api/v1/settings", json=body).status_code == 422
 
     def fail(*args):
@@ -96,14 +107,14 @@ def test_settings_failed_write_and_invalid_values_do_not_publish(tmp_path, monke
     monkeypatch.setattr("app.storage.settings_store.atomic_write_json", fail)
     assert client.put("/api/v1/settings", json=save_body(initial)).status_code == 503
     assert client.get("/api/v1/settings").json() == initial
-    assert not (tmp_path / "settings.json").exists()
+    assert not (tmp_path / "settings-v2.json").exists()
 
 
 @pytest.mark.parametrize(
     "content", ['{"schema_version":"future"}', "{broken", "[]", "null", "3", '"scalar"']
 )
 def test_existing_invalid_settings_never_fall_back(tmp_path, content):
-    path = tmp_path / "settings.json"
+    path = tmp_path / "settings-v2.json"
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError):
         create_app(tmp_path)
@@ -113,7 +124,7 @@ def test_existing_invalid_settings_never_fall_back(tmp_path, content):
 @pytest.mark.parametrize("content", ["[]", "null", "3", '"scalar"'])
 def test_bad_settings_structure_returns_safe_read_error(tmp_path, content):
     client = TestClient(create_app(tmp_path))
-    path = tmp_path / "settings.json"
+    path = tmp_path / "settings-v2.json"
     path.write_text(content, encoding="utf-8")
     response = client.get("/api/v1/settings")
     assert response.status_code == 503
@@ -128,7 +139,7 @@ def test_settings_symlink_is_rejected_including_broken_links(tmp_path, broken):
     target = tmp_path / "target.json"
     if not broken:
         target.write_bytes(b"original target")
-    path = tmp_path / "settings.json"
+    path = tmp_path / "settings-v2.json"
     try:
         path.symlink_to(target)
     except (OSError, NotImplementedError) as error:
@@ -146,10 +157,12 @@ def test_settings_symlink_is_rejected_including_broken_links(tmp_path, broken):
 
 def test_default_master_missing_is_not_regenerated(tmp_path):
     secrets = SecretStore(tmp_path)
-    token = secrets.create_default("qwen_asr", "qwen_asr", "key-value", request_id="one")
+    token = secrets.create_default(
+        "service_connection", "service_connection", "key-value", request_id="one"
+    )
     (tmp_path / ".default_credentials" / "master.key").unlink()
     with pytest.raises(SecretStoreError) as error:
-        secrets.read_default("qwen_asr", "qwen_asr", token)
+        secrets.read_default("service_connection", "service_connection", token)
     assert error.value.code == "CREDENTIAL_MASTER_KEY_MISSING"
     assert not (tmp_path / ".default_credentials" / "master.key").exists()
 
@@ -157,25 +170,26 @@ def test_default_master_missing_is_not_regenerated(tmp_path):
 def test_existing_settings_additive_registry_extension_is_read_only(tmp_path, monkeypatch):
     from app.domain.node_registry import NODE_DEFINITIONS
 
+    definition = NODE_DEFINITIONS["model_config"]
+    monkeypatch.setitem(
+        NODE_DEFINITIONS,
+        "model_config",
+        replace(definition, settings_default_fields=("model_name",)),
+    )
     client = TestClient(create_app(tmp_path))
     saved = client.put("/api/v1/settings", json=save_body(client.get("/api/v1/settings").json()))
     assert saved.status_code == 200
-    path = tmp_path / "settings.json"
+    path = tmp_path / "settings-v2.json"
     original = path.read_bytes()
-    definition = NODE_DEFINITIONS["asr"]
+    monkeypatch.setitem(NODE_DEFINITIONS, "model_config", definition)
     monkeypatch.setitem(
-        NODE_DEFINITIONS,
-        "asr",
-        replace(definition, settings_default_fields=("language", "provider")),
-    )
-    monkeypatch.setitem(
-        NODE_DEFINITIONS, "extension_asr", replace(definition, type="extension_asr")
+        NODE_DEFINITIONS, "extension_model", replace(definition, type="extension_model")
     )
     loaded = client.get("/api/v1/settings")
     assert loaded.status_code == 200, loaded.text
     defaults = loaded.json()["node_defaults"]
-    assert defaults["asr"]["config"]["provider"] == "mock"
-    assert defaults["extension_asr"]["config"] == {"language": "ja"}
+    assert defaults["model_config"]["config"]["additional_parameters"] == {}
+    assert defaults["extension_model"]["config"] == {"model_name": "", "additional_parameters": {}}
     assert path.read_bytes() == original
     assert TestClient(create_app(tmp_path)).get("/api/v1/settings").status_code == 200
     assert path.read_bytes() == original
@@ -186,11 +200,11 @@ def test_stale_replay_after_further_update_cannot_create_or_publish_keys(tmp_pat
     first = save_body(client.get("/api/v1/settings").json())
     second = client.put("/api/v1/settings", json=first).json()
     latest = client.put("/api/v1/settings", json=save_body(second, request_id="second")).json()
-    original = (tmp_path / "settings.json").read_bytes()
+    original = (tmp_path / "settings-v2.json").read_bytes()
     first["credential_updates"] = [
-        {"node_type": "qwen_asr", "operation": "set", "api_key": "stale-key"}
+        {"node_type": "service_connection", "operation": "set", "api_key": "stale-key"}
     ]
     assert client.put("/api/v1/settings", json=first).status_code == 409
     assert client.get("/api/v1/settings").json() == latest
-    assert (tmp_path / "settings.json").read_bytes() == original
+    assert (tmp_path / "settings-v2.json").read_bytes() == original
     assert not (tmp_path / ".default_credentials").exists()

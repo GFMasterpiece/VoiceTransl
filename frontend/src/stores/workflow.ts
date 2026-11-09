@@ -35,8 +35,8 @@ export function workflowPortY(type: NodeType, port: PortName, direction: 'input'
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
 export const WORKFLOW_NODE_FIELD_HEIGHT = 72
-export function workflowFieldHeight(field: { type: string }): number {
-  return field.type === 'json' ? 152 : WORKFLOW_NODE_FIELD_HEIGHT
+export function workflowFieldHeight(field: { type: string; widget?: string | null }): number {
+  return field.type === 'json' || field.widget === 'multiline' ? 152 : WORKFLOW_NODE_FIELD_HEIGHT
 }
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
@@ -94,7 +94,7 @@ export interface WorkflowDocumentInput {
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
 }
-export interface WorkflowSnapshot extends WorkflowDocumentInput { provider_profiles_snapshot?: Record<string, unknown> | null }
+export interface WorkflowSnapshot extends WorkflowDocumentInput { schema_version?: string }
 
 export interface WorkflowDocument extends WorkflowDocumentInput {
   schema_version: string
@@ -157,6 +157,7 @@ export interface WorkflowNodeRun {
 }
 
 export interface WorkflowRun {
+  schema_version?: string
   rerun?: { source_run_id: string; from_node_id: string; execute_node_ids: string[]; reuse_node_ids: string[]; skipped_node_ids: string[] } | null
   id: string
   project_id: string
@@ -294,7 +295,7 @@ export function resolveArtifactUrl(
 
 function readWorkflow(value: unknown): WorkflowDocument {
   const document = value as WorkflowDocument
-  if (!document || typeof document !== 'object' || document.schema_version !== '1.0'
+  if (!document || typeof document !== 'object' || document.schema_version !== '2.0'
     || typeof document.project_id !== 'string' || !Number.isInteger(document.revision)
     || !Number.isInteger(document.workflow_revision) || !Array.isArray(document.nodes)
     || !Array.isArray(document.edges)) {
@@ -319,7 +320,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
 
 function readRun(value: unknown): WorkflowRun {
   const run = value as WorkflowRun
-  if (!run || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
+  if (!run || run.schema_version !== '2.0' || run.workflow?.schema_version !== '2.0' || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
     || (run.batch_item_sequence != null && (!Number.isInteger(run.batch_item_sequence) || run.batch_item_sequence < 1))
     || (run.batch_id != null && (typeof run.batch_id !== 'string' || !run.batch_id))
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
@@ -501,7 +502,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const dirty = computed(() => credentialPending.value || savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
     || savedLayoutSignature.value !== layoutSignature(draft.value))
-  const legacyConnectionUnsupported = computed(() => draft.value.nodes.some((node) => registry.value?.validateConfig(node.type, node.config).some((issue) => issue.code === 'LEGACY_CONNECTION_UNSUPPORTED')))
+  const invalidNodeConfig = computed(() => draft.value.nodes.some((node) => registry.value?.validateConfig(node.type, node.config).length))
   const selectedNode = computed(() => draft.value.nodes.find((node) => node.id === selectedNodeId.value) || null)
   const activeRun = computed(() => run.value && ['pending', 'running', 'cancelling'].includes(run.value.status))
   const activeSingleRun = computed(() => !!activeRun.value && !run.value?.batch_id)
@@ -799,9 +800,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (['1.13', '1.14', '1.15'].includes(capabilities.value.schemaVersion)) await loadSettings()
+      if (['1.16'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
-      draft.value = createDefaultWorkflow(registry.value)
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
       const value = readWorkflow(await readJson(response, 'workflow.invalidWorkflow'))
@@ -823,14 +823,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   async function save() {
     const { id, audioId: aid } = currentKey()
-    if (!id || stopped.value || saving.value || loading.value || validating.value || resourceUploading.value || actionLoading.value || activeSingleRun.value || transaction.value) return null
+    if (!id || !document.value || stopped.value || saving.value || loading.value || validating.value || resourceUploading.value || actionLoading.value || activeSingleRun.value || transaction.value) return null
     closeHistoryGroup()
     const token = sessionGeneration
     if (localConfigIssues().length) return null
     const sequence = ++saveSequence
     const draftSnapshot = cloneDocument(draft.value)
     if (!registry.value) { errorState.set(message('workflow.capSave')); return null }
-    const body = { expected_revision: document.value?.revision ?? 1, nodes: draftSnapshot.nodes, edges: draftSnapshot.edges }
+    const body = { expected_revision: document.value.revision, nodes: draftSnapshot.nodes, edges: draftSnapshot.edges }
     const credentialUpdates = credentials.updates()
     const requestBody = credentialUpdates.length ? { ...body, request_id: credentials.requestId(JSON.stringify(body)), credential_updates: credentialUpdates } : body
     saving.value = true
@@ -921,7 +921,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   async function startRun(rerun?: { audioId: string; sourceRunId: string; fromNodeId: string; requestId: string; revision: number }) {
-    if (legacyConnectionUnsupported.value) { errorState.set(message('connections.error_LEGACY_CONNECTION_UNSUPPORTED')); return null }
+    if (invalidNodeConfig.value) { errorState.set(message('batch.invalidGraph')); return null }
     if (!rerun && boundAudioIds.value && boundAudioIds.value.length !== 1) { errorState.set(message(boundAudioIds.value.length ? 'batch.multiRequiresBatch' : 'batch.empty')); return null }
     if (batchSubmitting.value) { errorState.set(message('batch.busy')); return null }
     if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
@@ -1165,7 +1165,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.16'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1183,14 +1183,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.16'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = ['1.13', '1.14', '1.15'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.16'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }
@@ -1399,7 +1399,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   return {
-    credentialContext, credentialPending, legacyConnectionUnsupported,
+    credentialContext, credentialPending, invalidNodeConfig,
     capabilities, capabilitiesError, capabilitiesLoading, refreshCapabilities, registry, projectId, audioId, document, draft, loading, saving, validating, starting, cancelling, resourceUploading, batchSubmitting, batchRunning, actionLoading, error, notice,
     validationIssues, selectedNodeId, selectedNodeIds, selectedNode, currentOutputNode, activeRunId, run, activeRun, activeSingleRun,
     history, historyLoading, historyError, runLoading, runError, outputs, outputChecks, runOutputs, zoom, pan, dirty, boundAudioId, boundAudioIds, setAudioContext,

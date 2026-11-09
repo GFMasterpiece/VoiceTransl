@@ -157,7 +157,7 @@ async def test_invalid_resource_collection_cannot_be_saved(tmp_path, selection):
         response = await save_input(client, pid, document, {"audio_ids": selection})
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_WORKFLOW"
-        assert not (app.state.store.project_dir(pid) / "workflow.json").exists()
+        assert not (app.state.store.project_dir(pid) / "workflow-v2.json").exists()
 
 
 @pytest.mark.asyncio
@@ -195,6 +195,10 @@ async def test_retry_preserves_original_sequences_two_and_four(tmp_path, monkeyp
         response = await client.post(
             f"/api/v1/projects/{pid}/batches/{batch.id}/retry", json={"request_id": "retry"}
         )
+        if legacy:
+            assert response.status_code == 404, response.text
+            assert original_path.read_bytes() == before
+            return
         assert response.status_code == 202, response.text
         retry = await finished(app, pid, response.json()["id"])
         assert retry.status == "completed"
@@ -268,7 +272,7 @@ def test_legacy_resource_declaration_gets_explicit_null_collection_in_catalog(mo
     assert "collection_key" not in definition.presentation["resource_input"]
 
 
-def test_batch_sequence_collision_including_legacy_fallback_is_rejected():
+def test_batch_sequence_collision_and_missing_sequence_are_rejected():
     from app.domain.workflow import default_workflow, workflow_snapshot
 
     payload = {
@@ -289,7 +293,13 @@ def test_batch_sequence_collision_including_legacy_fallback_is_rejected():
             "interrupted": 0,
         },
         "items": [
-            {"index": 0, "audio_id": "a", "audio_name": "a.wav", "source_language": "ja"},
+            {
+                "index": 0,
+                "audio_id": "a",
+                "audio_name": "a.wav",
+                "source_language": "ja",
+                "sequence": 1,
+            },
             {
                 "index": 1,
                 "audio_id": "b",

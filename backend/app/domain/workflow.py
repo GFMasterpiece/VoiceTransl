@@ -38,7 +38,7 @@ from .node_registry import (
 )
 from .schema import require_schema_version
 
-WORKFLOW_SCHEMA_VERSION = "1.0"
+WORKFLOW_SCHEMA_VERSION = "2.0"
 MAX_WORKFLOW_NODES = 64
 MAX_WORKFLOW_EDGES = 64
 # Graph-level limits are shared with the capabilities API so clients can render
@@ -148,19 +148,12 @@ class ASRCapabilitySnapshot(BaseModel):
 
 
 class WorkflowSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     schema_version: str = WORKFLOW_SCHEMA_VERSION
     revision: int = Field(ge=0)
     workflow_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(default_factory=list, max_length=MAX_WORKFLOW_NODES)
     edges: list[WorkflowEdge] = Field(default_factory=list, max_length=MAX_WORKFLOW_EDGES)
-    provider_profiles_snapshot: dict[str, object] | None = None
-
-    @model_serializer(mode="wrap")
-    def serialize_snapshot(self, handler):
-        value = handler(self)
-        if self.provider_profiles_snapshot is None:
-            value.pop("provider_profiles_snapshot", None)
-        return value
 
     @field_validator("schema_version")
     @classmethod
@@ -470,10 +463,7 @@ def _config_issue(prefix: str, error: ValidationError, *, node_id: str):
 def _config_error_issue(prefix: str, error: Exception, *, node_id: str):
     if isinstance(error, ValidationError):
         return _config_issue(prefix, error, node_id=node_id)
-    from .inline_connection import LegacyConnectionConfigError
-
-    code = error.code if isinstance(error, LegacyConnectionConfigError) else "INVALID_NODE_CONFIG"
-    return _issue(code, f"{prefix}: {error}", node_id=node_id)
+    return _issue("INVALID_NODE_CONFIG", f"{prefix}: {error}", node_id=node_id)
 
 
 def validate_workflow_graph(
@@ -527,6 +517,8 @@ def validate_workflow_graph(
             explicit_sources.append(node)
             input_nodes.append(node)
         if definition.is_parameter_source:
+            parameter_sources.append(node)
+        elif definition.can_start_without_inputs:
             parameter_sources.append(node)
         if definition.terminal:
             output_nodes.append(node)

@@ -191,7 +191,7 @@ def _item_directory(item):
     root = _safe_name(origin.get("root_name", "audio"))
     if root_id:
         root += "--" + str(root_id) + "--" + hashlib.sha256(str(root_id).encode()).hexdigest()[:12]
-    sequence = item.sequence if item.sequence is not None else item.index + 1
+    sequence = item.sequence
     return PurePosixPath(root, *parents, f"{sequence:05d}--{_safe_name(item.audio_name)}")
 
 
@@ -220,7 +220,7 @@ def download_batch(pid: str, bid: str, request: Request):
                         run = store.load_workflow_run(pid, item.audio_id, item.run_id)
                         if run.batch_id is not None and run.batch_id != batch.id:
                             raise ValueError("batch run ownership mismatch")
-                        sequence = item.sequence if item.sequence is not None else item.index + 1
+                        sequence = item.sequence
                         if (
                             run.batch_item_sequence is not None
                             and run.batch_item_sequence != sequence

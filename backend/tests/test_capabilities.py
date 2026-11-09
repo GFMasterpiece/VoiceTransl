@@ -28,8 +28,10 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export", "languages"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.15"
-    assert body["workflow"]["ports"][:3] == [
+    assert body["workflow"]["schema_version"] == "1.16"
+    assert [
+        port for port in body["workflow"]["ports"] if port["id"] in {"audio", "transcript", "text"}
+    ] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
             "id": "transcript",
@@ -39,10 +41,32 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         },
         {"id": "text", "type_id": "text", "label": "文本产物", "capability_requirements": []},
     ]
-    assert body["workflow"]["data_types"][:3] == [
-        {"id": "audio", "label": "音频", "parent_type_id": None, "capabilities": []},
-        {"id": "transcript", "label": "转写结果", "parent_type_id": None, "capabilities": []},
-        {"id": "text", "label": "文本产物", "parent_type_id": None, "capabilities": []},
+    assert [
+        value
+        for value in body["workflow"]["data_types"]
+        if value["id"] in {"audio", "transcript", "text"}
+    ] == [
+        {
+            "id": "audio",
+            "label": "音频",
+            "parent_type_id": None,
+            "capabilities": [],
+            "presentation": None,
+        },
+        {
+            "id": "transcript",
+            "label": "转写结果",
+            "parent_type_id": None,
+            "capabilities": [],
+            "presentation": None,
+        },
+        {
+            "id": "text",
+            "label": "文本产物",
+            "parent_type_id": None,
+            "capabilities": [],
+            "presentation": None,
+        },
     ]
     nodes = {node["type"]: node for node in body["workflow"]["nodes"]}
     assert set(nodes) == set(NODE_DEFINITIONS)
@@ -62,6 +86,15 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "qwen_asr",
         "qwen_asr_streaming",
         "llm_translate",
+        "service_connection",
+        "model_config",
+        "translation_context",
+        "asr_context",
+        "translation_options",
+        "asr_options",
+        "json_value",
+        "text_join",
+        "json_merge",
     }
     assert {
         category: {node["type"] for node in nodes.values() if node["category"]["id"] == category}
@@ -73,7 +106,21 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "translation": {"llm_translate"},
         "preview": {"audio_preview", "text_preview"},
         "output": {"audio_output", "text_output"},
-        "parameters": {"string_value", "integer_value", "number_value", "boolean_value"},
+        "parameters": {
+            "string_value",
+            "integer_value",
+            "number_value",
+            "boolean_value",
+            "service_connection",
+            "model_config",
+            "translation_context",
+            "asr_context",
+            "translation_options",
+            "asr_options",
+            "json_value",
+            "text_join",
+            "json_merge",
+        },
     }
     assert nodes["asr"]["label"] == "语音识别（Mock）"
     assert nodes["asr"]["category"] == {"id": "speech_recognition", "label": "语音识别"}
@@ -88,7 +135,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "edges": [edge.model_dump(mode="json") for edge in expected_graph.edges],
     }
     assert body["asr"] == {"providers": [{"id": "mock", "label": "Mock"}]}
-    for node_type in ("preprocess", "asr"):
+    for node_type in ("preprocess",):
         provider = next(
             field for field in nodes[node_type]["config"]["fields"] if field["key"] == "provider"
         )
@@ -112,7 +159,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     assert body["export"]["naming_modes"] == [
         {"id": option["value"], "label": option["label"]} for option in naming_mode["options"]
     ]
-    assert naming_mode["default"] == "exact"
+    assert naming_mode["default"] == "prefix_sequence"
     assert naming_mode["creation_default"] == "prefix_sequence"
     assert nodes["audio_input"]["presentation"]["resource_input"] == {
         "resource_type": "audio",
@@ -120,10 +167,10 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "collection_key": "audio_ids",
     }
     asr_language = next(
-        field for field in nodes["asr"]["config"]["fields"] if field["key"] == "language"
+        field for field in nodes["asr_context"]["config"]["fields"] if field["key"] == "language"
     )
-    assert asr_language["min_length"] == 1
-    assert asr_language["max_length"] == 32
+    assert asr_language["default"] == ""
+    assert asr_language["suggestion_source"] == "languages"
     output_stem = next(
         field
         for field in nodes["text_output"]["config"]["fields"]
@@ -136,7 +183,11 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         node["is_source"] is (node_type == "audio_input") for node_type, node in nodes.items()
     )
     assert all(
-        node["is_parameter_source"] is (node_type.endswith("_value") or node_type == "source_info")
+        node["is_parameter_source"]
+        is (
+            node_type
+            in {"string_value", "integer_value", "number_value", "boolean_value", "source_info"}
+        )
         for node_type, node in nodes.items()
     )
     assert all(
@@ -240,7 +291,7 @@ def test_category_label_conflicts_are_rejected_at_registration_and_catalog(monke
 )
 @pytest.mark.parametrize("value", ["contains space", "x" * 65])
 def test_inline_connection_binding_values_must_be_safe_identifiers(role, value):
-    definition = NODE_DEFINITIONS["qwen_asr"]
+    definition = NODE_DEFINITIONS["service_connection"]
     presentation = {
         **definition.presentation,
         "inline_connection_input": {
@@ -309,7 +360,7 @@ def test_language_suggestions_are_explicit_and_preserve_config_values():
     )
     with pytest.raises(ValueError, match="suggestion source"):
         validate_node_definition(invalid)
-    for node_type in ("asr", "qwen_asr", "qwen_asr_streaming"):
+    for node_type in ("asr_context",):
         definition = NODE_DEFINITIONS[node_type]
         field = next(item for item in definition.fields if item.key == "language")
         assert field.suggestion_source == "languages"
@@ -332,12 +383,12 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _ = await create_project(client)
         graph = parameter_graph()
-        next(node for node in graph["nodes"] if node["id"] == "asr")["config"]["language"] = (
-            "x-Custom"
-        )
+        next(node for node in graph["nodes"] if node["id"] == "asr_context")["config"][
+            "language"
+        ] = "x-Custom"
         saved = await save_graph(client, pid, 0, graph)
         document = WorkflowDocument.model_validate(saved)
-        workflow_path = app.state.store.project_dir(pid) / "workflow.json"
+        workflow_path = app.state.store.project_dir(pid) / "workflow-v2.json"
         original_bytes = workflow_path.read_bytes()
         snapshot = workflow_snapshot(document).model_dump_json()
         digest = workflow_semantic_digest(document.nodes, document.edges)
@@ -346,10 +397,10 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         assert before.json()["languages"]
         assert workflow_path.read_bytes() == original_bytes
         monkeypatch.setattr(languages, "_LANGUAGES", [])
-        definition = NODE_DEFINITIONS["asr"]
+        definition = NODE_DEFINITIONS["asr_context"]
         monkeypatch.setitem(
             NODE_DEFINITIONS,
-            "asr",
+            "asr_context",
             replace(
                 definition,
                 fields=tuple(
@@ -361,7 +412,9 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         after = await client.get("/api/v1/capabilities")
         assert after.status_code == 200
         assert after.json()["languages"] == []
-        asr = next(node for node in after.json()["workflow"]["nodes"] if node["type"] == "asr")
+        asr = next(
+            node for node in after.json()["workflow"]["nodes"] if node["type"] == "asr_context"
+        )
         assert (
             next(field for field in asr["config"]["fields"] if field["key"] == "language")[
                 "suggestion_source"

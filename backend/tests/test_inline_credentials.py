@@ -35,13 +35,35 @@ def cloud(monkeypatch):
     return state
 
 
-def graph(document, config=None):
+def graph(
+    document,
+    config=None,
+    *,
+    node_type="qwen_asr",
+    protocol="qwen_filetrans",
+    connection_config=None,
+    model_config=None,
+):
     return {
         "expected_revision": document["revision"],
         "nodes": [
             document["nodes"][0],
-            {"id": "cloud", "type": "qwen_asr", "config": config or {}},
+            {"id": "cloud", "type": node_type, "config": config or {}},
             {"id": "output", "type": "text_output", "config": {"format": "txt"}},
+            {
+                "id": "cloud_connection",
+                "type": "service_connection",
+                "config": {
+                    "protocol": protocol,
+                    "endpoint": "https://maas.qianwenaiapi.com/api/v1",
+                    **(connection_config or {}),
+                },
+            },
+            {
+                "id": "cloud_model",
+                "type": "model_config",
+                "config": {"model_name": "qwen-audio-3.1-asr", **(model_config or {})},
+            },
         ],
         "edges": [
             {
@@ -58,22 +80,36 @@ def graph(document, config=None):
                 "target": "output",
                 "target_port": "transcript",
             },
+            {
+                "id": "connection_model",
+                "source": "cloud_connection",
+                "source_port": "connection",
+                "target": "cloud_model",
+                "target_port": "connection",
+            },
+            {
+                "id": "model_cloud",
+                "source": "cloud_model",
+                "source_port": "model",
+                "target": "cloud",
+                "target_port": "model",
+            },
         ],
     }
 
 
-def update_body(document, key=KEY_A, request_id="key-save"):
+def update_body(document, key=KEY_A, request_id="key-save", *, node_id="cloud_connection"):
     return {
         "expected_revision": document["revision"],
         "nodes": document["nodes"],
         "edges": document["edges"],
         "request_id": request_id,
-        "credential_updates": [{"node_id": "cloud", "operation": "set", "api_key": key}],
+        "credential_updates": [{"node_id": node_id, "operation": "set", "api_key": key}],
     }
 
 
-def config_of(document):
-    return next(node["config"] for node in document["nodes"] if node["id"] == "cloud")
+def config_of(document, node_id="cloud_connection"):
+    return next(node["config"] for node in document["nodes"] if node["id"] == node_id)
 
 
 async def save(client, pid, payload):
@@ -100,8 +136,10 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         pid, aids, document = await setup(client, 1)
         document = await save(client, pid, graph(document))
         config = config_of(document)
-        assert config["base_url"] == "https://maas.qianwenaiapi.com/api/v1"
-        assert config["timeout_seconds"] == 3600
+        assert config["endpoint"] == "https://maas.qianwenaiapi.com/api/v1"
+        assert config["protocol"] == "qwen_filetrans"
+        assert config_of(document, "cloud") == {}
+        assert "timeout_seconds" not in config
         assert config["region"] is config["credential_ref"] is None
         validation = await client.post(
             f"/api/v1/projects/{pid}/workflow/validate",
@@ -118,12 +156,16 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         saved = await save(client, pid, payload)
         ref = config_of(saved)["credential_ref"]
         assert ref.startswith("cred_")
-        assert SecretStore(tmp_path).read(pid, "cloud", "qwen_asr", ref) == KEY_A
+        assert (
+            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", ref) == KEY_A
+        )
         repeated = await save(client, pid, payload)
         assert repeated == saved
         changed = {
             **payload,
-            "credential_updates": [{"node_id": "cloud", "operation": "set", "api_key": KEY_B}],
+            "credential_updates": [
+                {"node_id": "cloud_connection", "operation": "set", "api_key": KEY_B}
+            ],
         }
         conflict = await client.put(f"/api/v1/projects/{pid}/workflow", json=changed)
         assert conflict.status_code == 409
@@ -133,16 +175,18 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         assert completed.status.value == "completed"
         assert cloud["calls"][-1]["api_key"] == KEY_A
         assert cloud["calls"][-1]["connection"].default_timeout == 3600
-        assert completed.workflow.provider_profiles_snapshot is None
+        assert "provider_profiles_snapshot" not in completed.workflow.model_dump()
         current = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()
         assert config_of(current)["credential_ref"] == ref
         clear = {
             **update_body(current, request_id="clear"),
-            "credential_updates": [{"node_id": "cloud", "operation": "clear"}],
+            "credential_updates": [{"node_id": "cloud_connection", "operation": "clear"}],
         }
         cleared = await save(client, pid, clear)
         assert config_of(cleared)["credential_ref"] is None
-        assert SecretStore(tmp_path).read(pid, "cloud", "qwen_asr", ref) == KEY_A
+        assert (
+            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", ref) == KEY_A
+        )
         assert await save(client, pid, clear) == cleared
         for path in tmp_path.rglob("*"):
             if path.is_file():
@@ -217,11 +261,17 @@ async def test_save_failures_preserve_old_key_or_recover_committed_graph(
         else:
             assert response.status_code == 503
             assert app.state.store._workflow_path(pid).read_bytes() == old_bytes
-        assert SecretStore(tmp_path).read(pid, "cloud", "qwen_asr", old_ref) == KEY_A
+        assert (
+            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", old_ref)
+            == KEY_A
+        )
         recovered = await save(client, pid, payload)
         assert (
             SecretStore(tmp_path).read(
-                pid, "cloud", "qwen_asr", config_of(recovered)["credential_ref"]
+                pid,
+                "cloud_connection",
+                "service_connection",
+                config_of(recovered)["credential_ref"],
             )
             == KEY_B
         )
@@ -265,10 +315,10 @@ async def test_foreign_ref_and_missing_master_never_fallback_to_env(tmp_path, cl
         )
         saved = await save(client, pid, update_body(document))
         copied = json.loads(json.dumps(saved))
-        next(node for node in copied["nodes"] if node["id"] == "cloud")["id"] = "copy"
+        next(node for node in copied["nodes"] if node["id"] == "cloud_connection")["id"] = "copy"
         for edge in copied["edges"]:
-            edge["source"] = "copy" if edge["source"] == "cloud" else edge["source"]
-            edge["target"] = "copy" if edge["target"] == "cloud" else edge["target"]
+            edge["source"] = "copy" if edge["source"] == "cloud_connection" else edge["source"]
+            edge["target"] = "copy" if edge["target"] == "cloud_connection" else edge["target"]
         response = await client.put(
             f"/api/v1/projects/{pid}/workflow",
             json={
@@ -287,3 +337,20 @@ async def test_foreign_ref_and_missing_master_never_fallback_to_env(tmp_path, cl
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "CREDENTIAL_MASTER_KEY_MISSING"
         assert not cloud["calls"] and not app.state.jobs.tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_id", ["cloud", "cloud_model"])
+async def test_only_connection_nodes_accept_write_only_key_updates(tmp_path, node_id):
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, _, document = await setup(client, 1)
+        saved = await save(client, pid, graph(document))
+        before = app.state.store._workflow_path(pid).read_bytes()
+        response = await client.put(
+            f"/api/v1/projects/{pid}/workflow", json=update_body(saved, node_id=node_id)
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "CREDENTIAL_UPDATE_INVALID"
+        assert KEY_A not in response.text
+        assert app.state.store._workflow_path(pid).read_bytes() == before

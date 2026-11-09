@@ -1,3 +1,4 @@
+import { catalogFixture, typeFixture, nodeFixture, runFixture } from './workflow/fixtures'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, reactive, type App } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -14,24 +15,24 @@ const graph = {
   ],
   edges: [{ id: 'edge', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
 }
-const documentBody: WorkflowDocument = { ...graph, schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 2, updated_at: '2026-10-28T00:00:00Z' }
-const catalog = readCapabilities({
+const documentBody: WorkflowDocument = { ...graph, schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 2, updated_at: '2026-10-28T00:00:00Z' }
+const catalog = readCapabilities(catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.3',
-    data_types: [{ id: 'audio', label: 'Audio', parent_type_id: null, capabilities: [] }],
+    schema_version: "1.16",
+    data_types: [typeFixture({ id: 'audio', label: 'Audio', parent_type_id: null, capabilities: [] })],
     ports: [{ id: 'audio', label: 'Audio', type_id: 'audio', capability_requirements: [] }],
     nodes: [
-      { type: 'input_extension', label: 'Input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, required_inbound: 0, removable: false, max_instances: 1, config: { kind: 'none', fields: [] } },
-      { type: 'copy_extension', label: 'Copy', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, max_instances: null, config: { kind: 'none', fields: [] } },
-      { type: 'preview_extension', label: 'Preview', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, max_instances: null, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'audio' } } },
+      nodeFixture({ type: 'input_extension', label: 'Input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, required_inbound: 0, removable: false, max_instances: 1, config: { kind: 'none', fields: [] } }),
+      nodeFixture({ type: 'copy_extension', label: 'Copy', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, max_instances: null, config: { kind: 'none', fields: [] } }),
+      nodeFixture({ type: 'preview_extension', label: 'Preview', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, max_instances: null, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'audio' } } }),
     ],
     constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
     default_graph: graph,
   },
   asr: { providers: [{ id: 'mock', label: 'Mock' }] },
   export: { formats: [{ id: 'srt', label: 'SRT' }], naming_modes: [{ id: 'language', label: 'Language' }] },
-})
+}))
 const artifact = (nodeId = 'output', runId = 'run-1'): WorkflowArtifact => ({
   artifact_id: `artifact-${nodeId}`, port: 'audio', filename: `${nodeId}.wav`, media_type: 'audio/wav', size_bytes: 1200, sha256: 'hash',
   download_url: `/api/v1/projects/p1/audios/a1/workflow-runs/${runId}/outputs/${nodeId}/download`,
@@ -39,11 +40,11 @@ const artifact = (nodeId = 'output', runId = 'run-1'): WorkflowArtifact => ({
 const nodeRecord = (nodeId = 'output', type = 'copy_extension'): WorkflowNodeRun => ({
   node_id: nodeId, node_type: type, config: {}, status: 'completed', started_at: null, finished_at: null, artifact: artifact(nodeId), error: null,
 })
-const runBody = (overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
+const runBody = (overrides: Partial<WorkflowRun> = {}): WorkflowRun => (runFixture({
   id: 'run-1', project_id: 'p1', audio_id: 'a1', workflow_revision: 2, status: 'completed',
   created_at: '2026-10-28T00:00:00Z', started_at: null, finished_at: null, cancel_requested: false, error: null,
   workflow: structuredClone(graph), nodes: [nodeRecord()], ...overrides,
-})
+}))
 const response = (body: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(body) }) as Response
 async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); await nextTick() }
 let app: App | undefined

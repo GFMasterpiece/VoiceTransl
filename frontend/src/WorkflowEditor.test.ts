@@ -1,3 +1,5 @@
+import { emptySettings } from './workflow/fixtures'
+import { catalogFixture, nodeFixture, fieldFixture, typeFixture, runFixture } from './workflow/fixtures'
 import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY } from './composables/editorPreferences'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
@@ -16,26 +18,26 @@ import { workflowErrorLabel, workflowIssueLabel } from './stores/workflow'
 import { copySelection, serializeWorkflow } from './workflow/editorTransfer'
 import { parseWorkflowFile } from './workflow/editorTransfer'
 
-const testCapabilities: Record<string, any> = {
+const testCapabilities: Record<string, any> = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.2',
+    schema_version: "1.16",
     nodes: [
-      { type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 },
-      { type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
-        { key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
-      ] }, position_x: 286 },
-      { type: 'asr', label: '语音识别', add_label: 'ASR', id_prefix: 'asr', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
-        { key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
-        { key: 'language', label: '语言', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, min_length: 1, max_length: 32, options: [] },
-      ] }, position_x: 486 },
-      { type: 'audio_output', label: '音频输出', add_label: '输出节点', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [
-        { key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] },
-      ] }, position_x: 500 },
-      { type: 'text_output', label: '文本输出', add_label: '文本输出', id_prefix: 'text', input_ports: ['transcript'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'text_output', fields: [
-        { key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'transcript', minimum: null, maximum: 128, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] },
-        { key: 'format', label: '格式', type: 'select', required: false, default: 'txt', minimum: null, maximum: null, options: [{ value: 'txt', label: 'TXT' }, { value: 'srt', label: 'SRT' }, { value: 'vtt', label: 'VTT' }, { value: 'lrc', label: 'LRC' }] },
-      ] }, position_x: 686 },
+      nodeFixture({ type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 }),
+      nodeFixture({ type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
+        fieldFixture({ key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] }),
+      ] }, position_x: 286 }),
+      nodeFixture({ type: 'asr', label: '语音识别', add_label: 'ASR', id_prefix: 'asr', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
+        fieldFixture({ key: 'provider', label: 'Provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] }),
+        fieldFixture({ key: 'language', label: '语言', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, min_length: 1, max_length: 32, options: [] }),
+      ] }, position_x: 486 }),
+      nodeFixture({ type: 'audio_output', label: '音频输出', add_label: '输出节点', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [
+        fieldFixture({ key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] }),
+      ] }, position_x: 500 }),
+      nodeFixture({ type: 'text_output', label: '文本输出', add_label: '文本输出', id_prefix: 'text', input_ports: ['transcript'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'text_output', fields: [
+        fieldFixture({ key: 'filename_stem', label: '文件名', type: 'string', required: false, default: 'transcript', minimum: null, maximum: 128, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] }),
+        fieldFixture({ key: 'format', label: '格式', type: 'select', required: false, default: 'txt', minimum: null, maximum: null, options: [{ value: 'txt', label: 'TXT' }, { value: 'srt', label: 'SRT' }, { value: 'vtt', label: 'VTT' }, { value: 'lrc', label: 'LRC' }] }),
+      ] }, position_x: 686 }),
     ],
     ports: ['audio', 'transcript', 'text'],
     constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
@@ -49,7 +51,7 @@ const testCapabilities: Record<string, any> = {
   },
   asr: { providers: [{ id: 'mock', label: 'Mock' }] },
   export: { formats: [{ id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }], naming_modes: [{ id: 'language', label: '按语言命名' }, { id: 'original', label: '沿用源文件名' }] },
-}
+})
 const testRegistry: NodeRegistry = createNodeRegistry(readCapabilities(testCapabilities))
 const input = { id: 'input', type: 'audio_input' as const, config: {}, position: { x: 80, y: 120 } }
 const output = { id: 'output', type: 'audio_output' as const, config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }
@@ -79,12 +81,12 @@ const textArtifact = {
   media_type: 'application/x-subrip', download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/text-1/download',
 }
 const documentBody = (revision = 1, workflowRevision = 1): WorkflowDocument => ({
-  schema_version: '1.0', project_id: 'p1', revision, workflow_revision: workflowRevision,
+  schema_version: "2.0", project_id: 'p1', revision, workflow_revision: workflowRevision,
   updated_at: '2026-10-28T00:00:00Z', nodes: structuredClone([input, output]), edges: [structuredClone(edge)],
 })
 
 function runBody(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
-  return {
+  return runFixture({
     id: 'run-1', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'pending',
     created_at: '2026-10-28T00:00:00Z', started_at: null, finished_at: null, cancel_requested: false,
     error: null, workflow: { nodes: structuredClone([input, output]), edges: [structuredClone(edge)] },
@@ -93,7 +95,7 @@ function runBody(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
       { node_id: 'output', node_type: 'audio_output', config: { filename_stem: 'audio-copy' }, status: 'pending', started_at: null, finished_at: null, artifact: null, error: null },
     ],
     ...overrides,
-  }
+  })
 }
 
 function summaryBody(overrides: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
@@ -128,6 +130,7 @@ function setup(override?: FetchOverride, pinia = createPinia(), properties: Reco
     const path = String(request)
     const custom = override?.(path, init)
     if (custom) return custom
+    if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
     if (path.endsWith('/capabilities')) return Promise.resolve(response(testCapabilities))
     if (path.endsWith('/workflow')) return Promise.resolve(response(documentBody()))
     if (path.endsWith('/workflow/validate')) return Promise.resolve(response({ valid: true, errors: [] }))
@@ -389,14 +392,14 @@ describe('workflow localization', () => {
 
   it('keeps extension labels and configuration editable in English without describing it as audio output', async () => {
     const extended = structuredClone(testCapabilities)
-    extended.workflow.nodes.push({
+    extended.workflow.nodes.push(nodeFixture({
       type: 'extension', label: '插件处理节点', add_label: 'Plugin node', id_prefix: 'plugin',
       input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1,
       config: { kind: 'extension', fields: [
-        { key: 'mode', label: '插件模式', type: 'select', required: true, default: 'future', options: [{ value: 'future', label: '扩展选项' }] },
-        { key: 'custom', label: 'User field', type: 'string', default: '保留原文' },
+        fieldFixture({ key: 'mode', label: '插件模式', type: 'select', required: true, default: 'future', options: [{ value: 'future', label: '扩展选项' }] }),
+        fieldFixture({ key: 'custom', label: 'User field', type: 'string', default: '保留原文' }),
       ] },
-    })
+    }))
     setLocale('en')
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
     await settle()
@@ -477,12 +480,12 @@ describe('workflow validation and helpers', () => {
 
   it('includes registry defaults in signatures for a catalog-only node', () => {
     const capabilities = structuredClone(testCapabilities)
-    capabilities.workflow.nodes.push({
+    capabilities.workflow.nodes.push(nodeFixture({
       type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
       required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
-        { key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+        fieldFixture({ key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 }),
       ] }, position_x: 386,
-    })
+    }))
     const registry = createNodeRegistry(readCapabilities(capabilities))
     const denoise = { id: 'denoise-1', type: 'denoise', config: {}, position: { x: 386, y: 120 } }
     const graph = { nodes: [input, denoise, output], edges: [preprocessEdge, preprocessToOutput] }
@@ -493,12 +496,12 @@ describe('workflow validation and helpers', () => {
 
   it('keeps a loaded graph clean with registry defaults in its saved signature', async () => {
     const capabilities = structuredClone(testCapabilities)
-    capabilities.workflow.nodes.push({
+    capabilities.workflow.nodes.push(nodeFixture({
       type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
       required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
-        { key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+        fieldFixture({ key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 }),
       ] }, position_x: 386,
-    })
+    }))
     const document = documentBody()
     const denoise = { id: 'denoise-1', type: 'denoise', config: {}, position: { x: 386, y: 120 } }
     document.nodes = structuredClone([input, denoise, output])
@@ -545,7 +548,7 @@ describe('workflow validation and helpers', () => {
     const edgeLimit = testRegistry.capabilities.constraints.maxEdges
     setActivePinia(createPinia())
     const store = useWorkflowStore()
-    vi.stubGlobal('fetch', vi.fn((request: RequestInfo | URL) => String(request).endsWith('/capabilities') ? Promise.resolve(response(testCapabilities)) : Promise.resolve(response(documentBody()))))
+    vi.stubGlobal('fetch', vi.fn((request: RequestInfo | URL) => String(request).endsWith('/settings') ? Promise.resolve(response(emptySettings())) : String(request).endsWith('/capabilities') ? Promise.resolve(response(testCapabilities)) : Promise.resolve(response(documentBody()))))
     await store.load('p1', 'a1')
     store.beginDraftEditing()
     store.setDraft({
@@ -583,13 +586,13 @@ describe('workflow validation and helpers', () => {
 describe('capability catalog and node registry', () => {
   it('builds node validation and typed ports from the authoritative catalog, including a new node type', () => {
     const extended = structuredClone(testCapabilities)
-    extended.workflow.nodes.push({
+    extended.workflow.nodes.push(nodeFixture({
       type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
       required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
-        { key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
-        { key: 'mode', label: '模式', type: 'select', required: false, default: 'soft', options: [{ id: 'soft', label: '柔和' }, { id: 'hard', label: '强力' }] },
+        fieldFixture({ key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 }),
+        fieldFixture({ key: 'mode', label: '模式', type: 'select', required: false, default: 'soft', options: [{ id: 'soft', label: '柔和' }, { id: 'hard', label: '强力' }] }),
       ] }, position_x: 386,
-    })
+    }))
     const registry = createNodeRegistry(readCapabilities(extended))
     const denoise = { id: 'denoise-1', type: 'denoise', config: { strength: 2, mode: 'soft' }, position: { x: 386, y: 120 } }
     expect(registry.createDefaultConfig('denoise')).toEqual({ strength: 2, mode: 'soft' })
@@ -601,12 +604,12 @@ describe('capability catalog and node registry', () => {
 
   it('adds and edits a catalog-only node through the generic editor without changing a fixed type branch', async () => {
     const extended = structuredClone(testCapabilities)
-    extended.workflow.nodes.push({
+    extended.workflow.nodes.push(nodeFixture({
       type: 'denoise', label: '降噪', id_prefix: 'denoise', input_ports: ['audio'], output_ports: ['audio'], terminal: false,
       required_inbound: 1, removable: true, config: { kind: 'denoise', fields: [
-        { key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 },
+        fieldFixture({ key: 'strength', label: '强度', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5 }),
       ] }, position_x: 386,
-    })
+    }))
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(extended)) : undefined)
     await settle()
     const store = useWorkflowStore()
@@ -647,13 +650,13 @@ describe('capability catalog and node registry', () => {
   })
 
   it('accepts the current backend capability contract without frontend-only layout fields', () => {
-    const backendShape = {
+    const backendShape = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: '1.2',
+        schema_version: "1.16",
         nodes: [
-          { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
-          { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [{ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] }] } },
+          nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
+          nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [fieldFixture({ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] })] } }),
         ],
         ports: ['audio'],
         constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
@@ -661,7 +664,7 @@ describe('capability catalog and node registry', () => {
       },
       asr: { backends: ['qwen3'], status: 'available', message: null, truncated: false, warnings: [] },
       export: { formats: [{ value: 'srt', label: 'SRT' }], naming_modes: [{ value: 'language', label: '按语言命名' }] },
-    }
+    })
     const registry = createNodeRegistry(readCapabilities(backendShape))
     expect(registry.kinds.map((kind) => kind.type)).toEqual(['audio_input', 'audio_output'])
     expect(registry.outputPortForNode('audio_input')).toBe('audio')
@@ -669,14 +672,14 @@ describe('capability catalog and node registry', () => {
   })
 
   it('reads node capabilities and graph policy from the live capability contract', () => {
-    const live = {
+    const live = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: '1.2',
+        schema_version: "1.16",
         ports: ['audio', 'transcript', 'text'],
         nodes: [
-          { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
-          { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
+          nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
+          nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } }),
         ],
         constraints: { max_nodes: 8, max_edges: 12, min_sources: 1, max_sources: 2, min_terminals: 2 },
         default_graph: testCapabilities.workflow.default_graph,
@@ -686,7 +689,7 @@ describe('capability catalog and node registry', () => {
         formats: [{ id: 'txt', label: 'TXT' }, { id: 'srt', label: 'SRT' }, { id: 'vtt', label: 'VTT' }, { id: 'lrc', label: 'LRC' }],
         naming_modes: [],
       },
-    }
+    })
     const parsed = readCapabilities(live)
     expect(parsed.nodeTypes).toEqual(['audio_input', 'audio_output'])
     expect(parsed.asr.providers.map((item) => item.value)).toEqual(['mock'])
@@ -722,11 +725,11 @@ describe('inline catalog field editing', () => {
   async function mountFields() {
     const catalog = structuredClone(testCapabilities)
     catalog.workflow.nodes.find((entry: any) => entry.type === 'audio_output').config.fields.push(
-      { key: 'count', label: 'Count', type: 'integer', default: 2, minimum: 1, maximum: 4 },
-      { key: 'ratio', label: 'Ratio', type: 'number', default: 0.5, minimum: 0, maximum: 1 },
-      { key: 'enabled', label: 'Enabled', type: 'boolean', default: true },
-      { key: 'mode', label: 'Mode', type: 'select', default: 'a', options: [{ value: 'a', label: 'Choice A' }, { value: 'b', label: 'Choice B' }] },
-      { key: 'details', label: 'Details', type: 'json', default: {} },
+      fieldFixture({ key: 'count', label: 'Count', type: 'integer', default: 2, minimum: 1, maximum: 4 }),
+      fieldFixture({ key: 'ratio', label: 'Ratio', type: 'number', default: 0.5, minimum: 0, maximum: 1 }),
+      fieldFixture({ key: 'enabled', label: 'Enabled', type: 'boolean', default: true }),
+      fieldFixture({ key: 'mode', label: 'Mode', type: 'select', default: 'a', options: [{ value: 'a', label: 'Choice A' }, { value: 'b', label: 'Choice B' }] }),
+      fieldFixture({ key: 'details', label: 'Details', type: 'json', default: {} }),
     )
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
     await settle()
@@ -855,11 +858,11 @@ describe('inline catalog field editing', () => {
 describe('catalog resources and preview workflows', () => {
   function catalog() {
     const value = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.3'
+    value.workflow.schema_version = '1.16'
     const source = value.workflow.nodes.find((entry: any) => entry.type === 'audio_input')
-    source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id' } }
-    source.config.fields = [{ key: 'audio_id', label: 'Audio ID', type: 'string', required: false, default: null }]
-    value.workflow.nodes.push({ type: 'audio_preview', label: 'Audio preview', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, config: { fields: [] }, presentation: { preview: { renderer: 'audio' } } })
+    source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id', collection_key: null } }
+    source.config.fields = [fieldFixture({ key: 'audio_id', label: 'Audio ID', type: 'string', required: false, default: null })]
+    value.workflow.nodes.push(nodeFixture({ type: 'audio_preview', label: 'Audio preview', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, config: { fields: [] }, presentation: { preview: { renderer: 'audio' } } }))
     return value
   }
   const project = { id: 'p1', name: 'Empty', created_at: '', updated_at: '', source: null, source_language: 'ja', target_language: 'en', audios: [] }
@@ -867,6 +870,7 @@ describe('catalog resources and preview workflows', () => {
   it('requires a source language in the input node for a name-only project and preserves the explicit value across interface changes', async () => {
     const newProject = { ...project, source_language: null, target_language: null }
     setup((path, init) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/audios') && init?.method === 'POST') return Promise.resolve(response({ audio: { id: 'new-audio', source: { original_name: 'new.wav', language: 'xx-CUSTOM', size_bytes: 4 } } }, 201))
@@ -880,7 +884,7 @@ describe('catalog resources and preview workflows', () => {
     file.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     expect(node('audio_input').textContent).toContain('请选择或输入源语言')
     expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/audios') && (init as RequestInit)?.method === 'POST')).toBe(false)
-    language.value = 'xx-CUSTOM'; language.dispatchEvent(new Event('input', { bubbles: true }))
+    language.value = 'xx-CUSTOM'; language.dispatchEvent(new Event('input', { bubbles: true })); language.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     setLocale('en'); await settle()
     expect(language.value).toBe('xx-CUSTOM')
     expect(newProject.source_language).toBeNull()
@@ -924,6 +928,7 @@ describe('catalog resources and preview workflows', () => {
   it('retries an input-node upload, preserves the graph, and saves the new resource binding', async () => {
     let attempts = 0
     setup((path, init) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/audios') && init?.method === 'POST') {
@@ -937,7 +942,7 @@ describe('catalog resources and preview workflows', () => {
     store.updateNode('output', { config: { filename_stem: 'keep-my-draft' } })
     const language = node('audio_input').querySelector<HTMLInputElement>('[data-resource-language]')!
     expect(language.value).toBe('ja')
-    language.value = 'ko'; language.dispatchEvent(new Event('input', { bubbles: true }))
+    language.value = 'ko'; language.dispatchEvent(new Event('input', { bubbles: true })); language.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     const input = node('audio_input').querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(input, 'files', { configurable: true, value: [new File(['RIFF'], 'new.wav', { type: 'audio/wav' })] })
     input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
@@ -958,6 +963,7 @@ describe('catalog resources and preview workflows', () => {
     const pending = deferred<Response>()
     const audios = [{ id: 'existing', source: { original_name: 'old.wav', language: 'ja', size_bytes: 4 } }]
     setup((path, init) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/audios') && init?.method === 'POST') return pending.promise
@@ -990,6 +996,7 @@ describe('catalog resources and preview workflows', () => {
   it('describes the bound input resource separately from the selected history audio with legacy fallback', async () => {
     const bound = { id: 'bound', source: { original_name: 'input-resource.wav', language: 'ja', size_bytes: 4 } }
     setup((path) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/workflow')) { const graph = documentBody(); graph.nodes[0]!.config = { audio_id: 'bound' }; return Promise.resolve(response(graph)) }
@@ -1031,10 +1038,11 @@ describe('catalog resources and preview workflows', () => {
     const preview = { id: 'preview', type: 'audio_preview', config: {}, position: { x: 420, y: 120 } }
     const nodes = [source, preview]
     const edges = [{ ...edge, target: 'preview' }]
-    const completed = runBody({ status: 'completed', audio_id: 'bound-audio', workflow: { nodes, edges }, nodes: [
+    const completed = runBody(runFixture({ status: 'completed', audio_id: 'bound-audio', workflow: { nodes, edges }, nodes: [
       { node_id: 'preview', node_type: 'audio_preview', config: {}, status: 'completed', started_at: null, finished_at: null, artifact: { ...outputArtifact, download_url: null }, error: null, preview: { renderer: 'audio', content_url: '/api/v1/projects/p1/audios/bound-audio/workflow-runs/run-1/outputs/preview/content', media_type: 'audio/wav' } },
-    ] })
+    ] }))
     setup((path, init) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(catalog()))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/workflow')) return Promise.resolve(response({ ...documentBody(), nodes, edges }))
@@ -1141,7 +1149,7 @@ describe('workflow viewport coordinates and gestures', () => {
 describe('canvas context menus', () => {
   function categorizedCatalog(): any {
     const value: any = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.8'
+    value.workflow.schema_version = '1.16'
     const categories = [{ id: 'input', label: '输入' }, { id: 'plugin_tools', label: 'Plugin tools' }, { id: 'speech_recognition', label: '语音识别' }, { id: 'output', label: '输出' }]
     value.workflow.nodes.forEach((node: any, index: number) => {
       node.category = categories[Math.min(index, 3)]
@@ -1255,7 +1263,7 @@ describe('canvas context menus', () => {
     expect(store.draft.nodes.map((node) => node.id)).toEqual(['input'])
     menu(node('audio_input')); await settle()
     expect(root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.disabled).toBe(true)
-    expect(document.activeElement).toBe(root!.querySelector('[data-context-command=copy]'))
+    expect(document.activeElement).toBe(root!.querySelector('.canvas-context-menu [role=menuitem]:not(:disabled)'))
     document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     expect(root!.querySelector('.canvas-context-menu')).toBeNull()
   })
@@ -1594,9 +1602,9 @@ describe('workflow editor interactions', () => {
     store.capabilities!.ports.find((entry) => entry.id === 'audio')!.label = 'Friendly audio extension port with a long name'
     const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
     kind.fields = [...kind.fields,
-      { ...kind.fields[0]!, key: 'enabled', label: 'Enabled extension', type: 'boolean', default: true, options: [] },
-      { ...kind.fields[0]!, key: 'mode', label: 'Mode extension', type: 'select', default: 'custom', options: [{ value: 'custom', label: 'Friendly mode' }] },
-      { ...kind.fields[0]!, key: 'details', label: 'Details extension', type: 'json', default: { nested: true }, options: [] },
+      fieldFixture({ ...kind.fields[0]!, key: 'enabled', label: 'Enabled extension', type: 'boolean', default: true, options: [] }),
+      fieldFixture({ ...kind.fields[0]!, key: 'mode', label: 'Mode extension', type: 'select', default: 'custom', options: [{ value: 'custom', label: 'Friendly mode' }] }),
+      fieldFixture({ ...kind.fields[0]!, key: 'details', label: 'Details extension', type: 'json', default: { nested: true }, options: [] }),
     ]
     await settle()
     const outputNode = node('audio_output')!
@@ -1789,7 +1797,7 @@ describe('workflow editor interactions', () => {
     await settle()
     const store = useWorkflowStore()
     const kind = store.capabilities!.nodes.find((entry) => entry.type === 'audio_output')!
-    kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => ({ ...kind.fields[0]!, key: `extension_${index}`, type: index < 3 ? 'json' as const : 'string' as const, default: index < 3 ? {} : 'text' }))]
+    kind.fields = [...kind.fields, ...Array.from({ length: 8 }, (_, index) => (fieldFixture({ ...kind.fields[0]!, key: `extension_${index}`, type: index < 3 ? 'json' as const : 'string' as const, default: index < 3 ? {} : 'text' })))]
     await addNode('audio_output')
     const canvas = root!.querySelector<HTMLElement>('.workflow-canvas')!
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
@@ -1929,7 +1937,7 @@ describe('workflow editor interactions', () => {
   })
 
   it('displays and downloads transcript and text artifacts with distinct ports', async () => {
-    const completed = {
+    const completed = runFixture({
       id: 'run-1', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed' as const,
       created_at: '2026-10-28T00:00:00Z', started_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:01Z', cancel_requested: false,
       error: null,
@@ -1940,7 +1948,7 @@ describe('workflow editor interactions', () => {
         { node_id: 'text-1', node_type: 'text_output' as const, config: structuredClone(textOutput.config), status: 'completed' as const, started_at: null, finished_at: null, artifact: textArtifact, error: null },
         { node_id: 'output', node_type: 'audio_output' as const, config: { filename_stem: 'audio-copy' }, status: 'completed' as const, started_at: null, finished_at: null, artifact: outputArtifact, error: null },
       ],
-    }
+    })
     setup((path, init) => {
       if (path.endsWith('/workflow')) return Promise.resolve(response({ ...documentBody(), nodes: structuredClone([input, asr, textOutput, output]), edges: structuredClone([inputAsr, asrText, edge]) }))
       if (path.endsWith('/workflow-runs') && (init as RequestInit)?.method === 'POST') return Promise.resolve(response(completed, 202))
@@ -2581,17 +2589,17 @@ describe('editor operations UI', () => {
 describe('catalog-driven parameter connections', () => {
   async function parameterNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.5'
-    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => ({ id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities] }))
+    catalog.workflow.schema_version = '1.16'
+    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({ id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities] })))
     for (const declaration of catalog.workflow.nodes) {
       declaration.required_input_ports = [...declaration.input_ports]
       declaration.is_parameter_source = false
       for (const field of declaration.config.fields) field.input_port = null
     }
     for (const type of ['string', 'number', 'integer', 'boolean']) {
-      catalog.workflow.data_types.push({ id: type, label: type, parent_type_id: type === 'integer' ? 'number' : null, capabilities: [] })
+      catalog.workflow.data_types.push(typeFixture({ id: type, label: type, parent_type_id: type === 'integer' ? 'number' : null, capabilities: [] }))
       catalog.workflow.ports.push({ id: type, type_id: type, label: type })
-      catalog.workflow.nodes.push({ type: `${type}_value`, label: type, input_ports: [], output_ports: [type], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { kind: 'object', fields: [{ key: 'value', label: 'value', type, default: type === 'string' ? 'en' : type === 'boolean' ? false : 2, input_port: null }] } })
+      catalog.workflow.nodes.push(nodeFixture({ type: `${type}_value`, label: type, input_ports: [], output_ports: [type], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { kind: 'object', fields: [fieldFixture({ key: 'value', label: 'value', type, default: type === 'string' ? 'en' : type === 'boolean' ? false : 2, input_port: null })] } }))
     }
     for (const [type, key, port] of [['asr', 'language', 'language'], ['audio_output', 'filename_stem', 'filename_stem'], ['text_output', 'filename_stem', 'filename_stem'], ['text_output', 'format', 'text_format']]) {
       if (!catalog.workflow.ports.some((entry: any) => entry.id === port)) catalog.workflow.ports.push({ id: port, type_id: 'string', label: port })
@@ -2602,7 +2610,7 @@ describe('catalog-driven parameter connections', () => {
     catalog.workflow.ports.push({ id: 'count_parameter', type_id: 'number', label: 'Extension socket' })
     const outputKind = catalog.workflow.nodes.find((entry: any) => entry.type === 'audio_output')
     outputKind.input_ports.push('count_parameter')
-    outputKind.config.fields.push({ key: 'count', type: 'number', label: 'Extension count', default: 2, input_port: 'count_parameter' })
+    outputKind.config.fields.push(fieldFixture({ key: 'count', type: 'number', label: 'Extension count', default: 2, input_port: 'count_parameter' }))
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
     await settle()
     const store = useWorkflowStore()
@@ -2755,23 +2763,23 @@ describe('catalog-driven parameter connections', () => {
 describe('catalog-driven multiple input and output ports', () => {
   async function multiNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.4'
-    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => ({
+    catalog.workflow.schema_version = '1.16'
+    catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({
       id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities],
-    }))
+    })))
     for (const entry of catalog.workflow.nodes) entry.required_input_ports = [...entry.input_ports]
     for (const id of ['voice', 'background', 'reference', 'dry_audio', 'wet_audio']) {
       catalog.workflow.ports.push({ id, type_id: 'audio', label: id, capability_requirements: [] })
     }
-    catalog.workflow.nodes.push({
+    catalog.workflow.nodes.push(nodeFixture({
       type: 'multi', label: 'Multi port', input_ports: ['voice', 'background', 'reference'],
       output_ports: ['dry_audio', 'wet_audio'], required_input_ports: ['voice', 'background'], required_inbound: 2,
-      config: { kind: 'multi', fields: [{ key: 'strength', type: 'integer', default: 2 }] },
-    })
-    catalog.workflow.nodes.push({
+      config: { kind: 'multi', fields: [fieldFixture({ key: 'strength', type: 'integer', default: 2 })] },
+    }))
+    catalog.workflow.nodes.push(nodeFixture({
       type: 'multi_split', label: 'Split', input_ports: ['audio'], output_ports: ['dry_audio', 'wet_audio'],
       required_input_ports: ['audio'], required_inbound: 1, config: { kind: 'none', fields: [] },
-    })
+    }))
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(catalog)) : undefined)
     await settle()
     const store = useWorkflowStore()
@@ -2806,8 +2814,8 @@ describe('catalog-driven multiple input and output ports', () => {
     await settle()
     const split = root!.querySelector('.is-multi_split')!
     const cardHeight = Number(split.querySelector('.node-card')!.getAttribute('height'))
-    const metaY = Number(split.querySelector('.node-meta')!.getAttribute('y'))
-    expect(cardHeight).toBeGreaterThanOrEqual(metaY + 10)
+    expect(split.querySelector('.node-meta')).toBeNull()
+    expect(cardHeight).toBeGreaterThanOrEqual(93 + 12)
     expect(Number(split.querySelector('.node-resize-handle.is-right')!.getAttribute('y'))).toBeGreaterThan(75)
   })
 
@@ -2864,7 +2872,7 @@ describe('resource collection and shared execution', () => {
   const audio = (id: string) => ({ id, source: { original_name: `${id}.wav`, language: 'ja', size_bytes: 4 } })
   function collectionCatalog(collectionKey = 'audio_ids') {
     const catalog = structuredClone(testCapabilities)
-    catalog.workflow.schema_version = '1.6'
+    catalog.workflow.schema_version = '1.16'
     for (const node of catalog.workflow.nodes) {
       node.is_parameter_source = false
       node.required_input_ports = node.required_inbound ? [...node.input_ports] : []
@@ -2873,12 +2881,12 @@ describe('resource collection and shared execution', () => {
     const source = catalog.workflow.nodes.find((node: any) => node.type === 'audio_input')
     source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id', collection_key: collectionKey } }
     source.config.fields = [
-      { key: 'audio_id', type: 'string', required: false, default: null, input_port: null },
-      { key: collectionKey, type: 'json', required: false, default: null, input_port: null },
+      fieldFixture({ key: 'audio_id', type: 'string', required: false, default: null, input_port: null }),
+      fieldFixture({ key: collectionKey, type: 'json', required: false, default: null, input_port: null }),
     ]
     const output = catalog.workflow.nodes.find((node: any) => node.type === 'audio_output')
-    output.config.fields.push({ key: 'naming_mode', label: 'Naming mode', type: 'select', required: false, default: 'exact', creation_default: 'prefix_sequence', input_port: null,
-      options: [{ value: 'exact', label: 'Exact' }, { value: 'prefix_sequence', label: 'Prefix' }] })
+    output.config.fields.push(fieldFixture({ key: 'naming_mode', label: 'Naming mode', type: 'select', required: false, default: 'exact', creation_default: 'prefix_sequence', input_port: null,
+      options: [{ value: 'exact', label: 'Exact' }, { value: 'prefix_sequence', label: 'Prefix' }] }))
     return catalog
   }
   function setupCollection(config: Record<string, unknown> = {}, options: { upload?: Promise<Response>; failCreate?: boolean; collectionKey?: string } = {}) {
@@ -2888,6 +2896,7 @@ describe('resource collection and shared execution', () => {
     let batch: any = null
     let uploads = 0
     setup((path, init) => {
+      if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (path.endsWith('/capabilities')) return Promise.resolve(response(collectionCatalog(options.collectionKey)))
       if (path.endsWith('/upload-policy')) return Promise.resolve(response({ allowed_extensions: ['wav'], max_upload_bytes: 4096 }))
       if (path.endsWith('/workflow')) {
@@ -2913,7 +2922,7 @@ describe('resource collection and shared execution', () => {
   async function enableCollection() { expect(root!.querySelector('[data-collection-enable]')).toBeNull(); const mode = root!.querySelector<HTMLSelectElement>('[data-collection-mode]')!; mode.value = 'collection'; mode.dispatchEvent(new Event('change', { bubbles: true })); await settle() }
   async function chooseFiles(files = [new File(['RIFF'], '录音.wav')]) {
     const language = root!.querySelector<HTMLInputElement>('[data-batch-language]')!
-    language.value = 'ja'; language.dispatchEvent(new Event('input', { bubbles: true })); await nextTick()
+    language.value = 'ja'; language.dispatchEvent(new Event('input', { bubbles: true })); language.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await nextTick()
     const picker = root!.querySelector<HTMLInputElement>('[data-batch-file-input]')!
     Object.defineProperty(picker, 'files', { configurable: true, value: files })
     picker.dispatchEvent(new Event('change', { bubbles: true })); await settle()
@@ -3144,7 +3153,7 @@ describe('node rerun planning UI', () => {
   const validPlan = { valid: true, execute_node_ids: ['output'], reuse_node_ids: ['input'], skipped_node_ids: [], issues: [] }
   async function ready(override?: FetchOverride) {
     setup(override, createPinia(), { audios: ['a1', 'a2'].map(id => ({ id, source: { original_name: id === 'a1' ? 'chosen-audio.wav' : 'second.wav', language: 'ja', size_bytes: 5 } })) }); await settle()
-    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.14'; store.run = runBody({ status: 'completed' }); await settle(); return store
+    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.16'; store.run = runBody({ status: 'completed' }); await settle(); return store
   }
   async function openRerun() {
     node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 400, clientY: 220 })); await settle()
@@ -3177,7 +3186,7 @@ describe('node rerun planning UI', () => {
   it('reruns one selected historical audio from a multi-audio input and renders reused/skipped records', async () => {
     const store = await ready(path => path.endsWith('/workflow-runs/plan') ? Promise.resolve(response(validPlan)) : undefined)
     const source = store.capabilities!.nodes.find(node => node.type === 'audio_input')! as any
-    source.fields = [{ key: 'many', type: 'json', default: null, inputPort: null, required: false, minimum: null, maximum: null, minLength: null, maxLength: null, pattern: null, validator: null, options: [], label: 'Audio list', description: '' }]
+    source.fields = [fieldFixture({ key: 'many', type: 'json', default: null, inputPort: null, required: false, minimum: null, maximum: null, minLength: null, maxLength: null, pattern: null, validator: null, options: [], label: 'Audio list', description: '' })]
     source.resourceInput = { resourceType: 'audio', configKey: 'single', collectionKey: 'many' }
     const graph = cloneDocument(store.draft); graph.nodes[0]!.config = { many: ['a1', 'a2'] }
     store.document = { ...store.document!, ...graph }; store.setCleanBaseline(graph)
@@ -3238,7 +3247,7 @@ describe('declarative debug node visibility', () => {
   it('hides debug declarations in both add menus while preserving and duplicating existing debug nodes', async () => {
     setup(); await settle(); const store = useWorkflowStore()
     store.addNode('asr'); const existing = store.selectedNodeId!
-    store.capabilities!.schemaVersion = '1.15'
+    store.capabilities!.schemaVersion = '1.16'
     store.capabilities!.nodes.forEach(kind => { kind.debugOnly = kind.type === 'asr' || kind.type === 'preprocess' })
     const extension = JSON.parse(JSON.stringify(store.capabilities!.nodes.find(kind => kind.type === 'asr')!))
     extension.type = 'unusual_extension'; extension.debugOnly = true

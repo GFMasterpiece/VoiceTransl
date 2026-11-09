@@ -1,4 +1,4 @@
-import { t, hasMessage, type MessageParams } from '../i18n'
+import { t, hasMessage, i18n, type MessageParams } from '../i18n'
 import type { Capabilities, CapabilityNode, CapabilityPort } from './capabilities'
 
 export type PortName = string
@@ -66,7 +66,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     positionX: entry.positionX ?? 96 + index * 190,
   }))
   const byType = new Map(nodes.map((entry) => [entry.type, entry]))
-  const byPort = new Map(capabilities.ports.map((entry) => [entry.id, entry]))
+  const byPort = new Map(capabilities.ports.map((entry) => [entry.id, { ...entry, get label() { const key = `workflow.port_${entry.id}`; return hasMessage(key) && [entry.id, entry.typeId, i18n.global.t(key, {}, { locale: 'zh-CN' }), i18n.global.t(key, {}, { locale: 'en' })].includes(entry.label) ? t(key) : entry.label } }]))
   const byDataType = new Map(capabilities.dataTypes.map((entry) => [entry.id, entry]))
   const typeCompatible = (sourceTypeId: string, targetTypeId: string): boolean => {
     if (sourceTypeId === targetTypeId) return true
@@ -109,7 +109,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
       const issues: NodeRegistryIssue[] = []
       const allowed = new Set(definition.fields.map((field) => field.key))
       const unexpected = Object.keys(config || {}).filter((key) => !allowed.has(key))
-      if (unexpected.length) issues.push({ code: definition.inlineConnectionInput ? 'LEGACY_CONNECTION_UNSUPPORTED' : 'INVALID_NODE_CONFIG', ...issueText(definition.inlineConnectionInput ? 'connections.rebuildCloudNode' : 'workflow.unknownFields', { p0: unexpected.join(', ') }) })
+      if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: unexpected.join(', ') }) })
       for (const field of definition.fields) {
         const value = config?.[field.key]
         const inline = definition.inlineConnectionInput

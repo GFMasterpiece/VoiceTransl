@@ -26,7 +26,7 @@ export const connectionMessages = {
     processingParameters: '处理参数',
 
     discardKey: '撤销修改',
-    error_CREDENTIAL_REQUIRED: '请在此节点内输入并保存独立的 API Key。',
+    error_CREDENTIAL_REQUIRED: '请在服务连接节点保存 API Key。',
     apiKey: 'API Key',
     keyUnchanged: '已保存',
     keyPlaceholder: '未配置',
@@ -98,7 +98,7 @@ export const connectionMessages = {
     processingParameters: 'Processing parameters',
 
     discardKey: 'Discard change',
-    error_CREDENTIAL_REQUIRED: 'Enter and save a separate API Key in this node.',
+    error_CREDENTIAL_REQUIRED: 'Save an API Key in the service connection node.',
     apiKey: 'API Key',
     keyUnchanged: 'Saved',
     keyPlaceholder: 'Not configured',

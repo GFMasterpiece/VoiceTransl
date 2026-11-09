@@ -27,6 +27,8 @@ class CapabilityField(BaseModel):
     validator: str | None = None
     suggestion_source: Literal["languages"] | None = None
     input_port: str | None = None
+    input_type_id: str | None = None
+    widget: Literal["multiline"] | None = None
     options: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -71,6 +73,12 @@ class NodeDefinition:
     execution_version: str = "1"
     debug_only: bool = False
     validate_execution_config: ExecutionConfigCallable | None = None
+    evaluation_kind: Literal["configuration", "processing"] = "processing"
+    evaluate_config: ExecuteCallable | None = None
+    can_start_without_inputs: bool = False
+    binding_inputs: dict[str, str] = field(default_factory=dict)
+    validate_inputs: Callable[[NodeExecutionContext], None] | None = None
+    validation_input_ports: tuple[str, ...] = ()
 
     @property
     def required_ports(self) -> tuple[str, ...]:
@@ -98,6 +106,8 @@ class DataTypeDefinition:
     parent_type_id: str | None = None
     capabilities: frozenset[str] = frozenset()
     checkpoint_codec: CheckpointCodec | None = None
+    config_value: Callable[[object], object] | None = None
+    presentation: dict[str, str] | None = None
 
 
 class PortDefinition(BaseModel):
@@ -154,6 +164,8 @@ def fields_from_model(
                 description=spec.get("description"),
                 validator="safe_filename_stem" if key == "filename_stem" else None,
                 input_port=(input_ports or {}).get(key),
+                input_type_id=spec.get("input_type_id"),
+                widget=spec.get("widget"),
                 options=options or [],
             )
         )

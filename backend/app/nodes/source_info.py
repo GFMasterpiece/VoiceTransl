@@ -46,4 +46,7 @@ def definition() -> NodeDefinition:
         normalize_config=normalize_empty_config,
         validate_config=normalize_empty_config,
         execute=execute,
+        evaluation_kind="configuration",
+        evaluate_config=execute,
+        can_start_without_inputs=True,
     )

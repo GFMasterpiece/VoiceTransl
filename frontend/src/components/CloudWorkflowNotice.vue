@@ -9,12 +9,11 @@ const targets = computed(() => props.workflow.nodes.flatMap((node) => {
   const kind = workflowStore.registry?.kind(node.type)
   const inline = kind?.inlineConnectionInput
   if (!inline) return []
-  const unsupported = workflowStore.registry?.validateConfig(node.type, node.config).some((issue) => issue.code === 'LEGACY_CONNECTION_UNSUPPORTED')
+  const unsupported = workflowStore.registry?.validateConfig(node.type, node.config).length
   return [{ nodeId: node.id, host: unsupported ? '' : connectionTarget(node.config[inline.baseUrlKey]), showRegion: !!inline.regionKey,
     region: inline.regionKey ? node.config[inline.regionKey] : null }]
 }))
-const missingTarget = computed(() => props.historical && (targets.value.some((target) => !target.host)
-  || (!targets.value.length && !!props.workflow.provider_profiles_snapshot)))
+const missingTarget = computed(() => props.historical && targets.value.some((target) => !target.host))
 </script>
 <template>
   <div v-if="targets.length || missingTarget" class="cloud-workflow-notice" data-cloud-notice>

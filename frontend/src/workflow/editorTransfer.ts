@@ -2,7 +2,7 @@ import type { WorkflowDocumentInput, WorkflowEdge, WorkflowNode } from '../store
 import type { NodeRegistry } from './nodeRegistry'
 
 export const WORKFLOW_TRANSFER_MAX_BYTES = 4 * 1024 * 1024
-const SCHEMA_VERSION = '1.0'
+const SCHEMA_VERSION = '2.0'
 const LAYOUT_BOUND = 1_000_000
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor'])

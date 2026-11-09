@@ -1,23 +1,36 @@
-"""Mock speech recognition node."""
+"""Mock recognition using an independently composed language context."""
 
+from ..domain.context_values import (
+    ASRContext,
+    normalize_processor_config,
+    optional_packet,
+    resolve_audio_language,
+)
 from ..domain.node_categories import SPEECH_RECOGNITION
-from ..domain.node_config import MockASRNodeConfig, validate_asr_config
 from ..domain.node_constants import ASR_NODE_TYPE, AUDIO_PORT, TRANSCRIPT_PORT
-from ..domain.node_contracts import NodeDefinition, fields_from_model
+from ..domain.node_contracts import NodeDefinition
 from ..domain.node_execution import NodeExecutionContext, NodeResult
 
+normalize = normalize_processor_config
 
-def normalize(config):
-    return validate_asr_config(config).model_dump(mode="json")
+
+def validate_inputs(context):
+    normalize(context.node.config)
+    optional_packet(context, "asr_context", ASRContext)
 
 
 async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..application.workflow_asr import execute_asr_node
 
+    validate_inputs(context)
+    language = resolve_audio_language(context, optional_packet(context, "asr_context", ASRContext))
+    execution_node = context.node.model_copy(
+        update={"config": {"provider": "mock", "language": language}}, deep=True
+    )
     artifact, transcript = await execute_asr_node(
         context.store,
         context.run,
-        context.node,
+        execution_node,
         context.input(AUDIO_PORT).value.path,
         context.project,
         context.cancel_event,
@@ -33,19 +46,16 @@ def definition() -> NodeDefinition:
         type=ASR_NODE_TYPE,
         label="语音识别（Mock）",
         category=SPEECH_RECOGNITION,
-        input_ports=(AUDIO_PORT, "language"),
+        input_ports=(AUDIO_PORT, "asr_context"),
         required_input_ports=(AUDIO_PORT,),
         output_ports=(TRANSCRIPT_PORT,),
         terminal=False,
-        config_kind="asr",
-        settings_default_fields=("language",),
+        config_kind="none",
         debug_only=True,
-        fields=fields_from_model(
-            MockASRNodeConfig,
-            widgets={"provider": ("select", [{"value": "mock", "label": "Mock"}])},
-            input_ports={"language": "language"},
-        ),
         normalize_config=normalize,
         validate_config=normalize,
         execute=execute,
+        validate_inputs=validate_inputs,
+        validation_input_ports=("asr_context",),
+        execution_version="2",
     )

@@ -1,29 +1,30 @@
+import { catalogFixture, typeFixture, nodeFixture, fieldFixture } from './fixtures'
 import { describe, expect, it } from 'vitest'
 import { readCapabilities } from './capabilities'
 import { createNodeRegistry } from './nodeRegistry'
 import { setLocale } from '../i18n'
 
-const livePayload = {
+const livePayload = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.2',
+    schema_version: "1.16",
     ports: [
       { id: 'audio', type_id: 'audio', label: '音频', capability_requirements: [] },
       { id: 'transcript', type_id: 'transcript', label: '转写结果', capability_requirements: [] },
       { id: 'text', type_id: 'text', label: '文本产物', capability_requirements: [] },
     ],
     data_types: [
-      { id: 'audio', label: '音频', parent_type_id: null, capabilities: [] },
-      { id: 'transcript', label: '转写结果', parent_type_id: null, capabilities: [] },
-      { id: 'text', label: '文本产物', parent_type_id: null, capabilities: [] },
+      typeFixture({ id: 'audio', label: '音频', parent_type_id: null, capabilities: [] }),
+      typeFixture({ id: 'transcript', label: '转写结果', parent_type_id: null, capabilities: [] }),
+      typeFixture({ id: 'text', label: '文本产物', parent_type_id: null, capabilities: [] }),
     ],
     nodes: [
-      { type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } },
-      { type: 'asr', label: '语音识别', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
-        { key: 'provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] },
-        { key: 'language', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, options: [] },
-      ] } },
-      { type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } },
+      nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
+      nodeFixture({ type: 'asr', label: '语音识别', input_ports: ['audio'], output_ports: ['transcript'], terminal: false, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'asr', fields: [
+        fieldFixture({ key: 'provider', type: 'select', required: false, default: 'mock', minimum: null, maximum: null, options: [{ value: 'mock', label: 'Mock' }] }),
+        fieldFixture({ key: 'language', type: 'string', required: false, default: 'ja', minimum: null, maximum: null, options: [] }),
+      ] } }),
+      nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [] } }),
     ],
     constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
     default_graph: {
@@ -36,35 +37,35 @@ const livePayload = {
   },
   asr: { providers: [{ id: 'mock', label: 'Mock' }], status: 'available', message: null, truncated: false, warnings: [] },
   export: { formats: [{ id: 'srt', label: 'SRT' }], naming_modes: [{ id: 'language', label: '按语言命名' }] },
-}
+})
 
 describe('capabilities parser', () => {
   function parameterCatalog(): any {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.5'
+    payload.workflow.schema_version = '1.16'
     for (const node of payload.workflow.nodes) {
       node.required_input_ports = [...node.input_ports]
       node.is_parameter_source = false
       for (const field of node.config.fields) field.input_port = null
     }
     payload.workflow.data_types.push(
-      { id: 'string', label: 'String', parent_type_id: null, capabilities: [] },
-      { id: 'number', label: 'Number', parent_type_id: null, capabilities: [] },
-      { id: 'integer', label: 'Integer', parent_type_id: 'number', capabilities: [] },
+      typeFixture({ id: 'string', label: 'String', parent_type_id: null, capabilities: [] }),
+      typeFixture({ id: 'number', label: 'Number', parent_type_id: null, capabilities: [] }),
+      typeFixture({ id: 'integer', label: 'Integer', parent_type_id: 'number', capabilities: [] }),
     )
     payload.workflow.ports.push({ id: 'custom_parameter', type_id: 'integer', label: 'Plugin parameter' })
-    payload.workflow.nodes.push({
+    payload.workflow.nodes.push(nodeFixture({
       type: 'extension', label: 'Plugin node', input_ports: ['audio', 'custom_parameter'], output_ports: ['audio'],
       required_input_ports: ['audio'], required_inbound: 1, is_parameter_source: false,
-      config: { kind: 'extension', fields: [{ key: 'strength', type: 'number', default: 2, input_port: 'custom_parameter' }] },
-    })
+      config: { kind: 'extension', fields: [fieldFixture({ key: 'strength', type: 'number', default: 2, input_port: 'custom_parameter' })] },
+    }))
     return payload
   }
 
-  it('reads 1.8 extension categories without changing the graph and keeps old catalogs unclassified', () => {
+  it('reads extension categories without changing the graph and rejects old catalogs', () => {
     const value = parameterCatalog()
     const graph = JSON.stringify(value.workflow.default_graph)
-    value.workflow.schema_version = '1.8'
+    value.workflow.schema_version = '1.16'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[1].category = { id: 'plugin_tools', label: 'Plugin tools' }
     expect(readCapabilities(value).nodes[1]!.category).toEqual({ id: 'plugin_tools', label: 'Plugin tools' })
@@ -73,20 +74,20 @@ describe('capabilities parser', () => {
     for (const version of ['1.2', '1.3', '1.4', '1.5', '1.6', '1.7']) {
       value.workflow.schema_version = version
       value.workflow.nodes.forEach((node: any) => { delete node.category })
-      expect(readCapabilities(value).nodes.every((node) => node.category === null)).toBe(true)
+      expect(() => readCapabilities(value)).toThrow('workflow.schema_version')
     }
   })
 
   it.each([undefined, false, [], {}, { id: 'Bad ID', label: 'Tools' }, { id: 'tools', label: '' }, { id: 'tools', label: ' padded ' },
     { id: 'tools', label: 'line\nbreak' }, { id: 'tools', label: 'x'.repeat(129) }, { id: 'tools', label: 'Tools', extra: true }])('rejects malformed 1.8 category %j', (category) => {
-    const value = parameterCatalog(); value.workflow.schema_version = '1.8'
+    const value = parameterCatalog(); value.workflow.schema_version = '1.16'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[0].category = category
     expect(() => readCapabilities(value)).toThrow()
   })
 
   it('rejects conflicting labels for one 1.8 category', () => {
-    const value = parameterCatalog(); value.workflow.schema_version = '1.8'
+    const value = parameterCatalog(); value.workflow.schema_version = '1.16'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[0].category = { id: 'tools', label: 'Tools' }
     value.workflow.nodes[1].category = { id: 'tools', label: 'Other tools' }
@@ -102,7 +103,7 @@ describe('capabilities parser', () => {
     expect(registry.validateConfig('extension', { strength: true })).not.toEqual([])
     for (const version of ['1.2', '1.3', '1.4']) {
       payload.workflow.schema_version = version
-      expect(readCapabilities(payload).nodes[3]?.fields[0].inputPort).toBeNull()
+      expect(() => readCapabilities(payload)).toThrow('workflow.schema_version')
     }
   })
 
@@ -126,16 +127,16 @@ describe('capabilities parser', () => {
     const mutations: Array<(payload: any) => void> = [
       (p) => { p.workflow.nodes.at(-1).config.fields[0].input_port = 'undeclared' },
       (p) => { p.workflow.nodes.at(-1).config.fields[0].input_port = 'audio' },
-      (p) => { p.workflow.nodes.at(-1).config.fields.push({ key: 'other', type: 'number', input_port: 'custom_parameter' }) },
+      (p) => { p.workflow.nodes.at(-1).config.fields.push(fieldFixture({ key: 'other', type: 'number', input_port: 'custom_parameter' })) },
       (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'string' },
       (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'json' },
       (p) => { p.workflow.nodes.at(-1).config.fields[0].type = 'select' },
-      (p) => { p.workflow.nodes.at(-1).is_parameter_source = true },
+      (p) => { p.workflow.nodes.at(-1).is_parameter_source = true; p.workflow.nodes.at(-1).terminal = true },
       (p) => { p.workflow.nodes[0].is_parameter_source = true },
       (p) => {
         p.workflow.ports.at(-1).type_id = 'string'
         p.workflow.nodes.at(-1).config.fields[0].type = 'string'
-        p.workflow.nodes.at(-1).presentation = { resource_input: { resource_type: 'audio', config_key: 'strength' } }
+        p.workflow.nodes.at(-1).presentation = { resource_input: { resource_type: 'audio', config_key: 'strength', collection_key: null } }
       },
     ]
     for (const mutate of mutations) {
@@ -143,22 +144,22 @@ describe('capabilities parser', () => {
       expect(() => readCapabilities(payload)).toThrow('参数绑定')
     }
     const valid = parameterCatalog()
-    valid.workflow.nodes.push({ type: 'future_value', label: 'Future root', input_ports: [], output_ports: ['custom_parameter'], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { fields: [] } })
+    valid.workflow.nodes.push(nodeFixture({ type: 'future_value', label: 'Future root', input_ports: [], output_ports: ['custom_parameter'], required_input_ports: [], required_inbound: 0, is_parameter_source: true, config: { fields: [] } }))
     expect(readCapabilities(valid).nodes[4]?.isParameterSource).toBe(true)
   })
 
   it('reads named required inputs from a multi-port 1.4 catalog and rejects inconsistent declarations', () => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.4'
+    payload.workflow.schema_version = '1.16'
     for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
     for (const id of ['voice', 'background', 'reference', 'dry_audio', 'wet_audio']) {
       payload.workflow.ports.push({ id, type_id: 'audio', label: id, capability_requirements: [] })
     }
-    payload.workflow.nodes.push({
+    payload.workflow.nodes.push(nodeFixture({
       type: 'multi', label: 'Multi', input_ports: ['voice', 'background', 'reference'],
       output_ports: ['dry_audio', 'wet_audio'], required_input_ports: ['voice', 'background'], required_inbound: 2,
       config: { kind: 'none', fields: [] },
-    })
+    }))
     const registry = createNodeRegistry(readCapabilities(payload))
     expect(registry.inputPortsForNode('multi')).toEqual(['voice', 'background', 'reference'])
     expect(registry.outputPortsForNode('multi')).toEqual(['dry_audio', 'wet_audio'])
@@ -185,7 +186,7 @@ describe('capabilities parser', () => {
 
   it.each([0, 1])('requires an explicit required-input array in a 1.4 catalog for node %s', (nodeIndex) => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.4'
+    payload.workflow.schema_version = '1.16'
     for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
     for (const invalid of [undefined, null, 'audio', {}, false]) {
       const broken = structuredClone(payload)
@@ -194,25 +195,25 @@ describe('capabilities parser', () => {
     }
   })
 
-  it.each(['1.2', '1.3'])('preserves required-input inference for the legacy %s catalog', (version) => {
+  it.each(['1.2', '1.3'])('rejects the old %s catalog without inferring required inputs', (version) => {
     const payload = structuredClone(livePayload) as any
     payload.workflow.schema_version = version
     for (const declaration of [undefined, null]) {
       for (const node of payload.workflow.nodes) node.required_input_ports = declaration
-      expect(readCapabilities(payload).nodes.map((node) => node.requiredInputPorts)).toEqual([[], ['audio'], ['audio']])
+      expect(() => readCapabilities(payload)).toThrow('workflow.schema_version')
     }
   })
 
   it('reads resource and preview presentation metadata from the 1.3 catalog without node type branches', () => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.3'
-    payload.workflow.nodes[0].config.fields = [{ key: 'resource_id', type: 'string', required: false, default: null }]
-    payload.workflow.nodes[0].presentation = { resource_input: { resource_type: 'audio', config_key: 'resource_id' } }
+    payload.workflow.schema_version = '1.16'
+    payload.workflow.nodes[0].config.fields = [fieldFixture({ key: 'resource_id', type: 'string', required: false, default: null })]
+    payload.workflow.nodes[0].presentation = { resource_input: { resource_type: 'audio', config_key: 'resource_id', collection_key: null } }
     payload.workflow.nodes[2].presentation = { preview: { renderer: 'future_renderer' } }
     const registry = createNodeRegistry(readCapabilities(payload))
-    expect(registry.kind('audio_input')?.resourceInput).toEqual({ resourceType: 'audio', configKey: 'resource_id' })
+    expect(registry.kind('audio_input')?.resourceInput).toEqual({ resourceType: 'audio', configKey: 'resource_id', collectionKey: null })
     expect(registry.kind('audio_output')?.preview).toEqual({ renderer: 'future_renderer' })
-    expect(registry.capabilities.schemaVersion).toBe('1.3')
+    expect(registry.capabilities.schemaVersion).toBe('1.16')
     payload.workflow.nodes[0].presentation.resource_input.config_key = 'missing_field'
     expect(() => readCapabilities(payload)).toThrow()
   })
@@ -220,7 +221,7 @@ describe('capabilities parser', () => {
   it('accepts the live response shape and derives an editable registry', () => {
     const caps = readCapabilities(livePayload)
     const registry = createNodeRegistry(caps)
-    expect(caps.schemaVersion).toBe('1.2')
+    expect(caps.schemaVersion).toBe('1.16')
     expect(caps.nodeTypes).toEqual(['audio_input', 'asr', 'audio_output'])
     expect(caps.asr.providers.map((provider) => provider.value)).toEqual(['mock'])
     expect(registry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
@@ -266,7 +267,7 @@ describe('capabilities parser', () => {
   it('rejects missing nodes, unknown ports and malformed node fields', () => {
     expect(() => readCapabilities({ ...livePayload, workflow: { ...livePayload.workflow, nodes: [] } })).toThrow('没有节点')
     const unknownPort = structuredClone(livePayload)
-    unknownPort.workflow.nodes[1].input_ports = ['video']
+    unknownPort.workflow.nodes[1].input_ports = ['video']; unknownPort.workflow.nodes[1].required_input_ports = ['video']
     expect(() => readCapabilities(unknownPort)).toThrow('端口未声明')
     const badField = structuredClone(livePayload) as any
     badField.workflow.nodes[1].config.fields[0].type = 'unsafe'
@@ -288,14 +289,14 @@ describe('capabilities parser', () => {
 
   it('accepts a catalog-added node without changing generic parser or registry code', () => {
     const extended = structuredClone(livePayload) as any
-    extended.workflow.nodes.splice(1, 0, {
+    extended.workflow.nodes.splice(1, 0, nodeFixture({
       type: 'denoise', label: '降噪', input_ports: ['audio'], output_ports: ['denoised_audio'], terminal: false,
       max_instances: null, required_inbound: 1, removable: true,
       config: { kind: 'denoise', fields: [
-        { key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5, options: [] },
-        { key: 'mode', type: 'select', required: false, default: 'soft', options: [{ value: 'soft', label: '柔和' }, { value: 'hard', label: '强力' }] },
+        fieldFixture({ key: 'strength', type: 'integer', required: true, default: 2, minimum: 1, maximum: 5, options: [] }),
+        fieldFixture({ key: 'mode', type: 'select', required: false, default: 'soft', options: [{ value: 'soft', label: '柔和' }, { value: 'hard', label: '强力' }] }),
       ] },
-    })
+    }))
     extended.workflow.ports.push({ id: 'denoised_audio', type_id: 'audio', label: '降噪音频' })
     const registry = createNodeRegistry(readCapabilities(extended))
     expect(registry.createDefaultConfig('denoise')).toEqual({ strength: 2, mode: 'soft' })
@@ -322,14 +323,14 @@ describe('capabilities parser', () => {
 
   it('preserves exact extension node, field, and option labels in both languages', () => {
     const extended = structuredClone(livePayload) as any
-    extended.workflow.nodes.push({
+    extended.workflow.nodes.push(nodeFixture({
       type: 'extension', label: '扩展节点 · Plugin', add_label: '插件入口',
       input_ports: ['audio'], output_ports: ['audio'], config: { kind: 'extension', fields: [
-        { key: 'provider', label: '插件服务', type: 'select', default: 'future', options: [{ value: 'future', label: 'Future 服务' }] },
+        fieldFixture({ key: 'provider', label: '插件服务', type: 'select', default: 'future', options: [{ value: 'future', label: 'Future 服务' }] }),
       ] },
-    })
+    }))
     extended.workflow.nodes[1].config.fields[0].options.push({ value: 'future', label: 'Future 服务' })
-    extended.workflow.nodes[1].config.fields.push({ key: 'custom', label: '自定义选项', type: 'string', default: '用户值' })
+    extended.workflow.nodes[1].config.fields.push(fieldFixture({ key: 'custom', label: '自定义选项', type: 'string', default: '用户值' }))
     const caps = readCapabilities(extended)
     const before = JSON.stringify(caps)
     const registry = createNodeRegistry(caps)
@@ -360,7 +361,7 @@ describe('capabilities parser', () => {
 describe('resource collection capability schema 1.6', () => {
   function payload(): any {
     const value: any = structuredClone(livePayload)
-    value.workflow.schema_version = '1.6'
+    value.workflow.schema_version = '1.16'
     for (const node of value.workflow.nodes) {
       node.is_parameter_source = false
       node.required_input_ports = node.required_inbound ? node.input_ports : []
@@ -369,7 +370,7 @@ describe('resource collection capability schema 1.6', () => {
     const source = value.workflow.nodes[0]
     source.type = 'input_extension'
     source.presentation = { resource_input: { resource_type: 'audio', config_key: 'chosen', collection_key: 'chosen_many' } }
-    source.config.fields = [{ key: 'chosen', type: 'string', required: false, default: null, input_port: null }, { key: 'chosen_many', type: 'json', required: false, default: null, input_port: null }]
+    source.config.fields = [fieldFixture({ key: 'chosen', type: 'string', required: false, default: null, input_port: null }), fieldFixture({ key: 'chosen_many', type: 'json', required: false, default: null, input_port: null })]
     return value
   }
   it('derives an extension collection key and validates ordered unique collections without changing defaults', () => {
@@ -394,8 +395,8 @@ describe('resource collection capability schema 1.6', () => {
   })
   it('separates creation defaults from defaults used by existing graph fields', () => {
     const value = payload()
-    value.workflow.nodes[2].config.fields = [{ key: 'mode', type: 'select', required: false, default: 'old', creation_default: 'new', input_port: null,
-      options: [{ value: 'old', label: 'Old' }, { value: 'new', label: 'New' }] }]
+    value.workflow.nodes[2].config.fields = [fieldFixture({ key: 'mode', type: 'select', required: false, default: 'old', creation_default: 'new', input_port: null,
+      options: [{ value: 'old', label: 'Old' }, { value: 'new', label: 'New' }] })]
     const registry = createNodeRegistry(readCapabilities(value))
     expect(registry.createDefaultConfig('audio_output')).toEqual({ mode: 'old' })
     expect(registry.createDefaultConfig('audio_output', true)).toEqual({ mode: 'new' })

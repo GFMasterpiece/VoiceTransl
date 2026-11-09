@@ -48,7 +48,7 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
         )
         assert initial.status_code == 200
         initial = initial.json()
-        path = app.state.store.project_dir(pid) / "workflow.json"
+        path = app.state.store.project_dir(pid) / "workflow-v2.json"
         legacy = json.loads(path.read_text(encoding="utf-8"))
         for node in legacy["nodes"]:
             node.pop("size", None)

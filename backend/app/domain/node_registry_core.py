@@ -34,6 +34,8 @@ def register_type(
     parent_type_id: str | None = None,
     capabilities: set[str] | frozenset[str] = frozenset(),
     checkpoint_codec: CheckpointCodec | None = None,
+    config_value: Callable[[object], object] | None = None,
+    presentation: dict[str, str] | None = None,
 ) -> DataTypeDefinition:
     """Register a logical runtime type used by one or more ports."""
 
@@ -46,6 +48,15 @@ def register_type(
         or not callable(checkpoint_codec.decode)
     ):
         raise ValueError("checkpoint codec must have an explicit id, version and handlers")
+    if config_value is not None and not callable(config_value):
+        raise ValueError("config_value must be callable")
+    if presentation is not None and (
+        not isinstance(presentation, dict)
+        or set(presentation) != {"color"}
+        or not isinstance(presentation["color"], str)
+        or not re.fullmatch(r"#[0-9a-fA-F]{6}", presentation["color"])
+    ):
+        raise ValueError("type presentation must declare one hex color")
     if parent_type_id is not None and parent_type_id not in TYPE_DEFINITIONS:
         raise ValueError(f"parent type is not registered: {parent_type_id}")
     if type_id in TYPE_DEFINITIONS:
@@ -58,6 +69,8 @@ def register_type(
         parent_type_id=parent_type_id,
         capabilities=frozenset(capabilities),
         checkpoint_codec=checkpoint_codec,
+        config_value=config_value,
+        presentation=presentation,
     )
     TYPE_DEFINITIONS[type_id] = definition
     return definition
@@ -181,6 +194,7 @@ def type_catalog() -> list[dict[str, object]]:
             "label": definition.label,
             "parent_type_id": definition.parent_type_id,
             "capabilities": sorted(definition.capabilities),
+            "presentation": definition.presentation,
         }
         for definition in TYPE_DEFINITIONS.values()
     ]
@@ -246,7 +260,7 @@ def _inline_connection_binding(definition):
     ):
         raise ValueError("invalid inline connection declaration")
     if any(
-        not (key == "region_key" and binding[key] is None)
+        not (key in {"region_key", "timeout_key"} and binding[key] is None)
         and (
             not isinstance(binding[key], str)
             or not re.fullmatch(BINDING_IDENTIFIER_PATTERN, binding[key])
@@ -326,6 +340,14 @@ def _validate_categories(definitions):
 
 
 def validate_node_definition(definition: NodeDefinition) -> None:
+    if definition.evaluation_kind not in {"configuration", "processing"}:
+        raise ValueError("invalid evaluation kind")
+    if definition.can_start_without_inputs and definition.evaluation_kind != "configuration":
+        raise ValueError("only configuration nodes may start without inputs")
+    if definition.evaluation_kind == "configuration" and not callable(definition.evaluate_config):
+        raise ValueError("configuration nodes require evaluate_config")
+    if any(port not in definition.input_ports for port in definition.binding_inputs):
+        raise ValueError("binding inputs must name declared ports")
     if type(definition.debug_only) is not bool:
         raise ValueError("node debug_only must be a boolean")
     if not isinstance(definition.execution_version, str) or not definition.execution_version:
@@ -368,6 +390,10 @@ def validate_node_definition(definition: NodeDefinition) -> None:
     if len(set(bound_ports)) != len(bound_ports):
         raise ValueError("parameter input bindings must be unique")
     for item in definition.fields:
+        if item.widget is not None and (
+            item.type != "string" or item.suggestion_source is not None
+        ):
+            raise ValueError("multiline widget requires a plain string")
         if item.suggestion_source is not None and (
             item.suggestion_source != "languages" or item.type != "string"
         ):
@@ -385,6 +411,8 @@ def validate_node_definition(definition: NodeDefinition) -> None:
             raise ValueError("parameter input ports must be optional")
         port = PORT_DEFINITIONS.get(item.input_port)
         expected_type = item.type
+        if item.input_type_id is not None:
+            expected_type = item.input_type_id
         if expected_type == "select":
             if not item.options or any(
                 not isinstance(option.get("value"), str) for option in item.options
@@ -393,7 +421,7 @@ def validate_node_definition(definition: NodeDefinition) -> None:
             expected_type = "string"
         if (
             port is None
-            or expected_type not in {"string", "integer", "number", "boolean"}
+            or expected_type not in TYPE_DEFINITIONS
             or not type_is_compatible(port.type_id, expected_type)
         ):
             raise ValueError("parameter input type must match its configuration field")
@@ -459,6 +487,8 @@ def node_catalog() -> list[dict[str, object]]:
             "type": item.type,
             "label": item.label,
             "debug_only": item.debug_only,
+            "evaluation_kind": item.evaluation_kind,
+            "can_start_without_inputs": item.can_start_without_inputs,
             "category": _category(item),
             "input_ports": list(item.input_ports),
             "output_ports": list(item.output_ports),

@@ -5,6 +5,25 @@ from __future__ import annotations
 from typing import Any
 
 SCHEMA_VERSION = "1.0"
+CONFIGURATION_SCHEMA_VERSION = "2.0"
+
+
+def document_version(document):
+    return (
+        CONFIGURATION_SCHEMA_VERSION
+        if document.split(".")[0]
+        in {
+            "workflow",
+            "workflow snapshot",
+            "workflow request",
+            "workflow validation request",
+            "workflow run",
+            "batch",
+            "settings",
+            "settings request",
+        }
+        else SCHEMA_VERSION
+    )
 
 
 class SchemaVersionError(ValueError):
@@ -12,16 +31,17 @@ class SchemaVersionError(ValueError):
         self.document = document
         self.version = version
         super().__init__(
-            f"{document} 的 schema_version 必须为 {SCHEMA_VERSION!r}，收到 {version!r}"
+            f"{document} 的 schema_version 必须为 {document_version(document)!r}，收到 {version!r}"
         )
 
 
 def require_schema_version(value: object, document: str = "document") -> str:
     """Accept only an explicit current version."""
 
-    if not isinstance(value, str) or value != SCHEMA_VERSION:
+    expected = document_version(document)
+    if not isinstance(value, str) or value != expected:
         raise SchemaVersionError(document, value)
-    return SCHEMA_VERSION
+    return expected
 
 
 def _require_nested(payload: Any, path: str, document: str) -> None:

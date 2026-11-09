@@ -127,7 +127,8 @@ from .node_registry_core import (
 
 register_builtin_types(register_type, register_port)
 for _port, _label in SOURCE_INFO_PORT_LABELS.items():
-    register_port(_port, type_id="string", label=_label)
+    if _port not in PORT_DEFINITIONS:
+        register_port(_port, type_id="string", label=_label)
 for _definition in builtin_definitions():
     register_node(_definition)
 

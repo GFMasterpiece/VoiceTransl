@@ -27,7 +27,7 @@ def extension_registry():
     registries = (NODE_DEFINITIONS, PORT_DEFINITIONS, TYPE_DEFINITIONS)
     snapshots = [dict(registry) for registry in registries]
     calls = []
-    for port in ("dry_audio", "wet_audio", "voice", "background", "reference", "mixed_audio"):
+    for port in ("dry_audio", "wet_audio", "voice", "background_audio", "reference", "mixed_audio"):
         register_port(port, type_id="audio", label=port)
 
     async def split(context):
@@ -41,9 +41,9 @@ def extension_registry():
     async def join(context):
         calls.append(("join", tuple(context.inputs)))
         assert context.input("voice").port == "voice"
-        assert context.input("background").port == "background"
+        assert context.input("background_audio").port == "background_audio"
         assert context.input("voice").value.media_type == "audio/dry"
-        assert context.input("background").value.media_type == "audio/wet"
+        assert context.input("background_audio").value.media_type == "audio/wet"
         result = NodeResult()
         result.add("mixed_audio", replace(context.input("voice").value, media_type="audio/wav"))
         return result
@@ -63,9 +63,9 @@ def extension_registry():
         NodeDefinition(
             type="test_join",
             label="Join",
-            input_ports=("voice", "background", "reference"),
+            input_ports=("voice", "background_audio", "reference"),
             output_ports=("mixed_audio",),
-            required_input_ports=("voice", "background"),
+            required_input_ports=("voice", "background_audio"),
             terminal=False,
             config_kind="none",
             execute=join,
@@ -94,7 +94,7 @@ def graph(*, backup=False):
             source="split",
             source_port="wet_audio",
             target="join",
-            target_port="background",
+            target_port="background_audio",
         ),
         dict(
             id="e4", source="join", source_port="mixed_audio", target="output", target_port="audio"
@@ -136,16 +136,19 @@ async def test_named_ports_fan_out_join_export_and_keep_history_readable(
         run = (await client.get(root + "/" + started.json()["id"])).json()
         assert run["status"] == "completed", run
         assert all(node["status"] == "completed" for node in run["nodes"])
-        assert extension_registry == [("split", ("audio",)), ("join", ("voice", "background"))]
+        assert extension_registry == [
+            ("split", ("audio",)),
+            ("join", ("voice", "background_audio")),
+        ]
         output = next(node for node in run["nodes"] if node["node_id"] == "output")
-        assert output["artifact"]["filename"] == "joined.wav"
+        assert output["artifact"]["filename"] == "joined_00001.wav"
         source = (
             app.state.store.scope(pid, aid)
             .source_path(pid, app.state.store.audio(pid, aid).source.path)
             .read_bytes()
         )
         assert (await client.get(output["artifact"]["download_url"])).content == source
-        assert run["schema_version"] == run["workflow"]["schema_version"] == "1.0"
+        assert run["schema_version"] == run["workflow"]["schema_version"] == "2.0"
         old_run = (await client.get(root + "/" + run["id"])).content
         body = graph()
         body["nodes"][1]["position"] = {"x": 100, "y": -120}
@@ -154,8 +157,8 @@ async def test_named_ports_fan_out_join_export_and_keep_history_readable(
         assert (await client.get(root + "/" + run["id"])).content == old_run
         caps = (await client.get("/api/v1/capabilities")).json()
         join = next(node for node in caps["workflow"]["nodes"] if node["type"] == "test_join")
-        assert join["input_ports"] == ["voice", "background", "reference"]
-        assert join["required_input_ports"] == ["voice", "background"]
+        assert join["input_ports"] == ["voice", "background_audio", "reference"]
+        assert join["required_input_ports"] == ["voice", "background_audio"]
         assert join["required_inbound"] == 2
         NODE_DEFINITIONS.pop("test_join")
         assert (await client.get(root + "/" + run["id"])).content == old_run
@@ -165,9 +168,11 @@ async def test_named_ports_fan_out_join_export_and_keep_history_readable(
 def test_join_validates_missing_and_duplicate_connections_per_input_port(extension_registry):
     assert validate(graph()) == []
     missing = graph()
-    missing["edges"] = [edge for edge in missing["edges"] if edge["target_port"] != "background"]
+    missing["edges"] = [
+        edge for edge in missing["edges"] if edge["target_port"] != "background_audio"
+    ]
     assert any(
-        issue.code == "INVALID_NODE_INPUT_COUNT" and "background" in issue.message
+        issue.code == "INVALID_NODE_INPUT_COUNT" and "background_audio" in issue.message
         for issue in validate(missing)
     )
     duplicate = graph()

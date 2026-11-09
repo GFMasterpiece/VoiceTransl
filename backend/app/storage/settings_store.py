@@ -7,7 +7,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..domain.schema import SCHEMA_VERSION, require_schema_version
+from ..domain.schema import CONFIGURATION_SCHEMA_VERSION as SCHEMA_VERSION
+from ..domain.schema import require_schema_version
 from ..domain.settings import (
     GlobalSettings,
     default_definitions,
@@ -35,7 +36,7 @@ class SettingsDocument(BaseModel):
 
 class SettingsStore:
     def __init__(self, data_dir, startup):
-        self.path = Path(data_dir) / "settings.json"
+        self.path = Path(data_dir) / "settings-v2.json"
         self.secrets = SecretStore(data_dir)
         self.lock = asyncio.Lock()
         self.initial = GlobalSettings(

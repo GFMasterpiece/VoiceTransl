@@ -69,7 +69,12 @@ def test_workflow_asr_defaults_are_strict_and_same_as_explicit_values():
     assert explicit == default
     nodes, edges = text_graph()
     normalized, _ = normalize_workflow_graph(nodes, edges)
-    assert normalized[2].config == default.model_dump(mode="json")
+    assert normalized[2].config == {}
+    assert not validate_workflow_graph(nodes, edges)
+    nodes[2].config = default.model_dump(mode="json")
+    assert any(
+        issue.code == "INVALID_NODE_CONFIG" for issue in validate_workflow_graph(nodes, edges)
+    )
 
 
 @pytest.mark.parametrize(

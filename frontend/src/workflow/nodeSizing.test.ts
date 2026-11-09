@@ -1,3 +1,5 @@
+import { emptySettings } from './fixtures'
+import { catalogFixture, nodeFixture, fieldFixture, runFixture } from './fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
@@ -7,15 +9,15 @@ import {
 import { readCapabilities } from './capabilities'
 import { createNodeRegistry } from './nodeRegistry'
 
-const payload = {
+const payload = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: '1.3',
+    schema_version: "1.16",
     nodes: [
-      { type: 'source', label: 'Source', is_source: true, position_x: 0, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } },
-      { type: 'processor', label: 'Processor', position_x: 500, input_ports: ['audio'], output_ports: ['audio'], config: { kind: 'processor', fields: [] } },
-      { type: 'future_audio', label: 'Audio preview', position_x: 500, input_ports: ['audio'], output_ports: [], terminal: true, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'audio' } } },
-      { type: 'future_text', label: 'Text preview', position_x: 500, input_ports: ['audio'], output_ports: [], terminal: true, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'text' } } },
+      nodeFixture({ type: 'source', label: 'Source', is_source: true, position_x: 0, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } }),
+      nodeFixture({ type: 'processor', label: 'Processor', position_x: 500, input_ports: ['audio'], output_ports: ['audio'], config: { kind: 'processor', fields: [] } }),
+      nodeFixture({ type: 'future_audio', label: 'Audio preview', position_x: 500, input_ports: ['audio'], output_ports: [], terminal: true, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'audio' } } }),
+      nodeFixture({ type: 'future_text', label: 'Text preview', position_x: 500, input_ports: ['audio'], output_ports: [], terminal: true, config: { kind: 'none', fields: [] }, presentation: { preview: { renderer: 'text' } } }),
     ],
     ports: ['audio'],
     constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 },
@@ -23,12 +25,12 @@ const payload = {
   },
   asr: { providers: [] },
   export: { formats: [], naming_modes: [] },
-}
+})
 const capabilities = readCapabilities(payload)
 const registry = createNodeRegistry(capabilities)
 const node = (id = 'node-1', type = 'processor', x = 500, y = 176): WorkflowNode => ({ id, type, config: {}, position: { x, y } })
 const document = (nodes = [node()]): WorkflowDocument => ({
-  schema_version: '1.0', project_id: 'p1', revision: 1, workflow_revision: 1,
+  schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 1,
   updated_at: '2026-11-01T00:00:00Z', nodes, edges: [],
 })
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response
@@ -70,7 +72,7 @@ describe('workflow node dimensions', () => {
 
   it('provides usable form width from field metadata while retaining a legacy stored size unchanged', () => {
     const extended: any = structuredClone(payload)
-    extended.workflow.nodes[1].config.fields = [{ key: 'model', type: 'string', default: 'free-model' }]
+    extended.workflow.nodes[1].config.fields = [fieldFixture({ key: 'model', type: 'string', default: 'free-model' })]
     const formRegistry = createNodeRegistry(readCapabilities(extended))
     const legacy = { ...node(), size: { width: 188, height: 92 } }
     expect(workflowNodeSize(legacy, formRegistry).width).toBe(272)
@@ -146,7 +148,7 @@ describe('workflow node dimensions', () => {
     expect(store.actionLoading).toBe(true)
     store.updateNode('node-1', { size: { width: 500, height: 500 } })
     expect(store.draft.nodes[0]).not.toHaveProperty('size')
-    resolveStart(response({ id: 'run1', audio_id: 'a1', status: 'completed', nodes: [], workflow: cloneDocument(store.draft) }))
+    resolveStart(response(runFixture({ id: 'run1', audio_id: 'a1', status: 'completed', nodes: [], workflow: cloneDocument(store.draft) })))
     await pendingStart
     expect(store.actionLoading).toBe(false)
   })
@@ -162,6 +164,7 @@ describe('workflow node dimensions', () => {
     const store = createStore()
     let saved = document()
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(_input).endsWith('/settings')) return Promise.resolve(response(emptySettings()))
       if (init?.method === 'PUT') {
         const body = JSON.parse(init.body as string)
         saved = { ...saved, nodes: body.nodes, edges: body.edges, revision: 2 }

@@ -13,7 +13,7 @@ def graph(aid=None, text=False):
     edges = []
     previous, port = "input", "audio"
     if text:
-        nodes.append(dict(id="asr", type="asr", config={"provider": "mock", "language": "ja"}))
+        nodes.append(dict(id="asr", type="asr", config={}))
         edges.append(
             dict(
                 id="to-asr", source="input", source_port="audio", target="asr", target_port="audio"

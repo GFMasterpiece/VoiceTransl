@@ -1,3 +1,5 @@
+import { emptySettings } from './workflow/fixtures'
+import { catalogFixture, fieldFixture, nodeFixture, typeFixture, runFixture } from './workflow/fixtures'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -13,8 +15,8 @@ import { copySelection, parseWorkflowFile, preparePaste, serializeWorkflow } fro
 import { connectionTarget } from './workflow/providerConnections'
 
 function catalog(streaming = false): any {
-  const field = (key: string, type = 'string', value: unknown = '', extra: object = {}) => ({ key, label: key, type, default: value, required: false, input_port: null, ...extra })
-  const node = (type: string, fields: any[] = []) => ({ type, label: type, category: null, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_source: false, is_parameter_source: false, terminal: false, config: { kind: type, fields } })
+  const field = (key: string, type = 'string', value: unknown = '', extra: object = {}) => (fieldFixture({ key, label: key, type, default: value, required: false, input_port: null, ...extra }))
+  const node = (type: string, fields: any[] = []) => (nodeFixture({ type, label: type, category: null, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_source: false, is_parameter_source: false, terminal: false, config: { kind: type, fields } }))
   const source = { ...node('source_extension', [field('single','string',null),field('many','json',null)]), output_ports:['audio'], is_source:true, max_instances:1, removable:false, presentation:{resource_input:{resource_type:'audio', config_key:'single',collection_key:'many'}} }
   const cloud = { ...node('remote_extension', [field('endpoint','string','https://inline.service.test/api'),field('timeout','integer',37,{minimum:1,maximum:3600}),field('region','string',null),field('credential_handle','string',null),field('model','string','model-not-in-a-list'),field('language','string','',{input_port:'language'}),field('additional_parameters','json',{})]), input_ports:['audio','language'],required_input_ports:['audio'],required_inbound:1,output_ports:['transcript'],category:{id:'speech_recognition',label:'语音识别'}, presentation:{inline_connection_input:{provider_type:'extension_service',label:'File service',base_url_key:'endpoint',timeout_key:'timeout',region_key:'region',credential_ref_key:'credential_handle',data_handling:{temporary_upload_retention_hours:17,remote_cancel_pending_only:true}}} }
   const stream = structuredClone(cloud)
@@ -26,7 +28,7 @@ function catalog(streaming = false): any {
   const output={...node('text_extension'),input_ports:['transcript'],required_input_ports:['transcript'],required_inbound:1,terminal:true}
   const value={...node('language_value',[field('value','string','custom-lang')]),output_ports:['language'],is_parameter_source:true}
   const config=streaming?{endpoint:'wss://stream.service.test/api-ws/v1/inference',timeout:37,credential_handle:null,model:'qwen-audio-3.0-asr-flash-streaming',language:'',additional_parameters:{}}:{endpoint:'https://inline.service.test/api',timeout:37,region:null,credential_handle:'saved-ref',model:'model-not-in-a-list',language:'',additional_parameters:{}}
-  return {schema_version:'1.0',workflow:{schema_version:'1.11',nodes:[source,cloud,output,value,stream],ports:['audio','transcript','language'].map(id=>({id,type_id:id==='language'?'string':id,label:id})),data_types:['audio','transcript','string'].map(id=>({id,label:id,parent_type_id:null,capabilities:[]})),constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},default_graph:{nodes:[{id:'input',type:'source_extension',config:{},position:{x:0,y:0}},{id:'cloud',type:streaming?'qwen_asr_streaming':'remote_extension',config,position:{x:450,y:0}},{id:'output',type:'text_extension',config:{},position:{x:900,y:0}}],edges:[{id:'first',source:'input',source_port:'audio',target:'cloud',target_port:'audio'},{id:'second',source:'cloud',source_port:'transcript',target:'output',target_port:'transcript'}]}},asr:{providers:[]}}
+  return catalogFixture({schema_version:'1.0',workflow:{schema_version:"1.16",nodes:[source,cloud,output,value,stream],ports:['audio','transcript','language'].map(id=>({id,type_id:id==='language'?'string':id,label:id})),data_types:['audio','transcript','string'].map(id=>(typeFixture({id,label:id,parent_type_id:null,capabilities:[]}))),constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},default_graph:{nodes:[{id:'input',type:'source_extension',config:{},position:{x:0,y:0}},{id:'cloud',type:streaming?'qwen_asr_streaming':'remote_extension',config,position:{x:450,y:0}},{id:'output',type:'text_extension',config:{},position:{x:900,y:0}}],edges:[{id:'first',source:'input',source_port:'audio',target:'cloud',target_port:'audio'},{id:'second',source:'cloud',source_port:'transcript',target:'output',target_port:'transcript'}]}},asr:{providers:[]}})
 }
 const inlineCatalog = () => catalog()
 const streamingCatalog = () => catalog(true)
@@ -37,13 +39,14 @@ let root:HTMLDivElement|undefined
 function setup(options:{inline?:boolean;streaming?:boolean;legacy?:boolean}={}) {
   const state={rejectWorkflow:false,loseSaveResponse:false}
   const initial=catalog(options.streaming)
-  let document={...initial.workflow.default_graph,schema_version:'1.0',project_id:'p1',revision:1,workflow_revision:1,updated_at:'2026-11-08T00:00:00Z'}
+  let document={...initial.workflow.default_graph,schema_version:"2.0",project_id:'p1',revision:1,workflow_revision:1,updated_at:'2026-11-08T00:00:00Z'}
   if(options.legacy) document.nodes[1].config={provider_profile_id:'old-profile',connection_mode:'profile',api_key_env:'OLD_ENV',model:'old-model',language:'',additional_parameters:{}}
   const savedRequests=new Map<string,any>()
   const audio={id:'a1',source:{original_name:'local.wav',language:'ja',size_bytes:4}}
   const project={id:'p1',name:'Connection test',source:audio.source,audios:[audio],created_at:'2026-11-08',updated_at:'2026-11-08'}
   const fetcher=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
     const path=String(input)
+    if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
     if(path.endsWith('/capabilities'))return response(catalog(options.streaming))
     if(path.includes('/projects?'))return response({items:[project],total:1,limit:20,offset:0})
     if(path.endsWith('/projects/p1'))return response(project)
@@ -78,8 +81,8 @@ afterEach(()=>{app?.unmount();root?.remove();app=undefined;root=undefined;vi.res
 describe('inline node credentials', () => {
   it('rejects legacy connection fields visibly without changing the graph and allows deletion and rebuilding', async () => {
     const { workflow, fetcher } = setup({ legacy: true }); await settle(); await openProject()
-    expect(root!.querySelector('[data-cloud-rebuild]')!.textContent).toContain('删除并重新添加')
-    expect(root!.querySelector('[data-credential-input], [data-open-profiles], [data-connection-mode]')).toBeNull()
+    expect(workflow.registry!.validateConfig('remote_extension', workflow.draft.nodes[1]!.config)[0]!.code).toBe('INVALID_NODE_CONFIG')
+    expect(root!.querySelector('[data-open-profiles], [data-connection-mode], [data-cloud-rebuild]')).toBeNull()
     expect(workflow.draft.nodes[1]!.config.provider_profile_id).toBe('old-profile')
     expect(workflow.dirty).toBe(false)
     expect(root!.querySelector<HTMLButtonElement>('[data-run-workflow]')!.disabled).toBe(true)
@@ -90,7 +93,7 @@ describe('inline node credentials', () => {
     expect(Object.keys(fresh.config)).not.toContain('connection_mode')
     expect(Object.keys(fresh.config)).not.toContain('api_key_env')
     expect(Object.keys(fresh.config)).not.toContain('provider_profile_id')
-    expect(workflow.legacyConnectionUnsupported).toBe(false)
+    expect(workflow.invalidNodeConfig).toBe(false)
     expect(root!.querySelector('[data-credential-input]')).not.toBeNull()
   })
   async function typeKey(value = 'private-test-key') {
@@ -217,7 +220,7 @@ describe('inline node credentials', () => {
   it('compares explicit saved credential versions and displays historical inline destinations from the frozen graph', async () => {
     const { workflow } = setup({ inline: true }); await settle(); await openProject()
     const frozen = JSON.parse(JSON.stringify(workflow.draft))
-    workflow.run = { id: 'completed', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] }
+    workflow.run = runFixture({ id: 'completed', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] })
     expect(workflow.runMatchesDraft).toBe(true)
     await typeKey(); await workflow.save(); await settle()
     expect(workflow.runMatchesDraft).toBe(false)
@@ -323,7 +326,7 @@ describe('independent streaming node connections', () => {
     expect(connectionTarget('wss://user:secret@stream.service.test/path?token=hidden#key')).toBe('wss://stream.service.test/path')
     const { workflow } = setup({ streaming: true }); await settle(); await openProject()
     const frozen = JSON.parse(JSON.stringify(workflow.draft))
-    workflow.run = { id: 'done', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] }
+    workflow.run = runFixture({ id: 'done', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', started_at: '', finished_at: '', cancel_requested: false, error: null, workflow: frozen, nodes: [] })
     expect(workflow.runMatchesDraft).toBe(true)
     workflow.updateNode('cloud', { config: { ...workflow.draft.nodes[1]!.config, endpoint: 'wss://changed.service.test/another-path' } })
     expect(workflow.runMatchesDraft).toBe(false)

@@ -106,7 +106,7 @@ async def test_default_workflow_and_validation_contract(tmp_path):
             "filename_stem": "audio-copy",
             "naming_mode": "prefix_sequence",
         }
-        assert not (app.state.store.project_dir(pid) / "workflow.json").exists()
+        assert not (app.state.store.project_dir(pid) / "workflow-v2.json").exists()
 
         graph = graph_with_two_outputs()
         response = await client.post(
@@ -175,7 +175,7 @@ async def test_workflow_versions_ignore_layout_and_edge_ids_but_keep_immutable_h
 
         same = await save_graph(client, pid, third["revision"], graph)
         assert same["revision"] == 3
-        history = app.state.store.project_dir(pid) / "workflow-revisions"
+        history = app.state.store.project_dir(pid) / "workflow-revisions-v2"
         assert sorted(path.name for path in history.iterdir()) == [
             "00000001.json",
             "00000002.json",
@@ -207,8 +207,10 @@ async def test_first_save_of_default_graph_persists_revision_one(tmp_path):
         )
         assert saved["revision"] == 1
         assert saved["workflow_revision"] == 1
-        assert (app.state.store.project_dir(pid) / "workflow.json").is_file()
-        assert (app.state.store.project_dir(pid) / "workflow-revisions" / "00000001.json").is_file()
+        assert (app.state.store.project_dir(pid) / "workflow-v2.json").is_file()
+        assert (
+            app.state.store.project_dir(pid) / "workflow-revisions-v2" / "00000001.json"
+        ).is_file()
 
 
 @pytest.mark.asyncio
@@ -218,7 +220,7 @@ async def test_workflow_history_publication_is_repairable_after_failure(tmp_path
         pid, _ = await create_project(client)
         graph = graph_with_two_outputs()
         first = await save_graph(client, pid, 0, graph)
-        history = app.state.store.project_dir(pid) / "workflow-revisions" / "00000001.json"
+        history = app.state.store.project_dir(pid) / "workflow-revisions-v2" / "00000001.json"
         assert history.is_file()
 
     # Simulate a stop after the current document was committed but before the
@@ -237,7 +239,7 @@ async def test_workflow_history_publication_is_repairable_after_failure(tmp_path
         assert second["workflow_revision"] == current["workflow_revision"]
         assert (
             app.state.store.project_dir(pid)
-            / "workflow-revisions"
+            / "workflow-revisions-v2"
             / f"{second['revision']:08d}.json"
         ).is_file()
 
@@ -266,8 +268,8 @@ async def test_workflow_run_copies_independent_bytes_and_isolated_history(tmp_pa
         assert run["status"] == "completed"
         assert {node["status"] for node in run["nodes"]} == {"completed"}
         records = {node["node_id"]: node for node in run["nodes"]}
-        assert records["output-a"]["artifact"]["filename"] == "first.wav"
-        assert records["output-b"]["artifact"]["filename"] == "second.wav"
+        assert records["output-a"]["artifact"]["filename"] == "first_00001.wav"
+        assert records["output-b"]["artifact"]["filename"] == "second_00001.wav"
         assert records["output-a"]["artifact"]["size_bytes"] == len(source_payload)
         for node_id in ("output-a", "output-b"):
             metadata_url = records[node_id]["artifact"]["download_url"]
@@ -483,10 +485,10 @@ async def test_restart_scan_does_not_create_workflow_dirs_for_legacy_project(tmp
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _ = await create_project(client)
     project_dir = app.state.store.project_dir(pid)
-    assert not (project_dir / "workflow-runs").exists()
+    assert not (project_dir / "workflow-runs-v2").exists()
     restarted = FileSystemProjectStore(tmp_path)
     restarted.mark_workflow_runs_interrupted()
-    assert not (project_dir / "workflow-runs").exists()
+    assert not (project_dir / "workflow-runs-v2").exists()
 
 
 @pytest.mark.asyncio
@@ -497,7 +499,7 @@ async def test_dangling_runs_symlink_and_source_symlink_are_rejected(tmp_path):
         pid, aid = await create_project(client)
         project_dir = store.project_dir(pid)
         try:
-            (project_dir / "workflow-runs").symlink_to(
+            (project_dir / "workflow-runs-v2").symlink_to(
                 tmp_path / "not-created", target_is_directory=True
             )
         except OSError as exc:
@@ -506,7 +508,7 @@ async def test_dangling_runs_symlink_and_source_symlink_are_rejected(tmp_path):
             raise
         with pytest.raises(ValueError):
             store.workflow_run_root(pid, aid)
-        (project_dir / "workflow-runs").unlink()
+        (project_dir / "workflow-runs-v2").unlink()
 
         scope = store.scope(pid, aid)
         source = scope.source_path(pid, store.audio(pid, aid).source.path)
@@ -738,17 +740,21 @@ async def test_mock_workflow_runs_preprocess_asr_and_audio_and_text_terminals(tm
                 {
                     "id": "asr",
                     "type": "asr",
-                    "config": {"provider": "mock", "language": "ja"},
+                    "config": {},
                 },
                 {
                     "id": "text",
                     "type": "text_output",
-                    "config": {"filename_stem": "transcript", "format": "srt"},
+                    "config": {
+                        "filename_stem": "transcript",
+                        "format": "srt",
+                        "naming_mode": "exact",
+                    },
                 },
                 {
                     "id": "audio",
                     "type": "audio_output",
-                    "config": {"filename_stem": "copy"},
+                    "config": {"filename_stem": "copy", "naming_mode": "exact"},
                 },
             ],
             "edges": [
@@ -781,7 +787,7 @@ async def test_mock_workflow_runs_preprocess_asr_and_audio_and_text_terminals(tm
                     "target_port": "audio",
                 },
             ],
-            "schema_version": "1.0",
+            "schema_version": "2.0",
         }
         document = await save_graph(client, pid, 0, graph)
         response = await client.post(

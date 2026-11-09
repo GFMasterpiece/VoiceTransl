@@ -1,3 +1,5 @@
+import { emptySettings } from './workflow/fixtures'
+import { catalogFixture, fieldFixture, nodeFixture, typeFixture } from './workflow/fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, createApp, h, nextTick, provide, reactive, ref, type App } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -16,18 +18,18 @@ const languages: CapabilityLanguage[] = [
   { code: 'ja', names: { 'zh-CN': '日语', en: 'Japanese' }, nativeName: '日本語', aliases: ['Nihongo'] },
 ]
 function catalog(): any {
-  const field = (key: string, type = 'string', value: unknown = '', extra = {}) => ({ key, label: key, type, default: value, required: false, input_port: null, suggestion_source: null, ...extra })
-  const node = (type: string, fields: any[] = []) => ({ type, label: type, category: null, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_source: false, is_parameter_source: false, terminal: false, config: { kind: type, fields } })
+  const field = (key: string, type = 'string', value: unknown = '', extra = {}) => (fieldFixture({ key, label: key, type, default: value, required: false, input_port: null, suggestion_source: null, ...extra }))
+  const node = (type: string, fields: any[] = []) => (nodeFixture({ type, label: type, category: null, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_source: false, is_parameter_source: false, terminal: false, config: { kind: type, fields } }))
   const source = { ...node('input_extension', [field('chosen','string',null), field('many','json',null)]), output_ports: ['audio'], is_source: true, max_instances: 1, removable: false, presentation: { resource_input: { resource_type: 'audio', config_key: 'chosen', collection_key: 'many' } } }
   const processor = { ...node('processor_extension', [field('spoken_code','string','',{ suggestion_source: 'languages', input_port: 'language_signal' }), field('manual_language','string','en')]), input_ports: ['audio','language_signal'], required_input_ports: ['audio'], required_inbound: 1, output_ports: ['audio'] }
   const output = { ...node('output_extension'), input_ports: ['audio'], required_input_ports: ['audio'], required_inbound: 1, terminal: true }
   const parameter = { ...node('parameter_extension', [field('value','string','ja')]), output_ports: ['language_signal'], is_parameter_source: true }
-  return { schema_version: '1.0', languages: languages.map(({nativeName,...entry}) => ({ ...entry, names: {...entry.names}, aliases: [...entry.aliases], native_name: nativeName })), asr: { providers: [] }, workflow: {
-    schema_version: '1.12', nodes: [source,processor,output,parameter], ports: [{ id:'audio',type_id:'audio',label:'Audio' },{id:'language_signal',type_id:'string',label:'Language'}],
-    data_types: ['audio','string'].map(id => ({ id,label:id,parent_type_id:null,capabilities:[] })), constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},
+  return catalogFixture({ schema_version: '1.0', languages: languages.map(({nativeName,...entry}) => ({ ...entry, names: {...entry.names}, aliases: [...entry.aliases], native_name: nativeName })), asr: { providers: [] }, workflow: {
+    schema_version: "1.16", nodes: [source,processor,output,parameter], ports: [{ id:'audio',type_id:'audio',label:'Audio' },{id:'language_signal',type_id:'string',label:'Language'}],
+    data_types: ['audio','string'].map(id => (typeFixture({ id,label:id,parent_type_id:null,capabilities:[] }))), constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},
     default_graph: { nodes:[{id:'input',type:source.type,config:{},position:{x:0,y:0}},{id:'processor',type:processor.type,config:{spoken_code:'custom-old',manual_language:'en'},position:{x:450,y:0}},{id:'output',type:output.type,config:{},position:{x:900,y:0}}],
       edges:[{id:'first',source:'input',source_port:'audio',target:'processor',target_port:'audio'},{id:'second',source:'processor',source_port:'audio',target:'output',target_port:'audio'}] }
-  } }
+  } })
 }
 let app: App | undefined
 let root: HTMLDivElement
@@ -58,6 +60,7 @@ function mountEditor() {
   const audios=reactive<Audio[]>([{id:'a1',source:{original_name:'old.wav',language:'en',size_bytes:2}} as Audio])
   const fetcher=vi.fn(async(request:RequestInfo|URL, init?:RequestInit)=>{
     const path=String(request)
+    if (path.endsWith('/settings')) return Promise.resolve(response(emptySettings()))
     if(path.endsWith('/capabilities')) return response(value)
     if(path.endsWith('/upload-policy')) return response({allowed_extensions:['wav'],max_upload_bytes:100000})
     if(path.endsWith('/audios') && init?.method==='POST') {
@@ -65,7 +68,7 @@ function mountEditor() {
       return response({audio:{id:'a2',source:{original_name:(body.get('file') as File).name,language:body.get('source_language'),size_bytes:2}}})
     }
     if(path.endsWith('/workflow/validate')) return response({valid:true,issues:[]})
-    if(path.endsWith('/workflow')) return response({schema_version:'1.0',project_id:'p1',revision:1,workflow_revision:1,created_at:'2026-11-09T00:00:00Z',updated_at:'2026-11-09T00:00:00Z',...value.workflow.default_graph,...(init?.method==='PUT'?JSON.parse(String(init.body)):{})})
+    if(path.endsWith('/workflow')) return response({schema_version:"2.0",project_id:'p1',revision:1,workflow_revision:1,created_at:'2026-11-09T00:00:00Z',updated_at:'2026-11-09T00:00:00Z',...value.workflow.default_graph,...(init?.method==='PUT'?JSON.parse(String(init.body)):{})})
     const url=new URL(path,'http://localhost')
     if(url.searchParams.has('limit')) return response({items:[],total:0,limit:Number(url.searchParams.get('limit')),offset:Number(url.searchParams.get('offset'))||0})
     return response({items:[]})
@@ -105,11 +108,8 @@ describe('language suggestion catalog',()=>{
     expect(()=>readCapabilities(value)).toThrow()
   })
   it('does not infer a suggestion source from old language field names',()=>{
-    const value=catalog();value.workflow.schema_version='1.11';delete value.languages
-    value.workflow.nodes[1].config.fields[0].key='language';delete value.workflow.nodes[1].config.fields[0].suggestion_source
-    const parsed=readCapabilities(value)
-    expect(parsed.languages).toBeUndefined()
-    expect(parsed.nodes[1]!.fields[0]!.suggestionSource).toBeNull()
+    const value=catalog();value.workflow.schema_version='1.11'; delete value.languages
+    expect(()=>readCapabilities(value)).toThrow('workflow.schema_version')
   })
 })
 
@@ -248,7 +248,7 @@ describe('shared language controls in the editor',()=>{
 })
 
 
-it.each(['1.13', '1.14'])('preserves language metadata and strict shape in catalog %s', version => {
+it.each(['1.16'])('preserves language metadata and strict shape in catalog %s', version => {
   const value = catalog(); value.workflow.schema_version = version
   expect(readCapabilities(value).languages).toEqual(languages)
   value.languages[0].names.extra = 'invalid'
@@ -257,17 +257,17 @@ it.each(['1.13', '1.14'])('preserves language metadata and strict shape in catal
 
 
 it('parses required debug flags only in catalog 1.15 and preserves old catalog behavior', () => {
-  const value = catalog(); value.workflow.schema_version = '1.15'
+  const value = catalog(); value.workflow.schema_version = '1.16'
   value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
   value.workflow.nodes[1].debug_only = true
   const parsed = readCapabilities(value)
   expect(parsed.nodes[1]!.debugOnly).toBe(true)
   expect(parsed.languages).toEqual(languages)
   value.workflow.schema_version = '1.14'
-  expect(readCapabilities(value).nodes[1]!.debugOnly).toBe(false)
+  expect(() => readCapabilities(value)).toThrow('workflow.schema_version')
 })
 it.each([undefined, null, 'true', 1, {}, []])('rejects an invalid required debug flag in catalog 1.15: %s', flag => {
-  const value = catalog(); value.workflow.schema_version = '1.15'
+  const value = catalog(); value.workflow.schema_version = '1.16'
   value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
   value.workflow.nodes[0].debug_only = flag
   expect(() => readCapabilities(value)).toThrow()

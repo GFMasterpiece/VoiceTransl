@@ -80,7 +80,7 @@ watch(rerun.target, target => { rerunModalOpen.value = !!target }, { flush: 'syn
 const rerunAudioName = computed(() => props.audios?.find(audio => audio.id === rerun.target.value?.audioId)?.source.original_name || rerun.target.value?.audioId || t('workflow.rerunChooseSource'))
 function rerunFromMenu() { const id = contextMenu.value?.nodeId; closeMenu(true); if (id) void rerun.open(id) }
 function locateRerunNode(id: string) { if (rerun.submitting.value) return; store.selectNode(id); rerun.close(); commands.focusCanvas() }
-const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || rerunModalOpen.value)
+const editingBlocked = computed(() => controlsLocked.value || !store.document || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || rerunModalOpen.value)
 provide(languageSuggestionsKey, { languages: computed(() => store.capabilities?.languages),
   suspended: computed(() => editingBlocked.value || !!contextMenu.value || editMenuOpen.value || !!drag.value || !!resizing.value || !!panning.value || !!connectionStart.value || !!marquee.value),
   context: computed(() => props.projectId), finishEdit: store.closeHistoryGroup })
@@ -142,6 +142,7 @@ function inputPortsForNode(type: string) { return registry.value?.inputPortsForN
 function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value) : null }
 function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value) : WORKFLOW_NODE_FIELDS_Y }
 function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node.type).length, outputPortsForNode(node.type).length, 1) }
+function portStyle(id: string) { const typeId = registry.value?.port(id)?.typeId; const color = store.capabilities?.dataTypes.find(type => type.id === typeId)?.presentation?.color; return color ? { '--port-color': color } : undefined }
 function portLabel(id: string | null) { return id ? (hasMessage(`batch.sourcePort_${id}`) ? t(`batch.sourcePort_${id}`) : registry.value?.port(id)?.label || id) : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
 const inputAudioName = computed(() => store.boundAudioId
@@ -890,14 +891,15 @@ onUnmounted(() => {
                     <div v-if="kind(node)?.preview" class="node-body-preview"><NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" /></div>
                   </div>
                 </foreignObject>
-                <text v-if="!hasConfigFields(node) && !kind(node)?.resourceInput && !kind(node)?.preview" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ registry?.kind(node.type)?.isSource ? inputAudioName : nodeLabel(node) }}</title>{{ registry?.kind(node.type)?.isSource ? t('workflow.boundAudio') : nodeLabel(node) }}</text>
+
+                <text v-if="kind(node)?.isSource && !hasConfigFields(node) && !kind(node)?.resourceInput" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ inputAudioName }}</title>{{ t('workflow.boundAudio') }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
                 <g v-for="port in inputPortsForNode(node.type)" :key="`input-${port}`">
-                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :class="`node-port-${port}`" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>
+                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :style="portStyle(port)" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>
                   <text class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY(node, port, 'input')! + 3" aria-hidden="true"><title>{{ inputPortLabel(node, port) }}</title>{{ inputPortLabel(node, port) }}</text>
                 </g>
                 <g v-for="port in outputPortsForNode(node.type)" :key="`output-${port}`">
-                  <circle class="node-port node-port-out" data-port-direction="output" :data-port-id="port" :class="`node-port-${port}`" :cx="nodeWidth(node)" :cy="portY(node, port, 'output')!" r="6" :aria-label="t('workflow.outputPort', { port })" @pointerdown.stop="startConnection(node, 'output', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port }) }}</title></circle>
+                  <circle class="node-port node-port-out" data-port-direction="output" :data-port-id="port" :style="portStyle(port)" :cx="nodeWidth(node)" :cy="portY(node, port, 'output')!" r="6" :aria-label="t('workflow.outputPort', { port })" @pointerdown.stop="startConnection(node, 'output', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port }) }}</title></circle>
                   <text class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY(node, port, 'output')! + 3" aria-hidden="true"><title>{{ portLabel(port) }}</title>{{ portLabel(port) }}</text>
                 </g>
                 <text v-if="nodeIssue(node)" class="node-error-mark" :x="nodeWidth(node) - 28" y="20" aria-hidden="true">!</text>
@@ -927,7 +929,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
-      <button v-if="contextMenu.nodeId && ['1.14', '1.15'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <button v-if="contextMenu.nodeId && ['1.16'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>

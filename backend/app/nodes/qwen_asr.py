@@ -1,108 +1,47 @@
-"""Qianwen Filetrans node: node-owned connection and real transcript output."""
+"""Recognize audio using composed model, language context and execution options."""
 
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from ..adapters.qwen_protocol import (
-    DEFAULT_BASE_URL,
-    DEFAULT_MODEL,
-    TEMPORARY_UPLOAD_RETENTION_HOURS,
-    validate_additional_parameters,
-    validate_base_url,
+from ..domain.context_values import (
+    ASRContext,
+    ASROptions,
+    normalize_processor_config,
+    optional_packet,
+    resolve_audio_language,
 )
-from ..domain.inline_connection import LegacyConnectionConfigError
 from ..domain.node_categories import SPEECH_RECOGNITION
-from ..domain.node_contracts import NodeDefinition, fields_from_model
-from ..domain.node_execution import NodeExecutionContext, NodeExecutionError, NodeResult
+from ..domain.node_contracts import NodeDefinition
+from ..domain.node_execution import NodeExecutionContext, NodeResult
+
+normalize = normalize_processor_config
 
 
-class QwenASRConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, protected_namespaces=())
-
-    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=128, description="模型名称")
-    language: str = Field(
-        default="",
-        max_length=32,
-        description="留空使用当前输入音频已声明的语言",
-        json_schema_extra={"suggestion_source": "languages"},
-    )
-    additional_parameters: dict[str, object] = Field(
-        default={}, description="可选模型参数（JSON对象）"
-    )
-    base_url: str = Field(
-        default=DEFAULT_BASE_URL,
-        max_length=2048,
-        json_schema_extra={"creation_default": DEFAULT_BASE_URL},
-    )
-    timeout_seconds: int = Field(
-        default=3600, ge=1, le=3600, json_schema_extra={"creation_default": 3600}
-    )
-    region: str | None = Field(default=None, max_length=64)
-    credential_ref: str | None = Field(default=None, max_length=128)
-
-    @field_validator("base_url")
-    @classmethod
-    def validate_connection_url(cls, value):
-        return validate_base_url(value)
-
-    @field_validator("model", "language")
-    @classmethod
-    def validate_string(cls, value):
-        if value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
-            raise ValueError("配置字符串不能包含控制字符或首尾空白")
-        return value
-
-    @field_validator("additional_parameters", mode="before")
-    @classmethod
-    def validate_parameters(cls, value):
-        return validate_additional_parameters(value)
-
-
-def normalize(config):
-    if isinstance(config, dict) and {"provider_profile_id", "connection_mode", "api_key_env"} & set(
-        config
-    ):
-        raise LegacyConnectionConfigError()
-    try:
-        value = QwenASRConfig.model_validate(config).model_dump(mode="json")
-        value["base_url"] = value["base_url"].rstrip("/")
-        return value
-    except ValueError:
-        raise ValueError("Qwen配置无效：请检查节点连接、模型、语言及附加参数") from None
+def validate_inputs(context):
+    normalize(context.node.config)
+    optional_packet(context, "asr_context", ASRContext)
+    optional_packet(context, "asr_options", ASROptions)
 
 
 async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..adapters.qwen_asr import transcribe
     from ..application.workflow_asr import TranscriptData, _write_bytes
-    from ..application.workflow_connections import (
-        ConnectionSnapshotError,
-        inline_connection_from_snapshot,
-    )
+    from ..domain.configuration import resolve_model
     from ..domain.workflow import WorkflowArtifact
 
-    config = QwenASRConfig.model_validate(context.node.config)
-    try:
-        connection, api_key = inline_connection_from_snapshot(
-            context.store, context.run.workflow, context.node.id, context.run.project_id
-        )
-    except ConnectionSnapshotError as error:
-        raise NodeExecutionError(error.code, str(error)) from None
-    audio = next(
-        (audio for audio in context.project.audios if audio.id == context.run.audio_id), None
+    validate_inputs(context)
+    packet = optional_packet(context, "asr_context", ASRContext)
+    options = optional_packet(context, "asr_options", ASROptions)
+    language = resolve_audio_language(context, packet)
+    connection, model, parameters, api_key = resolve_model(
+        context, context.input("model").value, "asr_file", options.timeout_seconds
     )
-    language = config.language or (
-        audio.source.language if audio else context.project.source_language
-    )
-    if not language:
-        raise NodeExecutionError("QWEN_LANGUAGE_REQUIRED", "请声明输入音频的语言或设置识别语言")
     transcript = await transcribe(
         audio_path=context.input("audio").value.path,
         project_id=context.run.project_id,
         language=language,
         connection=connection,
-        model=config.model,
-        additional_parameters=config.additional_parameters,
+        model=model,
+        additional_parameters=parameters,
         cancel_event=context.cancel_event,
         api_key=api_key,
     )
@@ -137,39 +76,16 @@ def definition():
         type="qwen_asr",
         label="Qwen语音识别",
         category=SPEECH_RECOGNITION,
-        input_ports=("audio", "language"),
-        required_input_ports=("audio",),
+        input_ports=("audio", "model", "asr_context", "asr_options"),
+        required_input_ports=("audio", "model"),
         output_ports=("transcript",),
         terminal=False,
-        config_kind="qwen_asr",
-        settings_default_fields=(
-            "base_url",
-            "timeout_seconds",
-            "region",
-            "model",
-            "language",
-            "additional_parameters",
-        ),
-        fields=fields_from_model(
-            QwenASRConfig,
-            widgets={"additional_parameters": ("json", None), "timeout_seconds": ("integer", None)},
-            input_ports={"language": "language"},
-        ),
+        config_kind="none",
         normalize_config=normalize,
         validate_config=normalize,
         execute=execute,
-        presentation={
-            "inline_connection_input": {
-                "provider_type": "qwen_asr",
-                "label": "Qwen ASR",
-                "data_handling": {
-                    "temporary_upload_retention_hours": TEMPORARY_UPLOAD_RETENTION_HOURS,
-                    "remote_cancel_pending_only": True,
-                },
-                "base_url_key": "base_url",
-                "timeout_key": "timeout_seconds",
-                "region_key": "region",
-                "credential_ref_key": "credential_ref",
-            },
-        },
+        validate_inputs=validate_inputs,
+        validation_input_ports=("model", "asr_context", "asr_options"),
+        binding_inputs={"model": "asr_file"},
+        execution_version="2",
     )

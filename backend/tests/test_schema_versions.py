@@ -122,12 +122,12 @@ async def create_api_project(app) -> str:
         return response.json()["project"]["id"]
 
 
-def assert_schema_rejection(response, private_root: Path) -> None:
+def assert_schema_rejection(response, private_root: Path, expected="1.0") -> None:
     assert response.status_code == 422, response.text
     assert response.json() == {
         "error": {
             "code": "UNSUPPORTED_SCHEMA_VERSION",
-            "message": "不支持该数据版本，当前仅支持 schema_version '1.0'",
+            "message": f"不支持该数据版本，当前仅支持 schema_version {expected!r}",
             "details": None,
         }
     }
@@ -181,8 +181,8 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
         route = f"/api/v1/projects/{project_id}/config"
     elif document == "workflow":
         payload = default_workflow(project_id).model_dump(mode="json")
-        payload["schema_version"] = "2.0"
-        path = project_dir / "workflow.json"
+        payload["schema_version"] = "1.0"
+        path = project_dir / "workflow-v2.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/workflow"
     else:
@@ -197,14 +197,16 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
         directory = app.state.store.create_workflow_run(run)
         path = directory / "run.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["workflow"]["schema_version"] = "2.0"
+        payload["workflow"]["schema_version"] = "1.0"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/audios/{PRIMARY_AUDIO_ID}/workflow-runs/{run.id}"
     before = path.read_bytes()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(route)
-        assert_schema_rejection(response, tmp_path)
+        assert_schema_rejection(
+            response, tmp_path, "2.0" if document in {"workflow", "workflow-run"} else "1.0"
+        )
     assert path.read_bytes() == before
 
 
@@ -216,23 +218,23 @@ async def test_explicit_request_schema_versions_are_clearly_rejected(tmp_path):
         for response in (
             await client.post(
                 f"/api/v1/projects/{project_id}/workflow/validate",
-                json={"schema_version": "2.0", "nodes": [], "edges": []},
+                json={"schema_version": "1.0", "nodes": [], "edges": []},
             ),
             await client.put(
                 f"/api/v1/projects/{project_id}/workflow",
                 json={
-                    "schema_version": "2.0",
+                    "schema_version": "1.0",
                     "expected_revision": 0,
                     "nodes": [],
                     "edges": [],
                 },
             ),
         ):
-            assert_schema_rejection(response, tmp_path)
+            assert_schema_rejection(response, tmp_path, "2.0")
 
         retired = await client.put(
             f"/api/v1/projects/{project_id}/config",
-            json={**LegacyPipelineConfig().model_dump(mode="json"), "schema_version": "2.0"},
+            json={**LegacyPipelineConfig().model_dump(mode="json"), "schema_version": "1.0"},
         )
         assert retired.status_code == 409
         assert retired.json()["error"]["code"] == "LEGACY_CONFIG_READ_ONLY"

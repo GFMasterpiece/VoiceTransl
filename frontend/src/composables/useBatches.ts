@@ -1,4 +1,4 @@
-import { backendIdentity, DEFAULT_API_BASE_URL } from '../backendConnection'
+import { backendIdentity } from '../backendConnection'
 import { computed, ref, shallowRef } from 'vue'
 import { API_BASE_URL, parseApiError, type ApiError } from '../api'
 import { displayError, hasMessage, message, t } from '../i18n'
@@ -15,7 +15,7 @@ export interface BatchSummary {
 }
 export interface BatchDetail extends BatchSummary { workflow: WorkflowSnapshot }
 export interface BatchItem {
-  sequence?: number | null
+  sequence: number
   index: number; audio_id: string; audio_name: string; source_language: string; origin: SourceOrigin | null
   status: string; run_id: string | null; started_at: string | null; finished_at: string | null; error: { type: string; message: string } | null
 }
@@ -45,7 +45,7 @@ function validOrigin(value: unknown) { return value === null || (!!value && ['ro
 function readItem(value: unknown): BatchItem {
   const item = value as BatchItem
   if (!item || !Number.isInteger(item.index) || item.index < 0 || typeof item.audio_id !== 'string' || typeof item.audio_name !== 'string'
-    || (item.sequence != null && (!Number.isInteger(item.sequence) || item.sequence < 1))
+    || (!Number.isInteger(item.sequence) || item.sequence < 1)
     || typeof item.source_language !== 'string' || typeof item.status !== 'string' || !validOrigin(item.origin) || !validError(item.error)
     || (item.run_id !== null && typeof item.run_id !== 'string')) throw message('batch.invalidResponse')
   return item
@@ -67,18 +67,13 @@ function validPending(value: unknown): value is PendingRequest {
   return /^\/[A-Za-z0-9_-]+\/retry$/.test(request.path) && typeof request.body.include_cancelled === 'boolean'
 }
 
-export function batchPendingStorageKey(projectId: string, apiBase = API_BASE_URL) { return `voicetransl.batch.pending:${encodeURIComponent(backendIdentity(apiBase))}:${encodeURIComponent(projectId)}` }
+export function batchPendingStorageKey(projectId: string, apiBase = API_BASE_URL) { return `voicetransl.batch.v2.pending:${encodeURIComponent(backendIdentity(apiBase))}:${encodeURIComponent(projectId)}` }
 export function restoreBatchPending(projectId: string, apiBase = API_BASE_URL): PendingRequest | null {
   try {
     const key = batchPendingStorageKey(projectId, apiBase)
     const scoped = sessionStorage.getItem(key)
     if (scoped !== null) { const value: unknown = JSON.parse(scoped); return validPending(value) ? value : null }
-    if (backendIdentity(apiBase) !== backendIdentity(DEFAULT_API_BASE_URL)) return null
-    const legacyKey = `voicetransl.batch.pending:${projectId}`
-    const legacy: unknown = JSON.parse(sessionStorage.getItem(legacyKey) || 'null')
-    if (!validPending(legacy)) return null
-    try { sessionStorage.setItem(key, JSON.stringify(legacy)); sessionStorage.removeItem(legacyKey) } catch { /* Keep the old request available if migration cannot be persisted. */ }
-    return legacy
+    return null
   } catch { return null }
 }
 
@@ -99,7 +94,6 @@ export function useBatches(projectId: string) {
     try {
       if (value) sessionStorage.setItem(storageKey, JSON.stringify(value)); else {
         sessionStorage.removeItem(storageKey)
-        if (backendIdentity(API_BASE_URL) === backendIdentity(DEFAULT_API_BASE_URL)) sessionStorage.removeItem(`voicetransl.batch.pending:${projectId}`)
       }
       pendingStored.value = true
     } catch { pendingStored.value = false }
@@ -153,7 +147,7 @@ export function useBatches(projectId: string) {
         request(`/${encodeURIComponent(id)}`), request(`/${encodeURIComponent(id)}/items?limit=${items.value.limit}&offset=${offset}`),
       ])
       const batch = readSummary(rawDetail) as BatchDetail
-      if (batch.id !== id || batch.project_id !== projectId || !batch.workflow || !Array.isArray(batch.workflow.nodes) || !Array.isArray(batch.workflow.edges)) throw message('batch.invalidResponse')
+      if (batch.id !== id || batch.project_id !== projectId || !batch.workflow || batch.workflow.schema_version !== '2.0' || !Array.isArray(batch.workflow.nodes) || !Array.isArray(batch.workflow.edges)) throw message('batch.invalidResponse')
       const page = readPage(rawItems, readItem)
       if (!alive || sequence !== detailSequence) return
       detail.value = batch; items.value = page

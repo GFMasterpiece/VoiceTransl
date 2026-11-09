@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..domain.inline_connection import InlineConnection, LegacyConnectionConfigError
+from ..domain.inline_connection import InlineConnection
 from ..domain.node_execution import NodeExecutionError
 
 
@@ -36,12 +36,6 @@ class ConnectionSnapshotError(ValueError):
         super().__init__(message)
 
 
-def reject_connection_validation_errors(issues):
-    for issue in issues:
-        if issue.code == LegacyConnectionConfigError.code:
-            raise ConnectionSnapshotError(issue.code, issue.message)
-
-
 def credential_operation(store, method, *args, **kwargs):
     from ..storage.secret_store import SecretStore, SecretStoreError
 
@@ -58,7 +52,9 @@ def _connection(node, binding):
         return InlineConnection(
             provider_type=binding["provider_type"],
             base_url=node.config.get(binding["base_url_key"]),
-            default_timeout=node.config.get(binding["timeout_key"]),
+            default_timeout=node.config.get(binding["timeout_key"])
+            if binding["timeout_key"]
+            else 1,
             region=node.config.get(binding["region_key"]) if binding["region_key"] else None,
         )
     except ValueError:
@@ -74,8 +70,6 @@ def _validate_node_config(node):
     try:
         if definition.validate_config is not None:
             definition.validate_config(node.config)
-    except LegacyConnectionConfigError as error:
-        raise ConnectionSnapshotError(error.code, str(error)) from None
     except ValueError:
         raise ConnectionSnapshotError(
             "INLINE_CONNECTION_INVALID", "节点连接设置无效或不完整"
@@ -107,6 +101,10 @@ def freeze_workflow_connections(store, snapshot, project_id=None, *, node_ids=No
     from ..domain.workflow import workflow_inline_connection_inputs
 
     frozen = snapshot.model_copy(deep=True)
+    if node_ids is not None:
+        from .configuration_evaluator import configuration_ids
+
+        node_ids = configuration_ids(snapshot, node_ids)
     _validate_execution_configs(frozen, node_ids)
     for node, binding, provider_type in workflow_inline_connection_inputs(frozen.nodes):
         if node_ids is not None and node.id not in node_ids:

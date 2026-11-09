@@ -5,7 +5,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
+from ..domain.schema import CONFIGURATION_SCHEMA_VERSION as SCHEMA_VERSION
+from ..domain.schema import SchemaVersionError, require_schema_version
 from ..domain.settings import (
     GlobalSettings,
     SettingsResponse,

@@ -1,3 +1,4 @@
+import { nodeFixture, catalogFixture, fieldFixture } from './workflow/fixtures'
 import { readCapabilities } from './workflow/capabilities'
 import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY } from './composables/editorPreferences'
 import { locale, setLocale, LOCALE_STORAGE_KEY } from './i18n'
@@ -5,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import GlobalSettingsDialog from './components/GlobalSettingsDialog.vue'
 import { settingsCache } from './composables/globalSettings'
-const field=(key:string,value:unknown)=>({key,type:'string',label:key,default:value,input_port:null,suggestion_source:null,required:false})
-const document=()=>({schema_version:'1.0',revision:1,global_fields:[],global:{},node_defaults:{extension:{label:'Extension',fields:[field('model','arbitrary-model')],config:{model:'arbitrary-model'},credential_configured:false,credential_version:null}}})
+const field=(key:string,value:unknown)=>(fieldFixture({key,type:'string',label:key,default:value,input_port:null,suggestion_source:null,required:false}))
+const document=()=>({schema_version:"2.0",revision:1,global_fields:[],global:{},node_defaults:{extension:{label:'Extension',fields:[field('model','arbitrary-model')],config:{model:'arbitrary-model'},credential_configured:false,credential_version:null}}})
 const response=(value:unknown,status=200)=>({ok:status<400,status,json:async()=>structuredClone(value)}) as Response
 let app:App|undefined;let root:HTMLDivElement|undefined
 async function settle(){for(let index=0;index<35;index++)await Promise.resolve();await nextTick()}
@@ -112,8 +113,8 @@ describe('category navigation and independent templates', () => {
       { type: 'unknown_category', fields: [makeField('model', 'other')], url: null, region: null, debug: false, category: { id: 'plugin_category', label: 'Plugin category' } },
       { type: 'no_category', fields: [makeField('model', 'uncategorized')], url: null, region: null, debug: false, category: null },
     ]
-    const nodes = declarations.map(item => ({ type: item.type, label: item.type, debug_only: item.debug, category: item.category, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_parameter_source: false, config: { kind: item.type, fields: [...item.fields, ...(item.url ? [makeField('credential_ref', null)] : [])] }, ...(item.url ? { presentation: { inline_connection_input: { provider_type: 'extension_service', label: item.type, base_url_key: item.url, timeout_key: 'timeout_seconds', region_key: item.region, credential_ref_key: 'credential_ref' } } } : {}) }))
-    const capabilities = readCapabilities({ schema_version: '1.0', languages: [], workflow: { schema_version: '1.15', nodes, ports: [], data_types: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } })
+    const nodes = declarations.map(item => (nodeFixture({ type: item.type, label: item.type, debug_only: item.debug, category: item.category, input_ports: [], output_ports: [], required_input_ports: [], required_inbound: 0, is_parameter_source: false, config: { kind: item.type, fields: [...item.fields, ...(item.url ? [makeField('credential_ref', null)] : [])] }, ...(item.url ? { presentation: { inline_connection_input: { provider_type: 'extension_service', label: item.type, base_url_key: item.url, timeout_key: 'timeout_seconds', region_key: item.region, credential_ref_key: 'credential_ref' } } } : {}) })))
+    const capabilities = readCapabilities(catalogFixture({ schema_version: '1.0', languages: [], workflow: { schema_version: "1.16", nodes, ports: [], data_types: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } }))
     const settings = { ...document(), node_defaults: Object.fromEntries(declarations.map(item => [item.type, { label: item.type, fields: item.fields, config: Object.fromEntries(item.fields.map(field => [field.key, field.default])), credential_configured: false, credential_version: null }])) }
     return { capabilities, settings }
   }
@@ -129,11 +130,11 @@ describe('category navigation and independent templates', () => {
     ;(categories[0] as HTMLButtonElement).click(); await nextTick()
     expect(root!.querySelectorAll('[data-settings-node-type] option')).toHaveLength(14)
     const fieldOrder = () => [...root!.querySelectorAll('[data-settings-content] [data-field], [data-settings-key]')].map(input => input.hasAttribute('data-settings-key') ? 'KEY' : input.getAttribute('data-field'))
-    expect(fieldOrder()).toEqual(['base_url', 'timeout_seconds', 'region', 'KEY', 'model', 'language', 'additional_parameters'])
+    expect(fieldOrder()).toEqual(['model', 'language', 'additional_parameters', 'base_url', 'timeout_seconds', 'region', 'KEY'])
     await select('stream_extension')
-    expect(fieldOrder()).toEqual(['endpoint', 'timeout_seconds', 'KEY', 'model', 'language', 'additional_parameters'])
+    expect(fieldOrder()).toEqual(['model', 'language', 'additional_parameters', 'endpoint', 'timeout_seconds', 'KEY'])
     expect(root!.querySelector('[data-settings-section=connection] [data-settings-key]')).not.toBeNull()
-    expect(root!.querySelector('[data-settings-section=parameters] [data-field=model]')).not.toBeNull()
+    expect(root!.querySelector('[data-settings-section=connection] [data-field=model]')).not.toBeNull()
   })
   it('keeps per-type fields and keys independent through type/category/debug/locale changes and saves hidden defaults', async () => {
     const { capabilities, settings } = fixture(); const bodies: any[] = []
