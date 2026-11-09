@@ -61,6 +61,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "source_info",
         "qwen_asr",
         "qwen_asr_streaming",
+        "llm_translate",
     }
     assert {
         category: {node["type"] for node in nodes.values() if node["category"]["id"] == category}
@@ -69,6 +70,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "input": {"audio_input", "source_info"},
         "preprocessing": {"preprocess"},
         "speech_recognition": {"asr", "qwen_asr", "qwen_asr_streaming"},
+        "translation": {"llm_translate"},
         "preview": {"audio_preview", "text_preview"},
         "output": {"audio_output", "text_output"},
         "parameters": {"string_value", "integer_value", "number_value", "boolean_value"},

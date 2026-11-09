@@ -25,10 +25,13 @@
 | `asr` | `audio`、可选 `language` → `transcript` | 仅 `provider=mock`、`language`（默认 `ja`），产生固定示例文本，不执行真实识别 |
 | `qwen_asr` | `audio`、可选 `language` → `transcript` | 独立连接、自由模型名、语言及附加参数；临时上传、异步识别并转换真实文本/时间戳 |
 | `qwen_asr_streaming` | `audio`、可选 `language` → `transcript` | 每实例独立 WebSocket 地址/Key；PCM16 单声道 WAV 按真实采样率流式发送，任务完成后输出最终转写 |
+| `llm_translate` | `transcript`、可选 `model/source_language/target_language` → `transcript` | 独立 Chat Completions 连接/Key；翻译上游当前文本，保留原文及片段结构 |
 | `audio_output` | `audio`、可选 `filename_stem` → 终端 | 安全前缀（默认 `audio-copy`）及 `naming_mode`；新节点默认编号，缺模式旧图原名，复制直接上游字节 |
 | `text_output` | `transcript`、可选 `filename_stem/text_format` → 终端 | 安全前缀（默认 `transcript`）、`naming_mode` 和 `format`（TXT/SRT/VTT/LRC），导出统一转写文本 |
 | `audio_preview` | `audio` → 终端 | 无配置，保存该次输入的预览副本，供节点内播放器读取 |
 | `text_preview` | `transcript` → 终端 | 无配置，保存转写文本表示，供节点内纯文本展示 |
+
+转写以 `metadata.current_text={version:"1",field:"source_text"|"normalized_text"|"translated_text",language:"..."}` 声明当前文本。统一领域函数供翻译、预览、导出及 checkpoint 使用，不根据节点类型或 stage 推测。无声明的旧数据继续读取原文；非法声明或缺少指定内容明确失败。翻译节点深拷贝输入、填写译文并更新当前语言；原文、ID、时间轴及片段元数据保留，第二个翻译节点消费第一个的译文。文本预览/输出执行版本为 `2`；旧历史文件不改写，旧 ASR checkpoint 仍可复用。详见[翻译规格](../spec/llm-translation.md)。
 | `string_value` / `integer_value` / `number_value` / `boolean_value` | 无 → 对应基础值类型 | 参数来源节点，保存 `{value: ...}`；字符串不是 `text` 文件产物，整数可满足数字类型，布尔值不冒充整数或数字 |
 | `source_info` | 无 → `filename/stem/source_language/relative_path/root_name` | 当前运行音频的只读字符串信息；无配置，作为参数根，可接输出命名或 ASR 语言 |
 

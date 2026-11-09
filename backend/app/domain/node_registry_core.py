@@ -411,6 +411,10 @@ def validate_node_definition(definition: NodeDefinition) -> None:
         raise ValueError("normalize_config must be callable")
     if definition.validate_config is not None and not callable(definition.validate_config):
         raise ValueError("validate_config must be callable")
+    if definition.validate_execution_config is not None and not callable(
+        definition.validate_execution_config
+    ):
+        raise ValueError("validate_execution_config must be callable")
     if definition.execute is not None and not callable(definition.execute):
         raise ValueError("execute must be callable")
     if definition.execute is None:

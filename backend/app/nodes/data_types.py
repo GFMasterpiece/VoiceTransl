@@ -74,5 +74,5 @@ def register_builtin_types(register_type, register_port):
     )
     for port in ("string", "number", "integer", "boolean"):
         register_port(port, type_id=port)
-    for port in ("language", "filename_stem", "text_format"):
+    for port in ("language", "filename_stem", "text_format", "model", "target_language"):
         register_port(port, type_id="string")

@@ -83,6 +83,10 @@ data/projects/<project-id>/
 
 ## 云端连接快照
 
+`llm_translate` 复用工作流保存、单运行、批次与节点重跑接口，无独立翻译任务 API。节点声明自己的地址、超时和凭据字段，运行前冻结；通用执行前校验拒绝未提供的地址、模型或目标语言，有参数线时在实际值合并后再检查。能力目录仍 `1.15`，语言候选与默认模板按已有声明提供，持久化仍 `1.0`。
+
+翻译的 `transcript` 输出通过 `metadata.current_text` 声明当前内容及语言，预览、导出和下一轮翻译使用该值；旧无声明转写沿用原文。译文不覆盖 `source_text`、原始时间轴和上游文件，重跑复用保留当前文本声明。失败/取消不发布完整结果，稳定错误使用 `LLM_*`、`LLM_TRANSLATION_*` 或 `CURRENT_TEXT_*`；详见[规格](../spec/llm-translation.md)。
+
 `qwen_asr` 与 Mock 独立，沿用同一单运行和批次接口。节点保存自身 `base_url/timeout_seconds/region/credential_ref` 以及模型、语言及附加参数；实际 Key 经 `credential_updates` 的 set/clear 存入独立加密存储，不进入 config。新节点还可显式提交 `use_default` 和创建时捕获的默认密钥版本，由后端物化独立节点凭据。校验允许无密钥草稿，运行前必须有本节点有效引用，不读其他节点或环境变量。引用绑定项目/节点/类型，替换生成新版本，稳定请求 ID 重试不得重复轮换。
 
 全局 `/provider-profiles` CRUD 已删除，旧连接文件不再加载。Filetrans 的 `provider_profile_id/connection_mode/api_key_env` 不再接受；含这些字段的旧图可以读取，但保存、运行及重试须明确拒绝，需删除后重新添加节点。原文件不自动改写；历史 `provider_profiles_snapshot` 仅作为不参与执行的原始元数据保留，不补读最新连接。

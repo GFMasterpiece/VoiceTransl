@@ -27,9 +27,10 @@
 - 分层职责、工作流持久化、取消/重启和安全：`docs/architecture.md`。
 - 项目/音频资源、目录、API 与兼容性：`docs/voicetransl_multi_audio_project.md`。
 - 先配置再运行的前端交互：`docs/frontend_workflow.md`。
-- 当前 Web 节点图范围：`docs/architecture.md` 与 `docs/frontend_workflow.md`；支持音频直通、Mock 验证及独立 Qwen 云端识别。历史规格不代表当前支持能力。
+- 当前 Web 节点图范围：`docs/architecture.md` 与 `docs/frontend_workflow.md`；支持音频直通、Mock 验证、独立 Qwen 云端识别和 LLM API 翻译。历史规格不代表当前支持能力。
 - 已删除的本地 Provider 不作为当前配置或实现依据，不擅自恢复。
 - 节点独立连接、凭据与已移除的旧连接边界：`docs/node_connections.md`。
+- LLM API 翻译及上游当前文本：`spec/llm-translation.md`；翻译、预览、导出统一消费显式当前文本，不按上游节点类型推测；连续翻译使用上一轮译文，保留原文和时间轴。
 - 主页全局并发设置、节点创建默认值及默认密钥：`docs/global_settings.md`。
 - 主页后端地址设置：`spec/backend-connection.md`；浏览器保存后刷新应用，请求与未确认批次须按目标后端隔离，不与节点云连接混用。
 - 节点调试展示及按类别组织默认设置：`spec/settings-node-organization.md`；调试属性由后端声明，不能按名称、类型或 Provider 猜测，也不能删除旧图中的 Mock 节点。

@@ -228,10 +228,12 @@ def _normalized_source(value: str) -> str:
 
 
 def _render_text(transcript: Transcript, format_name: str) -> str:
-    validate_workflow_transcript(transcript)
+    from ..domain.current_text import read_current_text
+
+    items, _language = read_current_text(transcript)
     segments = []
-    for segment in transcript.segments:
-        source = _normalized_source(segment.source_text)
+    for segment, item in zip(transcript.segments, items, strict=True):
+        source = _normalized_source(item["text"])
         segments.append(
             segment.model_copy(update={"source_text": source, "translated_text": source})
         )

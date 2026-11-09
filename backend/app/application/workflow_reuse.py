@@ -60,6 +60,8 @@ def execution_config(node, inputs, record=None):
     if definition.validate_config:
         definition.validate_config(config)
     json.dumps(config, allow_nan=False)
+    if definition.validate_execution_config:
+        definition.validate_execution_config(config, frozenset())
     if record is not None:
         record.effective_config = deepcopy(config)
     return config

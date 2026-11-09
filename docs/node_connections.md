@@ -1,6 +1,8 @@
-# 节点连接与 Qwen 识别
+# 节点连接与云端处理
 
 当前支持 Qwen Filetrans 与文件 Streaming 两种独立识别节点，均在语音识别分类。默认工作流仍为音频直通，Mock ASR 仍只产生示例。
+
+另有“翻译”分类的 `llm_translate`，直接调用兼容 Chat Completions 的 API。每个实例分别配置 API base、模型、语言、超时及 Key，复用相同的节点独享凭据、默认模板、保存和冻结机制；不使用 Qwen 连接，也不恢复全局 Profile 或环境变量备用。地址、模型和目标语言默认留空，允许先保存未完成配置，运行前检查必填值。翻译设置和当前文本见[翻译说明](translation_providers.md)。
 
 ## 配置与运行
 

@@ -25,7 +25,12 @@ def test_settings_roundtrip_revision_restart_and_runtime(tmp_path):
     client = TestClient(app)
     initial = client.get("/api/v1/settings").json()
     assert initial["revision"] == 0
-    assert set(initial["node_defaults"]) == {"asr", "qwen_asr", "qwen_asr_streaming"}
+    assert set(initial["node_defaults"]) == {
+        "asr",
+        "qwen_asr",
+        "qwen_asr_streaming",
+        "llm_translate",
+    }
     assert [field["key"] for field in initial["node_defaults"]["asr"]["fields"]] == ["language"]
     body = save_body(initial, **{"global": {"max_concurrent": 4, "upload_concurrency": 7}})
     body["node_defaults"]["qwen_asr"]["model"] = "future-compatible-model"

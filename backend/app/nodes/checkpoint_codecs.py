@@ -66,6 +66,9 @@ async def decode_audio(payload, context):
 
 
 async def encode_transcript(value, context):
+    from ..domain.current_text import read_current_text
+
+    read_current_text(value.transcript)
     _safe_metadata(value.transcript.metadata)
     for segment in value.transcript.segments:
         _safe_metadata(segment.metadata)
@@ -77,11 +80,13 @@ async def encode_transcript(value, context):
 
 async def decode_transcript(payload, context):
     from ..application.workflow_asr import TranscriptData
+    from ..domain.current_text import read_current_text
     from ..domain.transcript import Transcript
     from ..domain.workflow import validate_workflow_transcript
 
     transcript = Transcript.model_validate(payload["transcript"])
     validate_workflow_transcript(transcript)
+    read_current_text(transcript)
     return TranscriptData(path=context.file(payload["file"]), transcript=transcript)
 
 

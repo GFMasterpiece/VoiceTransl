@@ -29,6 +29,7 @@ def definitions() -> tuple[NodeDefinition, ...]:
             output_ports=(),
             terminal=True,
             config_kind="none",
+            execution_version="2" if renderer == "text" else "1",
             normalize_config=normalize_empty_config,
             validate_config=normalize_empty_config,
             presentation={"preview": {"renderer": renderer}},

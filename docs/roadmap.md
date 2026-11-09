@@ -4,6 +4,8 @@
 
 ## 已完成
 
+- **LLM API 翻译与当前文本：**新增“翻译”类别的独立兼容 API 节点，支持术语、分批和有限上下文；连续翻译消费上一步译文，预览/导出只读直接上游当前文本，原文和时间轴保留。旧历史不改写，翻译结果可 checkpoint 复用。Windows 假 API/Edge 验收通过，后端 878 项、前端 553 项测试通过；详见[规格](../spec/llm-translation.md)。
+
 - **浏览器后端连接：**主页连接状态支持测试、保存及恢复后端地址，检测成功后刷新应用，按目标服务隔离项目、设置和批次未确认请求。后端提供受控 CORS，支持带前缀的上传、运行、预览和下载。Windows 双后端 Edge 验收通过，前端 537 项、后端 726 项测试通过；详见[规格](../spec/backend-connection.md)。
 
 - **多音频项目基础：**一个项目包含多个独立音频；支持上传、逐音频资源和节点运行历史。
@@ -42,14 +44,14 @@
 
 ## 当前整改
 
-- **最小骨架边界：**当前默认音频直通，保留 Mock、独立 Qwen 识别、运行历史与产物下载；旧配置/Job 只读及独立翻译适配器留存。Profile API 和旧服务连接执行已移除，不迁移或改写既有项目与任务。
+- **最小骨架边界：**当前默认音频直通，提供 Mock、独立 Qwen 识别、LLM API 翻译、运行历史与产物下载；旧配置/Job 只读及旧翻译适配器留存。Profile API 和旧服务连接执行已移除，不迁移或改写既有项目与任务。
 - **兼容性与扩展性：**既定验收项见[整改规格](../spec/compatibility-extensibility.md)。Qwen节点按独立规格验收，不代表其他云端或本地Provider已实现。
 
 ## 接下来
 
 1. **Qwen真实账号验收：**用户配置后端密钥后，明确选择样本验证服务可用性、识别质量、配额与耗时；当前模拟测试不能代替付费服务验证。
 2. **生产存储与长音频策略：**按实际部署需要评估稳定对象存储、模型限制及分块，不把临时上传视为生产高并发方案。
-3. **后续工作流能力：**其他服务商/翻译节点、整批节点重跑、自动缓存调度及历史清理应逐项明确契约，不自动恢复旧五阶段流程。
+3. **后续工作流能力：**其他识别或翻译协议、术语检索/审校节点、整批节点重跑、自动缓存调度及历史清理应逐项明确契约，不自动恢复旧五阶段流程。
 
 ## 已知问题与暂缓事项
 
@@ -70,5 +72,5 @@
 - 整体产品目标：[`product_requirements.md`](product_requirements.md)
 - 多音频资源和 API：[`voicetransl_multi_audio_project.md`](voicetransl_multi_audio_project.md)
 - 前端工作流：[`frontend_workflow.md`](frontend_workflow.md)
-- 留存翻译适配器边界：[`translation_providers.md`](translation_providers.md)
+- LLM 翻译与旧适配器边界：[`translation_providers.md`](translation_providers.md)
 - 节点连接、凭据及旧连接移除：[`node_connections.md`](node_connections.md)

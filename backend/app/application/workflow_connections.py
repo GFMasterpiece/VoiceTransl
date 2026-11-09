@@ -3,6 +3,31 @@
 from __future__ import annotations
 
 from ..domain.inline_connection import InlineConnection, LegacyConnectionConfigError
+from ..domain.node_execution import NodeExecutionError
+
+
+def _validate_execution_configs(snapshot, node_ids):
+    from ..domain.node_registry import NODE_DEFINITIONS
+
+    for node in snapshot.nodes:
+        if node_ids is not None and node.id not in node_ids:
+            continue
+        definition = NODE_DEFINITIONS[node.type]
+        if definition.validate_execution_config is None:
+            continue
+        connected_ports = {edge.target_port for edge in snapshot.edges if edge.target == node.id}
+        connected_fields = frozenset(
+            field.key for field in definition.fields if field.input_port in connected_ports
+        )
+        try:
+            config = (
+                definition.normalize_config(node.config)
+                if definition.normalize_config
+                else node.config
+            )
+            definition.validate_execution_config(config, connected_fields)
+        except NodeExecutionError as error:
+            raise ConnectionSnapshotError(error.code, str(error)) from None
 
 
 class ConnectionSnapshotError(ValueError):
@@ -63,6 +88,8 @@ def validate_frozen_workflow_connections(
 ) -> None:
     from ..domain.workflow import workflow_inline_connection_inputs
 
+    _validate_execution_configs(snapshot, node_ids)
+
     for node, binding, provider_type in workflow_inline_connection_inputs(snapshot.nodes):
         if node_ids is not None and node.id not in node_ids:
             continue
@@ -80,6 +107,7 @@ def freeze_workflow_connections(store, snapshot, project_id=None, *, node_ids=No
     from ..domain.workflow import workflow_inline_connection_inputs
 
     frozen = snapshot.model_copy(deep=True)
+    _validate_execution_configs(frozen, node_ids)
     for node, binding, provider_type in workflow_inline_connection_inputs(frozen.nodes):
         if node_ids is not None and node.id not in node_ids:
             continue

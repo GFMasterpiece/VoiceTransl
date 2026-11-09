@@ -37,6 +37,7 @@ class NodeConfigCapability(BaseModel):
 
 
 ConfigCallable = Callable[[dict[str, object]], dict[str, object]]
+ExecutionConfigCallable = Callable[[dict[str, object], frozenset[str]], None]
 ExecuteCallable = Callable[[NodeExecutionContext], Awaitable[NodeResult]]
 
 
@@ -69,6 +70,7 @@ class NodeDefinition:
     settings_default_fields: tuple[str, ...] = ()
     execution_version: str = "1"
     debug_only: bool = False
+    validate_execution_config: ExecutionConfigCallable | None = None
 
     @property
     def required_ports(self) -> tuple[str, ...]:

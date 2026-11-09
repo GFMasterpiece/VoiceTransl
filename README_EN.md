@@ -4,9 +4,11 @@
 
 VoiceTransl is building a visual audio workflow with ComfyUI-style node connections, independent node settings, and immutable snapshots for each run.
 
-**This is a Web development version with audio passthrough, Mock validation, and Qwen cloud transcription. Translation and media conversion are not available.** The old desktop implementation, GalTransl, plugins, dependencies, and packaging resources have been removed from the current source tree. The [roadmap](docs/roadmap.md) summarizes their history; full implementations remain in Git history.
+**This is a Web development version with audio passthrough, Mock validation, Qwen cloud transcription, and LLM API translation. Media conversion is not available.** The old desktop implementation, GalTransl, plugins, dependencies, and packaging resources have been removed from the current source tree. The [roadmap](docs/roadmap.md) summarizes their history; full implementations remain in Git history.
 
 ## Current Features
+
+- LLM translation uses a Chat Completions compatible API with independent endpoint, model, target language, and key per node, plus glossary, batching, and neighboring context. Translation, preview, and export consume the immediate upstream current text; chained translation consumes the preceding translation while preserving original text and timing. See [translation behavior](docs/translation_providers.md).
 
 - Simplified Chinese / English interface switching, browser language detection, and saved preferences. Switching preserves form values, node upload state, and workflow drafts.
 - Paginated projects and name-only empty project creation. Select or upload audio and provide its source language in the audio input node; failed uploads can be retried and do not start a run.

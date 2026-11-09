@@ -34,6 +34,7 @@ def definition() -> NodeDefinition:
         output_ports=(),
         terminal=True,
         config_kind="text_output",
+        execution_version="2",
         fields=fields_from_model(
             TextOutputConfig,
             input_ports={"filename_stem": "filename_stem", "format": "text_format"},

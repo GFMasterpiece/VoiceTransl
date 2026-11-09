@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import re
-from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -21,6 +19,8 @@ import httpx
 from ..domain.inline_connection import InlineConnection
 from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..domain.transcript import Segment, Transcript
+from .private_http import PRIVATE_HTTP as _PRIVATE_HTTP
+from .private_http import ensure_private_http_filters
 from .qwen_protocol import (
     CANCEL_TIMEOUT,
     CHUNK_SIZE,
@@ -31,28 +31,6 @@ from .qwen_protocol import (
     validate_base_url,
 )
 from .qwen_protocol import DEFAULT_MODEL as DEFAULT_MODEL
-
-_PRIVATE_HTTP = ContextVar("qwen_private_http", default=False)
-
-
-class _PrivateHTTPFilter(logging.Filter):
-    def filter(self, record):
-        # httpx logs complete signed request URLs at INFO; httpcore DEBUG can
-        # include response headers. Suppress only this task's transport logs.
-        return not _PRIVATE_HTTP.get()
-
-
-_HTTP_FILTER = _PrivateHTTPFilter()
-for _logger_name in (
-    "httpx",
-    "httpcore",
-    "httpcore.connection",
-    "httpcore.http11",
-    "httpcore.http2",
-    "httpcore.proxy",
-    "httpcore.socks",
-):
-    logging.getLogger(_logger_name).addFilter(_HTTP_FILTER)
 
 
 class QwenASRError(NodeExecutionError):
@@ -276,12 +254,7 @@ class _Session:
 
     def client(self):
         client = httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=None)
-        # httpcore imports its transport loggers lazily during client creation.
-        for name in list(logging.Logger.manager.loggerDict):
-            if name.startswith("httpcore."):
-                logger = logging.getLogger(name)
-                if _HTTP_FILTER not in logger.filters:
-                    logger.addFilter(_HTTP_FILTER)
+        ensure_private_http_filters()
         return client
 
     async def json(self, client, method, url, *, limit=1024 * 1024, **kwargs):
