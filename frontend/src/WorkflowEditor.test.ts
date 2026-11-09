@@ -1160,6 +1160,10 @@ describe('canvas context menus', () => {
     expect(root!.querySelector('[data-node-category=uncategorized] h3')!.textContent).toBe('Extension tools')
     expect([...root!.querySelectorAll('[data-node-category=speech_recognition] [data-add-kind]')].map((item) => item.getAttribute('data-add-kind'))).toEqual(['asr', 'qwen_asr'])
     expect(root!.querySelector('[data-add-kind=asr]')!.textContent).toContain('语音识别（Mock）')
+    expect(root!.querySelector('[data-node-category=output] [data-add-kind=audio_output]')!.textContent).toContain('音频输出')
+    setLocale('en'); await settle()
+    expect(root!.querySelector('[data-node-category=output] [data-add-kind=audio_output]')!.textContent).toContain('Audio output')
+    setLocale('zh-CN'); await settle()
     root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     menu(root!.querySelector('.workflow-svg')!); await settle()
     expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(6)
@@ -2426,20 +2430,27 @@ describe('editor operations UI', () => {
     expect(store.draft).toEqual(unsafe)
   })
 
-  it('exposes node clipboard actions and pastes at the captured blank context-menu position', async () => {
+  it('keeps paste in edit and node menus while both add menus only offer node creation', async () => {
     setup(); await settle(); const store = useWorkflowStore(); store.selectNode('output')
     vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')), readText: vi.fn().mockRejectedValue(new Error('denied')) } })
     const menu = async (target: Element, x = 300, y = 220) => { target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })); await settle() }
+    const close = async () => { root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle() }
     await menu(node('audio_output'))
     expect([...root!.querySelectorAll('[data-context-command]')].map(item => item.getAttribute('data-context-command'))).toEqual(['copy', 'cut', 'paste', 'duplicate'])
     root!.querySelector<HTMLButtonElement>('[data-context-command=copy]')!.click(); await settle()
     await menu(svg(), 610, 330)
+    expect(root!.querySelector('[data-context-command=paste]')).toBeNull()
+    expect(root!.querySelector('[data-add-kind=audio_output]')).not.toBeNull(); await close()
+    root!.querySelector<HTMLButtonElement>('[data-add-node]')!.click(); await settle()
+    expect(root!.querySelector('[data-context-command=paste]')).toBeNull(); await close()
+    await command('paste'); expect(store.draft.nodes).toHaveLength(3)
+    store.undo(); expect(store.draft.nodes).toHaveLength(2)
+    await menu(node('audio_output'))
     root!.querySelector<HTMLButtonElement>('[data-context-command=paste]')!.click(); await settle()
     expect(store.draft.nodes).toHaveLength(3)
     const pasted = store.selectedNode!
     const bounds = svg().getBoundingClientRect()
-    expect(pasted.position).toEqual({ x: Math.round((610 - bounds.left - store.pan.x) / store.zoom), y: Math.round((330 - bounds.top - store.pan.y) / store.zoom) })
-    store.undo(); expect(store.draft.nodes).toHaveLength(2)
+    expect(pasted.position).toEqual({ x: Math.round((300 - bounds.left - store.pan.x) / store.zoom), y: Math.round((220 - bounds.top - store.pan.y) / store.zoom) })
   })
 
   it('duplicates and deletes by menu or shortcut, keeps protected nodes and never captures native editing or locked commands', async () => {

@@ -50,10 +50,8 @@ async function fillName(value: string) {
   const input = root!.querySelector<HTMLInputElement>('#project-name')!
   input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); await nextTick()
 }
-async function switchInterface(value: 'zh-CN' | 'en') {
-  const picker = root!.querySelector<HTMLSelectElement>('.locale-picker')!
-  picker.value = value; picker.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
-}
+async function switchInterface(value: 'zh-CN' | 'en') { setLocale(value); await nextTick() }
+
 async function closeCreate() {
   root!.querySelector<HTMLButtonElement>('.project-create-modal .form-actions .secondary-button')!.click()
   await settle()
@@ -235,7 +233,7 @@ describe('name-only project creation', () => {
     expect(detail.activeAudioId).toBeNull()
     expect(root!.querySelector('.node-workflow')).toBeNull()
     expect(root!.querySelector('.is-canvas-workspace .workspace-loading-shell .workspace-header-back')).not.toBeNull()
-    expect(root!.querySelector('.workspace-loading-shell .locale-picker')).not.toBeNull()
+    expect(root!.querySelector('.workspace-loading-shell .locale-picker')).toBeNull()
     expect(root!.querySelector('.topbar')).toBeNull()
     expect(root!.querySelector('.page-heading')).toBeNull()
     expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
@@ -452,7 +450,7 @@ describe('workflow navigation guards', () => {
     expect(root!.querySelector('.page-heading')).toBeNull()
     expect(root!.querySelector('.workspace-title')).toBeNull()
     expect(root!.querySelector('.workflow-workspace-header .workspace-project-title')?.textContent).toBe('Voice')
-    expect(root!.querySelectorAll('.locale-picker')).toHaveLength(1)
+    expect(root!.querySelectorAll('.locale-picker')).toHaveLength(0)
     expect(root!.querySelector('.workspace')).not.toBeNull()
     expect(root!.querySelector('.back-button')).not.toBeNull()
     expect(root!.querySelector('button[aria-label="新建项目"]')).not.toBeNull()
@@ -784,9 +782,16 @@ it.each(['1.13', '1.14', '1.15'])('retries failed home capabilities and opens se
   await settle()
   expect(capabilitiesRequest).toHaveBeenCalledTimes(2)
   expect(root!.querySelector('[data-settings-retry]')).toBeNull()
+  expect(root!.querySelector('.locale-picker')).toBeNull()
+  fetcher.mockImplementation((path) => Promise.resolve(response(String(path).endsWith('/settings') ? { schema_version: '1.0', revision: 1, global_fields: [], global: {}, node_defaults: {} } : { items: [] })))
   root!.querySelector<HTMLButtonElement>('[data-global-settings]')!.click()
   await settle()
   expect(root!.querySelector('.global-settings-dialog [role="dialog"]')).not.toBeNull()
+  expect(root!.querySelectorAll('.locale-picker')).toHaveLength(1)
+  const language = root!.querySelector<HTMLSelectElement>('[data-settings-locale]')!
+  language.value = 'en'; language.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+  expect(locale.value).toBe('en'); expect(window.localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('en')
+  expect(root!.querySelector('.global-settings-dialog .canvas-dialog-header h2')!.textContent).toBe('Global settings')
   expect(fetcher.mock.calls.filter(([path]) => String(path).includes('/projects?'))).toHaveLength(projectsBefore)
   expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
 })

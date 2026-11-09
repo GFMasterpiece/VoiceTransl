@@ -7,7 +7,7 @@ import WorkflowEditor from './components/WorkflowEditor.vue'
 import GlobalSettingsDialog from './components/GlobalSettingsDialog.vue'
 import { fetchCapabilities, type Capabilities } from './workflow/capabilities'
 import CanvasDialog from './components/CanvasDialog.vue'
-import { locale, message, messageRef, setLocale, t } from './i18n'
+import { locale, message, messageRef, t } from './i18n'
 
 type View = 'list' | 'detail'
 
@@ -70,7 +70,6 @@ function formatSize(size: number) {
   return `${new Intl.NumberFormat(locale.value, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(size / 1024 / 1024)} MB`
 }
 function audioCount(count: number) { return t(`app.projects.audio${count === 1 ? 'One' : 'Other'}`, { count: formatNumber(count) }) }
-function changeLocale(event: Event) { setLocale((event.target as HTMLSelectElement).value) }
 async function submitProject() {
   if (formBusy.value || !createOpen.value) return
   if (!projectName.value.trim()) { createError.set(message('app.create.chooseName')); return }
@@ -236,7 +235,6 @@ onUnmounted(() => {
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><div class="topbar-status"><span class="status-dot"></span>{{ t('app.connected') }}</div>
       <button v-if="homeCapabilitiesFailed" class="secondary-button compact-button" type="button" data-settings-retry :disabled="homeCapabilitiesLoading" @click="loadHomeCapabilities">{{ t('settings.retryCapabilities') }}</button>
       <button v-if="['1.13', '1.14', '1.15'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings @click="settingsOpen = true">{{ t('settings.title') }}</button>
-      <select class="locale-picker" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
     </header>
 
     <main class="main-content">
@@ -263,7 +261,6 @@ onUnmounted(() => {
 
               <button class="secondary-button compact-button danger-button" type="button" :aria-label="t('app.actions.deleteProject')" :disabled="detail.anyRunning || audioContextLocked" @click="deleteProject(detail.project.id, detail.project.name)">{{ t('app.actions.deleteProject') }}</button>
             </div>
-            <select class="locale-picker workspace-language-control" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
           </template>
         </WorkflowEditor>
         <div v-else class="workspace-loading-shell">
@@ -274,7 +271,6 @@ onUnmounted(() => {
               <button class="secondary-button compact-button" type="button" :aria-label="t('app.actions.create')" @click="showCreate">{{ t('app.actions.create') }}</button>
 
             </div>
-            <select class="locale-picker workspace-language-control" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
           </div>
           <div v-if="detail.loading" class="workspace-skeleton" role="status" :aria-label="t('app.workspace.loading')"><div class="skeleton-line short"></div><div class="skeleton-line wide"></div><div class="skeleton-block"></div></div>
         </div>

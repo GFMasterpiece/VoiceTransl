@@ -929,7 +929,6 @@ onUnmounted(() => {
       </template>
       <button v-if="contextMenu.nodeId && ['1.14', '1.15'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
-      <button v-else role="menuitem" type="button" data-context-command="paste" :disabled="commandDisabled('paste')" @click="runContextCommand('paste')">{{ t('workflow.editorCommand_paste') }}</button>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
     <CanvasDialog class="node-rerun-dialog" :open="!!rerun.target.value" :title="t('workflow.rerunTitle')" :close-disabled="rerun.submitting.value" @close="rerun.close">
