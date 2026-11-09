@@ -15,7 +15,12 @@ class MockPreprocessNodeConfig(_ConfigModel):
 
 class MockASRNodeConfig(_ConfigModel):
     provider: Literal["mock"] = "mock"
-    language: str = Field(default="ja", min_length=1, max_length=32)
+    language: str = Field(
+        default="ja",
+        min_length=1,
+        max_length=32,
+        json_schema_extra={"suggestion_source": "languages"},
+    )
 
 
 class AudioOutputConfig(BaseModel):

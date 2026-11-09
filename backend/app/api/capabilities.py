@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from ..domain.languages import LanguageCandidate, language_catalog
 from ..domain.node_registry import (
     TEXT_OUTPUT_NODE_TYPE,
     asr_provider_catalog,
@@ -21,7 +22,7 @@ from ..domain.workflow import (
 )
 
 router = APIRouter(prefix="/api/v1")
-WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.11"
+WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.12"
 
 
 class WorkflowGraphConstraints(BaseModel):
@@ -63,6 +64,7 @@ class ExportCapabilities(BaseModel):
 class CapabilitiesResponse(BaseModel):
     model_config = {"extra": "forbid"}
     schema_version: str = SCHEMA_VERSION
+    languages: list[LanguageCandidate]
     workflow: CapabilitiesWorkflow
     asr: ASRCapabilities
     export: ExportCapabilities
@@ -95,6 +97,7 @@ async def capabilities():
     default_graph = default_workflow("capabilities-default")
     return {
         "schema_version": SCHEMA_VERSION,
+        "languages": language_catalog(),
         "workflow": {
             "schema_version": WORKFLOW_CAPABILITY_SCHEMA_VERSION,
             "ports": port_catalog(),

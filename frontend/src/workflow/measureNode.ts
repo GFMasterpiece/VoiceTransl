@@ -37,7 +37,7 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       const clone = body.cloneNode(true) as HTMLElement
       // Strip media URLs and accessibility identities BEFORE connecting the clone.
       for (const element of [clone, ...clone.querySelectorAll<HTMLElement>('*')]) {
-        for (const attr of ['src', 'srcset', 'poster', 'id', 'for', 'aria-labelledby', 'aria-describedby']) element.removeAttribute(attr)
+        for (const attr of ['src', 'srcset', 'poster', 'id', 'for', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-activedescendant']) element.removeAttribute(attr)
       }
       // Document/JSON bodies scroll inside bounded controls and do not define UI minima.
       clone.querySelectorAll('pre').forEach((element) => { element.textContent = '' })

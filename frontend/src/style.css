@@ -442,3 +442,10 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .project-create-modal .text-input { margin-bottom: 0; }
 .project-create-modal .form-actions { margin-top: 24px; }
 .create-error { margin: 12px 0 0; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+
+.language-combobox { display: block; width: 100%; min-width: 0; }
+.language-combobox > input { width: 100%; min-width: 0; box-sizing: border-box; }
+.language-options { position: fixed; overflow: auto; overscroll-behavior: contain; touch-action: pan-y; box-sizing: border-box; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); box-shadow: 0 10px 30px oklch(28% .03 180 / .2); font: 12px/1.4 var(--sans); }
+.language-options [role="option"] { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 5px; min-height: 32px; box-sizing: border-box; overflow-wrap: anywhere; cursor: pointer; }
+.language-options [role="option"]:hover, .language-options .is-active { background: var(--teal-soft); }
+.language-options small { font-size: 11px; color: var(--muted); }

@@ -83,7 +83,9 @@ data/projects/<project-id>/
 
 全局 `/provider-profiles` CRUD 已删除，旧连接文件不再加载。Filetrans 的 `provider_profile_id/connection_mode/api_key_env` 不再接受；含这些字段的旧图可以读取，但保存、运行及重试须明确拒绝，需删除后重新添加节点。原文件不自动改写；历史 `provider_profiles_snapshot` 仅作为不参与执行的原始元数据保留，不补读最新连接。
 
-`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.11`。
+`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.12`。
+
+`GET /capabilities` 顶层发布 `languages:[{code,names:{"zh-CN",en},native_name,aliases}]`，字段以 `suggestion_source:"languages"|null` 声明编辑候选。该清单不改变上传/配置的语言验证，不进入图和历史；传输继续只用原字符串代码，清单外的代码不因此被拒绝。源语言仍必填，云识别的空语言仍继承音频声明，Mock 保留非空校验及默认 `ja`。
 
 运行提交时连接/凭据缺失或归属不符返回安全稳定错误，旧连接字段使用 `LEGACY_CONNECTION_UNSUPPORTED` 或同说明的配置校验错误。Streaming WAV 内容检查在执行时、握手前完成，使用 `QWEN_STREAM_*` 错误，不自动转码。取消详情可保存在节点 error 中，最终 cancelled 不代表远端终止，见[节点连接](node_connections.md)。
 

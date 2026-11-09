@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LanguageCombobox from './LanguageCombobox.vue'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { API_BASE_URL, parseApiError } from '../api'
 import { t, message, messageRef } from '../i18n'
@@ -8,6 +9,7 @@ import { fileExtension, type UploadPolicy } from '../composables/useUploadQueue'
 const props = defineProps<{ projectId: string; audios: readonly Audio[]; value: unknown; sourceLanguage?: string | null; resourceType: string; locked: boolean }>()
 const emit = defineEmits<{ bind: [id: string | null]; uploaded: [audio: Audio]; busy: [value: boolean] }>()
 const language = ref(props.sourceLanguage || '')
+const languageSearching = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pending = ref<File | null>(null)
 const uploading = ref(false)
@@ -31,6 +33,7 @@ async function loadPolicy() {
 async function upload(file: File) {
   if (props.locked || uploading.value) return
   pending.value = file
+  if (languageSearching.value) return
   if (!language.value.trim()) { error.set(message('app.upload.chooseSource')); return }
   if (!policy.value) { error.set(message('app.upload.policyMissing')); return }
   if (!policy.value.allowed_extensions.includes(fileExtension(file.name))) { error.set(message('app.upload.unsupported', { extensions: policy.value.allowed_extensions.join(' / ') })); return }
@@ -77,13 +80,13 @@ onUnmounted(() => { alive = false; controller.abort(); emit('busy', false) })
     <p v-if="resourceType !== 'audio'" role="alert">{{ t('workflow.resourceUnsupported', { type: resourceType }) }}</p>
     <template v-else>
       <label><span>{{ t('workflow.resourceChoose') }}</span><select data-resource="audio" :value="value || ''" :disabled="locked" @change="!locked && emit('bind', ($event.target as HTMLSelectElement).value || null)"><option value="">{{ t('workflow.resourceContext') }}</option><option v-for="audio in audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }}</option><option v-if="value && !audios.some((audio) => audio.id === value)" :value="String(value)">{{ t('workflow.resourceMissing') }}</option></select></label>
-      <label><span>{{ t('app.create.source') }}</span><input :value="language" @input="!locked && (language = ($event.target as HTMLInputElement).value)" data-resource-language type="text" :disabled="locked" :placeholder="t('app.create.sourcePlaceholder')" autocomplete="off" /></label>
-      <button class="node-resource-upload" type="button" :disabled="locked || !policy" @click="fileInput?.click()">{{ t('workflow.resourceUpload') }}</button>
-      <input ref="fileInput" class="visually-hidden" type="file" :accept="policy?.allowed_extensions.map((extension) => `.${extension}`).join(',')" :disabled="locked || !policy" :aria-label="t('workflow.resourceFile')" @change="choose" />
+      <label><span>{{ t('app.create.source') }}</span><LanguageCombobox v-model="language" data-resource-language :disabled="locked || uploading" allow-empty :aria-label="t('app.create.source')" :placeholder="t('app.create.sourcePlaceholder')" @searching="languageSearching = $event" /></label>
+      <button class="node-resource-upload" type="button" :disabled="locked || uploading || languageSearching || !policy" @click="fileInput?.click()">{{ t('workflow.resourceUpload') }}</button>
+      <input ref="fileInput" class="visually-hidden" type="file" :accept="policy?.allowed_extensions.map((extension) => `.${extension}`).join(',')" :disabled="locked || uploading || languageSearching || !policy" :aria-label="t('workflow.resourceFile')" @change="choose" />
       <progress v-if="uploading" :aria-label="t('workflow.resourceUploading')" />
       <small v-if="uploading" role="status">{{ t('workflow.resourceUploading') }}</small>
       <p v-if="error.text.value" class="node-resource-error" role="alert" :title="error.text.value">{{ error.text.value }}</p>
-      <button v-if="pending && !uploading" type="button" :disabled="locked" @click="upload(pending!)">{{ t('app.upload.retry') }}</button>
+      <button v-if="pending && !uploading" type="button" :disabled="locked || languageSearching" @click="upload(pending!)">{{ t('app.upload.retry') }}</button>
       <button v-if="!policy" type="button" :disabled="locked || policyLoading" @click="loadPolicy">{{ t('app.create.retryPolicy') }}</button>
     </template>
   </div>

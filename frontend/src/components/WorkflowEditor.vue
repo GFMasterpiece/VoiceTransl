@@ -12,6 +12,7 @@ import {
 } from '../stores/workflow'
 
 import NodeConfigFields from './NodeConfigFields.vue'
+import { languageSuggestionsKey } from '../composables/languageSuggestions'
 import CanvasDialog from './CanvasDialog.vue'
 import BatchPanel from './BatchPanel.vue'
 import { useBatchSession } from '../composables/useBatchSession'
@@ -72,6 +73,10 @@ const commands = useEditorCommands(store, {
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
 const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value)
+provide(languageSuggestionsKey, { languages: computed(() => store.capabilities?.languages),
+  suspended: computed(() => editingBlocked.value || !!contextMenu.value || editMenuOpen.value || !!drag.value || !!resizing.value || !!panning.value || !!connectionStart.value || !!marquee.value),
+  context: computed(() => props.projectId), finishEdit: store.closeHistoryGroup })
+
 type EditorCommand = 'undo' | 'redo' | 'select-all' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'import' | 'export'
 const editorCommands: Array<{ id: EditorCommand; shortcut: string }> = [
   { id: 'undo', shortcut: 'Ctrl/Cmd+Z' }, { id: 'redo', shortcut: 'Ctrl/Cmd+Shift+Z' },

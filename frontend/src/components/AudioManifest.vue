@@ -3,12 +3,19 @@ import { computed, reactive, ref, watch } from 'vue'
 import { displayError, locale, t } from '../i18n'
 import type { Audio } from '../stores/projects'
 import type { BatchManifest } from '../composables/useBatchManifest'
+import LanguageCombobox from './LanguageCombobox.vue'
 import { batchStatus } from '../composables/useBatches'
 const props = defineProps<{ manifest: BatchManifest; audios: readonly Audio[]; locked: boolean }>()
 const manifest = reactive(props.manifest)
 const fileInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
 const existing = ref('')
+const defaultSearching = ref(false)
+const rowSearching = reactive<Record<string, boolean>>({})
+const languageSearching = computed(() => defaultSearching.value || Object.values(rowSearching).some(Boolean))
+function rowSearch(id: string, searching: boolean) { if (searching) rowSearching[id] = true; else delete rowSearching[id] }
+function upload(retry = false) { if (!languageSearching.value && !locked.value) void manifest.upload(retry) }
+function applyLanguage() { if (!languageSearching.value && !locked.value) manifest.applyLanguage() }
 const manifestOffset = ref(0)
 const manifestPage = computed(() => manifest.items.slice(manifestOffset.value, manifestOffset.value + 20))
 watch(() => manifest.items.length, (length) => { if (manifestOffset.value >= length) manifestOffset.value = Math.max(0, Math.floor((length - 1) / 20) * 20) })
@@ -35,8 +42,8 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
         <input ref="fileInput" type="file" multiple class="visually-hidden" data-batch-file-input :disabled="locked" :aria-label="t('batch.files')" :accept="manifest.policy?.allowed_extensions.map((value) => `.${value}`).join(',')" @change="choose($event, false)" />
         <input ref="folderInput" type="file" webkitdirectory multiple class="visually-hidden" data-batch-folder-input :disabled="locked" :aria-label="t('batch.folder')" @change="choose($event, true)" />
         <div class="batch-fields">
-          <label>{{ t('batch.defaultLanguage') }}<input v-model="manifest.language" type="text" :disabled="locked" data-batch-language :placeholder="t('app.create.sourcePlaceholder')" /></label>
-          <button type="button" class="secondary-button" :disabled="locked" @click="manifest.applyLanguage">{{ t('batch.applyLanguage') }}</button>
+          <label>{{ t('batch.defaultLanguage') }}<LanguageCombobox v-model="manifest.language" :disabled="locked" data-batch-language allow-empty :aria-label="t('batch.defaultLanguage')" :placeholder="t('app.create.sourcePlaceholder')" @searching="defaultSearching = $event" /></label>
+          <button type="button" class="secondary-button" data-manifest-apply-language :disabled="locked || languageSearching" @click="applyLanguage">{{ t('batch.applyLanguage') }}</button>
           <label>{{ t('batch.chooseExisting') }}<select data-manifest-existing v-model="existing" :disabled="locked"><option value="">{{ t('batch.choose') }}</option><option v-for="audio in audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }} · {{ audio.source.language }}</option></select></label>
           <button type="button" class="secondary-button" :disabled="locked || !existing" data-manifest-add-existing @click="addExisting">{{ t('batch.addExisting') }}</button>
         </div>
@@ -49,7 +56,7 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
             <tbody><tr v-for="item in manifestPage" :key="item.id" :class="{ 'batch-excluded': !manifest.included(item) }" :data-batch-item="item.id">
               <td><input data-manifest-selected v-model="item.selected" type="checkbox" :disabled="locked" :aria-label="`${t('batch.selected')} ${item.name}`" /></td>
               <td><strong :title="item.name">{{ item.origin?.relative_path || item.name }}</strong><small :title="item.origin ? `${item.origin.root_name} · ${item.origin.root_id}` : undefined">{{ item.fileSelection ? t('batch.flatRoot') : item.origin?.root_name || '—' }} · {{ size(item.sizeBytes) }}</small></td>
-              <td><input v-model="item.language" type="text" :disabled="locked || !!item.audioId" :aria-label="`${t('batch.language')} ${item.name}`" /></td>
+              <td><LanguageCombobox v-model="item.language" data-manifest-language :disabled="locked || !!item.audioId" allow-empty :aria-label="`${t('batch.language')} ${item.name}`" @searching="rowSearch(item.id, $event)" /></td>
               <td><span class="manifest-status">{{ manifest.validation(item) ? batchStatus('invalid') : batchStatus(item.status) }}</span><small v-if="manifest.validation(item)" class="workflow-run-error">{{ manifest.validation(item) }}</small><small v-if="item.error" class="workflow-run-error">{{ displayError(item.error) }}</small></td>
               <td><button type="button" class="text-button" :disabled="locked" :aria-label="`${t('batch.remove')} ${item.name}`" @click="manifest.remove(item.id)">×</button></td>
             </tr></tbody>
@@ -57,8 +64,8 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
         </div>
         <nav v-if="manifest.items.length" class="batch-actions" :aria-label="t('batch.manifestList')"><button type="button" class="secondary-button" :disabled="manifestOffset === 0" data-manifest-previous @click="manifestOffset = Math.max(0, manifestOffset - 20)">{{ t('batch.previous') }}</button><span>{{ pageLabel({ items: manifestPage, total: manifest.items.length, offset: manifestOffset }) }}</span><button type="button" class="secondary-button" :disabled="manifestOffset + 20 >= manifest.items.length" data-manifest-next @click="manifestOffset += 20">{{ t('batch.next') }}</button></nav>
         <div class="batch-actions">
-          <button type="button" class="secondary-button" data-batch-upload :disabled="locked || !manifest.selected.some((item) => !item.audioId && !manifest.validation(item))" @click="manifest.upload()">{{ manifest.uploading ? t('batch.uploading') : t('batch.upload') }}</button>
-          <button v-if="manifest.items.some((item) => item.status === 'failed')" type="button" class="secondary-button" :disabled="locked" data-manifest-retry-upload @click="manifest.upload(true)">{{ t('batch.retryUploads') }}</button>
+          <button type="button" class="secondary-button" data-batch-upload :disabled="locked || languageSearching || !manifest.selected.some((item) => !item.audioId && !manifest.validation(item))" @click="upload()">{{ manifest.uploading ? t('batch.uploading') : t('batch.upload') }}</button>
+          <button v-if="manifest.items.some((item) => item.status === 'failed')" type="button" class="secondary-button" :disabled="locked || languageSearching" data-manifest-retry-upload @click="upload(true)">{{ t('batch.retryUploads') }}</button>
         </div>
       </section>
 </template>

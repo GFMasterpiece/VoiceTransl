@@ -29,9 +29,8 @@ function text(field: Field): string {
   if (current === null || current === undefined) return ''
   return field.type === 'json' && typeof current === 'object' ? JSON.stringify(current, null, 2) : String(current)
 }
-function edit(field: Field, event: Event) {
+function edit(field: Field, input: string) {
   if (disabled(field)) return
-  const input = (event.target as HTMLInputElement).value
   let next: unknown = input
   if (field.type === 'boolean') next = input === 'true'
   if ((field.type === 'integer' || field.type === 'number') && input.trim() !== '' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(input) && Number.isFinite(Number(input))) next = Number(input)
@@ -62,7 +61,7 @@ function error(field: Field) {
     </section>
     <section v-if="parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
       <h4 v-if="hasConnection" class="node-config-section-title">{{ t('connections.processingParameters') }}</h4>
-      <NodeConfigField v-for="field in parameterFields" :key="field.key" :field="field" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
+      <NodeConfigField v-for="field in parameterFields" :key="field.key" :field="field" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
     </section>
   </div>
 </template>

@@ -26,9 +26,9 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         response = await client.get("/api/v1/capabilities")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"schema_version", "workflow", "asr", "export"}
+    assert set(body) == {"schema_version", "workflow", "asr", "export", "languages"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.11"
+    assert body["workflow"]["schema_version"] == "1.12"
     assert body["workflow"]["ports"][:3] == [
         {"id": "audio", "type_id": "audio", "label": "音频", "capability_requirements": []},
         {
@@ -268,3 +268,108 @@ async def test_removed_local_runtime_endpoints_and_legacy_runners_are_absent(tmp
             404,
             405,
         }
+
+
+def test_language_suggestions_are_explicit_and_preserve_config_values():
+    from app.domain.languages import LanguageCandidate, language_catalog, validate_language_catalog
+    from app.domain.node_contracts import CapabilityField, fields_from_model
+    from pydantic import BaseModel, Field, ValidationError
+
+    languages = language_catalog()
+    assert {item.code for item in languages} >= {"zh", "en", "ja", "ko"}
+    assert len({item.code.casefold() for item in languages}) == len(languages)
+    languages[0].aliases.append("local mutation")
+    assert "local mutation" not in language_catalog()[0].aliases
+    with pytest.raises(ValueError, match="unique"):
+        validate_language_catalog([languages[0], languages[0].model_copy(update={"code": "ZH"})])
+    for update in (
+        {"native_name": ""},
+        {"names": {"zh-CN": "中文", "en": "bad\nname"}},
+        {"aliases": [" "]},
+    ):
+        with pytest.raises(ValidationError):
+            LanguageCandidate.model_validate({**languages[0].model_dump(), **update})
+
+    class ExtensionConfig(BaseModel):
+        language: str = "custom"
+        arbitrary_key: str = Field(
+            default="x-private", json_schema_extra={"suggestion_source": "languages"}
+        )
+
+    derived = {item.key: item for item in fields_from_model(ExtensionConfig)}
+    assert derived["language"].suggestion_source is None
+    assert derived["arbitrary_key"].suggestion_source == "languages"
+    with pytest.raises(ValidationError):
+        CapabilityField(key="bad", type="string", suggestion_source="unknown")
+    invalid = replace(
+        NODE_DEFINITIONS["asr"],
+        fields=(CapabilityField(key="bad", type="integer", suggestion_source="languages"),),
+    )
+    with pytest.raises(ValueError, match="suggestion source"):
+        validate_node_definition(invalid)
+    for node_type in ("asr", "qwen_asr", "qwen_asr_streaming"):
+        definition = NODE_DEFINITIONS[node_type]
+        field = next(item for item in definition.fields if item.key == "language")
+        assert field.suggestion_source == "languages"
+        assert field.type == "string"
+        assert field.input_port == "language"
+        value = {item.key: item.default for item in definition.fields if item.default is not None}
+        value["language"] = "x-Custom-Language"
+        assert definition.normalize_config(value)["language"] == "x-Custom-Language"
+
+
+@pytest.mark.asyncio
+async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp_path, monkeypatch):
+    from app.domain import languages
+    from app.domain.workflow import WorkflowDocument
+
+    from test_node_parameters import parameter_graph
+    from test_workflow import create_project, save_graph
+
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, _ = await create_project(client)
+        graph = parameter_graph()
+        next(node for node in graph["nodes"] if node["id"] == "asr")["config"]["language"] = (
+            "x-Custom"
+        )
+        saved = await save_graph(client, pid, 0, graph)
+        document = WorkflowDocument.model_validate(saved)
+        workflow_path = app.state.store.project_dir(pid) / "workflow.json"
+        original_bytes = workflow_path.read_bytes()
+        snapshot = workflow_snapshot(document).model_dump_json()
+        digest = workflow_semantic_digest(document.nodes, document.edges)
+        before = await client.get("/api/v1/capabilities")
+        assert before.status_code == 200
+        assert before.json()["languages"]
+        assert workflow_path.read_bytes() == original_bytes
+        monkeypatch.setattr(languages, "_LANGUAGES", [])
+        definition = NODE_DEFINITIONS["asr"]
+        monkeypatch.setitem(
+            NODE_DEFINITIONS,
+            "asr",
+            replace(
+                definition,
+                fields=tuple(
+                    item.model_copy(update={"suggestion_source": None})
+                    for item in definition.fields
+                ),
+            ),
+        )
+        after = await client.get("/api/v1/capabilities")
+        assert after.status_code == 200
+        assert after.json()["languages"] == []
+        asr = next(node for node in after.json()["workflow"]["nodes"] if node["type"] == "asr")
+        assert (
+            next(field for field in asr["config"]["fields"] if field["key"] == "language")[
+                "suggestion_source"
+            ]
+            is None
+        )
+        assert workflow_path.read_bytes() == original_bytes
+        reloaded = await client.get(f"/api/v1/projects/{pid}/workflow")
+        assert reloaded.status_code == 200
+        persisted = WorkflowDocument.model_validate(reloaded.json())
+        assert workflow_snapshot(persisted).model_dump_json() == snapshot
+        assert workflow_semantic_digest(persisted.nodes, persisted.edges) == digest
+        assert workflow_path.read_bytes() == original_bytes

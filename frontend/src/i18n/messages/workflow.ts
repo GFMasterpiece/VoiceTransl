@@ -6,6 +6,7 @@ export const workflowMessages = {
     "option_audio_output_naming_mode_exact": "完整名称", "option_text_output_naming_mode_exact": "完整名称",
     "option_audio_output_naming_mode_prefix_sequence": "前缀＋编号", "option_text_output_naming_mode_prefix_sequence": "前缀＋编号",
 
+    "capLanguageSuggestions": "能力目录中的语言候选声明无效",
     "capParameter": "能力目录中的参数绑定元数据无效",
     "parameterPortLabel": "{field} · {type}",
     "dataType_string": "字符串",
@@ -376,6 +377,7 @@ export const workflowMessages = {
     "option_audio_output_naming_mode_exact": "Exact name", "option_text_output_naming_mode_exact": "Exact name",
     "option_audio_output_naming_mode_prefix_sequence": "Prefix + sequence", "option_text_output_naming_mode_prefix_sequence": "Prefix + sequence",
 
+    "capLanguageSuggestions": "The language suggestion metadata is invalid.",
     "capParameter": "The capability catalog has invalid parameter binding metadata.",
     "parameterPortLabel": "{field} · {type}",
     "dataType_string": "String",

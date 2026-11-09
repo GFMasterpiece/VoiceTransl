@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,6 +24,7 @@ class CapabilityField(BaseModel):
     pattern: str | None = None
     description: str | None = None
     validator: str | None = None
+    suggestion_source: Literal["languages"] | None = None
     input_port: str | None = None
     options: list[dict[str, object]] = Field(default_factory=list)
 
@@ -137,6 +138,7 @@ def fields_from_model(
                 required=key in required,
                 default=spec.get("default"),
                 creation_default=spec.get("creation_default"),
+                suggestion_source=spec.get("suggestion_source"),
                 minimum=spec.get("minimum"),
                 maximum=spec.get("maximum"),
                 min_length=spec.get("minLength"),

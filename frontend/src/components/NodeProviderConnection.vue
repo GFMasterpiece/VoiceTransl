@@ -19,9 +19,8 @@ const operation = computed(() => credentials.operation(props.node.id))
 const keyValue = computed(() => credentials.value(props.node.id))
 const hasReference = computed(() => !!props.node.config[descriptor.value.credentialRefKey])
 function value(key: string) { return (props.node.config[key] === undefined ? kind.value.fields.find((field) => field.key === key)?.default : props.node.config[key]) ?? '' }
-function edit(key: string, event: Event) {
+function edit(key: string, input: string) {
   if (props.locked) return
-  const input = (event.target as HTMLInputElement).value
   const field = kind.value.fields.find((field) => field.key === key)!
   const next = field.type === 'integer' && input.trim() && Number.isInteger(Number(input)) ? Number(input)
     : [descriptor.value.regionKey].includes(key) && !input ? null : input
@@ -34,7 +33,7 @@ function error(key: string) { return props.registry.validateConfig(props.node.ty
 </script>
 <template>
   <div class="node-inline-connection" data-node-connection>
-      <NodeConfigField v-for="field in fields" :key="field.key" :field="field" :text="String(value(field.key))" :disabled="locked" :error="error(field.key)" connection @edit="edit(field.key, $event)" />
+      <NodeConfigField v-for="field in fields" :key="field.key" :field="field" :languages="registry.capabilities.languages" :text="String(value(field.key))" :disabled="locked" :error="error(field.key)" connection @edit="edit(field.key, $event)" />
       <div class="node-credential-group">
         <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-credential-input :value="keyValue" :disabled="locked" :aria-label="t('connections.apiKey')" :aria-describedby="`${credentialId}-status`" autocomplete="new-password" spellcheck="false" :placeholder="hasReference ? t('connections.keyUnchanged') : t('connections.keyPlaceholder')" @input="editKey" /></label>
         <p :id="`${credentialId}-status`" class="node-credential-status" role="status" data-credential-status>{{ operation === 'clear' ? t('connections.keyClearing') : operation === 'set' ? t('connections.keyPending') : hasReference ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p>

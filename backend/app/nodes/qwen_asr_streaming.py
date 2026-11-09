@@ -24,7 +24,12 @@ class QwenStreamingASRConfig(BaseModel):
     timeout_seconds: int = Field(default=3600, ge=1, le=3600)
     credential_ref: str | None = Field(default=None, max_length=128)
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=128)
-    language: str = Field(default="", max_length=32, description="留空使用当前输入音频已声明的语言")
+    language: str = Field(
+        default="",
+        max_length=32,
+        description="留空使用当前输入音频已声明的语言",
+        json_schema_extra={"suggestion_source": "languages"},
+    )
     additional_parameters: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("endpoint")

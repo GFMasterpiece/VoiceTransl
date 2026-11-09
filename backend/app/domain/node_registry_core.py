@@ -353,6 +353,10 @@ def validate_node_definition(definition: NodeDefinition) -> None:
     if len(set(bound_ports)) != len(bound_ports):
         raise ValueError("parameter input bindings must be unique")
     for item in definition.fields:
+        if item.suggestion_source is not None and (
+            item.suggestion_source != "languages" or item.type != "string"
+        ):
+            raise ValueError("invalid field suggestion source")
         if item.input_port is None:
             continue
         if resource_input and item.key in {

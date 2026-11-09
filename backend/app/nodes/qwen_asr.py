@@ -21,7 +21,12 @@ class QwenASRConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, protected_namespaces=())
 
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=128, description="模型名称")
-    language: str = Field(default="", max_length=32, description="留空使用当前输入音频已声明的语言")
+    language: str = Field(
+        default="",
+        max_length=32,
+        description="留空使用当前输入音频已声明的语言",
+        json_schema_extra={"suggestion_source": "languages"},
+    )
     additional_parameters: dict[str, object] = Field(
         default={}, description="可选模型参数（JSON对象）"
     )
