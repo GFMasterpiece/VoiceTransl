@@ -449,3 +449,11 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .language-options [role="option"] { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 5px; min-height: 32px; box-sizing: border-box; overflow-wrap: anywhere; cursor: pointer; }
 .language-options [role="option"]:hover, .language-options .is-active { background: var(--teal-soft); }
 .language-options small { font-size: 11px; color: var(--muted); }
+
+.global-settings-dialog .canvas-dialog { width: min(640px, calc(100vw - 32px)); }
+.settings-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.settings-tabs button { padding: 8px 12px; border: 1px solid var(--border, #ddd); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.settings-tabs button.active { background: var(--accent-soft, #e9e8ff); }
+.settings-fields { display: grid; gap: 16px; }
+.settings-fields .node-config-row { margin: 0; }
+.settings-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }

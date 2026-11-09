@@ -4,7 +4,17 @@ from ..domain.node_registry import NODE_DEFINITIONS
 from .workflow_connections import ConnectionSnapshotError, credential_operation
 
 
-def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, expected_revision):
+def prepare_workflow_credentials(
+    store,
+    project_id,
+    nodes,
+    updates,
+    request_id,
+    expected_revision,
+    *,
+    existing_node_ids=(),
+    replay=False,
+):
     prepared = [node.model_copy(deep=True) for node in nodes]
     by_id = {node.id: node for node in prepared}
     if updates and not request_id:
@@ -27,13 +37,27 @@ def prepare_workflow_credentials(store, project_id, nodes, updates, request_id, 
             node.config.pop(ref_key, None)
         else:
             provider_type = binding["provider_type"]
+            if update.operation == "use_default":
+                if node.id in existing_node_ids and not replay:
+                    raise ConnectionSnapshotError(
+                        "CREDENTIAL_UPDATE_INVALID", "仅新节点可以使用默认密钥"
+                    )
+                key = credential_operation(
+                    store,
+                    "read_default",
+                    node.type,
+                    provider_type,
+                    update.default_credential_version,
+                )
+            else:
+                key = update.api_key.get_secret_value()
             node.config[ref_key] = credential_operation(
                 store,
                 "create",
                 project_id,
                 node.id,
                 provider_type,
-                update.api_key.get_secret_value(),
+                key,
                 request_id=f"{request_id}:{expected_revision}",
             )
     # References received through undo/import/copy must pass the same ownership

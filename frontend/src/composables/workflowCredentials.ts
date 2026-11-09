@@ -1,24 +1,37 @@
 import { computed, ref } from 'vue'
 
-type CredentialChange = { operation: 'set'; api_key: string } | { operation: 'clear' }
+type CredentialChange = { operation: 'set'; api_key: string } | { operation: 'clear' } | { operation: 'use_default'; default_credential_version: string }
 export type CredentialUpdate = CredentialChange & { node_id: string }
 function createSession() {
   // Values deliberately stay outside Pinia state, editor snapshots and browser storage.
   const changes = new Map<string, CredentialChange>()
+  let onDefaultOverride: ((nodeId: string) => void) | undefined
+  function setDefaultOverrideHandler(handler: (nodeId: string) => void) { onDefaultOverride = handler }
   const version = ref(0)
   let request: { signature: string; credentialVersion: number; id: string } | null = null
   const pending = computed(() => { void version.value; return changes.size > 0 })
   function set(nodeId: string, value: string) {
     const current = changes.get(nodeId)
+    if (current?.operation === 'use_default') onDefaultOverride?.(nodeId)
     if ((current?.operation === 'set' && current.api_key === value) || (!current && !value) || (current?.operation === 'clear' && !value)) return
     if (value) changes.set(nodeId, { operation: 'set', api_key: value })
     else changes.delete(nodeId)
     version.value++
   }
-  function clear(nodeId: string) { if (changes.get(nodeId)?.operation !== 'clear') { changes.set(nodeId, { operation: 'clear' }); version.value++ } }
-  function forget(nodeId?: string) {
+  function useDefault(nodeId: string, token: string) { changes.set(nodeId, { operation: 'use_default', default_credential_version: token }); version.value++ }
+  function defaultIntents() { return new Map([...changes].filter(([, value]) => value.operation === 'use_default').map(([id, value]) => [id, (value as { default_credential_version: string }).default_credential_version])) }
+  function restoreDefaults(intents: ReadonlyMap<string, string>) {
+    for (const [id, change] of changes) if (change.operation === 'use_default') changes.delete(id)
+    for (const [id, token] of intents) if (!changes.has(id)) changes.set(id, { operation: 'use_default', default_credential_version: token })
+    version.value++
+  }
+  function clear(nodeId: string) { if (changes.get(nodeId)?.operation === 'use_default') onDefaultOverride?.(nodeId); if (changes.get(nodeId)?.operation !== 'clear') { changes.set(nodeId, { operation: 'clear' }); version.value++ } }
+  function forget(nodeId?: string, preserveDefaultHistory = false) {
     if (nodeId === undefined) { changes.clear(); request = null; version.value++ }
-    else if (changes.delete(nodeId)) version.value++
+    else {
+      if (!preserveDefaultHistory && changes.get(nodeId)?.operation === 'use_default') onDefaultOverride?.(nodeId)
+      if (changes.delete(nodeId)) version.value++
+    }
   }
   function value(nodeId: string) { void version.value; const entry = changes.get(nodeId); return entry?.operation === 'set' ? entry.api_key : '' }
   function operation(nodeId: string) { void version.value; return changes.get(nodeId)?.operation }
@@ -31,8 +44,8 @@ function createSession() {
     for (const entry of changes.values()) if (entry.operation === 'set') value = value.split(entry.api_key).join('[redacted]')
     return value
   }
-  function reconcile(ids: ReadonlySet<string>) { for (const id of changes.keys()) if (!ids.has(id)) forget(id) }
-  return { pending, version, set, clear, forget, value, operation, updates, requestId, redact, reconcile }
+  function reconcile(ids: ReadonlySet<string>) { for (const id of changes.keys()) if (!ids.has(id)) forget(id, true) }
+  return { setDefaultOverrideHandler, useDefault, defaultIntents, restoreDefaults, pending, version, set, clear, forget, value, operation, updates, requestId, redact, reconcile }
 }
 const sessions = new WeakMap<object, ReturnType<typeof createSession>>()
 export function workflowCredentials(context: object) {

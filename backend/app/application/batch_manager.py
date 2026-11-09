@@ -147,6 +147,10 @@ class BatchManager:
         self._dispatch()
         return batch
 
+    def resize(self):
+        """Start additional workers after the shared job limit changes."""
+        self._dispatch()
+
     def _dispatch(self):
         if self.stopping:
             return
@@ -197,6 +201,9 @@ class BatchManager:
 
     async def _worker(self):
         while self.pending and not self.stopping:
+            if len(self.workers) > self.jobs.max_concurrent:
+                self.workers.discard(asyncio.current_task())
+                return
             bid, index = self.pending.popleft()
             batch = self.active.get(bid)
             if batch is None:

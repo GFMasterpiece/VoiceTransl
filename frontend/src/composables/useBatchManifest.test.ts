@@ -139,3 +139,23 @@ describe('batch manifest', () => {
     manifest.dispose()
   })
 })
+
+it('freezes policy concurrency for each upload batch', async () => {
+  const { manifest } = setup()
+  manifest.policy.value = { allowed_extensions: ['wav'], max_upload_bytes: 10, upload_concurrency: 1 }
+  manifest.add([file('first.wav'), file('second.wav'), file('third.wav')])
+  const resolvers: Array<(value: Response) => void> = []
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+  vi.stubGlobal('fetch', fetcher)
+  const pending = manifest.upload()
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  manifest.policy.value = { ...manifest.policy.value!, upload_concurrency: 3 }
+  for (let index = 0; index < 3; index++) {
+    expect(fetcher).toHaveBeenCalledTimes(index + 1)
+    resolvers[index]!(response({ audio: { id: `a${index}`, source: { original_name: 'audio.wav' } } }))
+    for (let tick = 0; tick < 10; tick++) await Promise.resolve()
+  }
+  await pending
+  expect(manifest.items.value.every(item => item.status === 'uploaded')).toBe(true)
+  manifest.dispose()
+})

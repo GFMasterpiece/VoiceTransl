@@ -112,7 +112,7 @@ function options(value: unknown, message: string): CapabilityOption[] {
     return { value: id, label: typeof item.label === 'string' && item.label.trim() ? item.label : id }
   })
 }
-function field(value: unknown, parameters: boolean, suggestions: boolean): CapabilityField {
+export function parseCapabilityField(value: unknown, parameters: boolean, suggestions: boolean): CapabilityField {
   const item = object(value, 'workflow.capField')
   if (parameters && item.input_port !== null && !safePort(item.input_port)) fail('workflow.capParameter')
   if (typeof item.key !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(item.key)) fail('workflow.capFieldId')
@@ -211,7 +211,7 @@ function node(value: unknown, namedInputs = false, parameters = false, collectio
   const config = item.config === undefined ? {} : object(item.config, 'workflow.capConfig')
   const fields = config.fields === undefined ? [] : config.fields
   if (!Array.isArray(fields)) fail('workflow.capConfigFields')
-  const parsedFields = fields.map((entry) => field(entry, parameters, suggestions))
+  const parsedFields = fields.map((entry) => parseCapabilityField(entry, parameters, suggestions))
   if (new Set(parsedFields.map((entry) => entry.key)).size !== parsedFields.length) fail('workflow.capDuplicateFields')
   const mappedPorts = parsedFields.flatMap((field) => field.inputPort === null ? [] : [field.inputPort])
   if (new Set(mappedPorts).size !== mappedPorts.length || mappedPorts.some((port) => !inputPorts.includes(port) || requiredInputPorts.includes(port))) fail('workflow.capParameter')
@@ -289,10 +289,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12'].includes(String(workflow.schema_version)), ['1.11', '1.12'].includes(String(workflow.schema_version)), workflow.schema_version === '1.12'))
+  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.12', '1.13'].includes(String(workflow.schema_version))))
   const categoryLabels = new Map<string, string>()
   for (const entry of nodes) if (entry.category) {
     if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')
@@ -356,7 +356,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
     schemaVersion: String(workflow.schema_version),
-    ...(workflow.schema_version === '1.12' ? { languages: languages(root.languages) } : {}),
+    ...(['1.12', '1.13'].includes(String(workflow.schema_version)) ? { languages: languages(root.languages) } : {}),
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,

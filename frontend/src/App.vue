@@ -4,6 +4,8 @@ import { useProjectsStore, type Audio, type Project } from './stores/projects'
 import { useProjectDetailStore } from './stores/projectDetail'
 import { useWorkflowStore } from './stores/workflow'
 import WorkflowEditor from './components/WorkflowEditor.vue'
+import GlobalSettingsDialog from './components/GlobalSettingsDialog.vue'
+import { fetchCapabilities, type Capabilities } from './workflow/capabilities'
 import CanvasDialog from './components/CanvasDialog.vue'
 import { locale, message, messageRef, setLocale, t } from './i18n'
 
@@ -15,6 +17,19 @@ const workflowStore = useWorkflowStore()
 const view = ref<View>('list')
 const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
 const createOpen = ref(false)
+const settingsOpen = ref(false)
+const homeCapabilities = ref<Capabilities | null>(null)
+const homeCapabilitiesFailed = ref(false)
+const homeCapabilitiesLoading = ref(false)
+async function loadHomeCapabilities() {
+  if (homeCapabilitiesLoading.value) return
+  homeCapabilitiesLoading.value = true
+  homeCapabilitiesFailed.value = false
+  try { homeCapabilities.value = await fetchCapabilities() }
+  catch { homeCapabilitiesFailed.value = true }
+  finally { homeCapabilitiesLoading.value = false }
+}
+onMounted(loadHomeCapabilities)
 const createPreparing = ref(false)
 const createError = messageRef()
 const projectName = ref('')
@@ -219,6 +234,8 @@ onUnmounted(() => {
     <header v-if="view !== 'detail'" class="topbar">
       <a class="brand" href="#" :aria-label="t('app.brandHome')" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><div class="topbar-status"><span class="status-dot"></span>{{ t('app.connected') }}</div>
+      <button v-if="homeCapabilitiesFailed" class="secondary-button compact-button" type="button" data-settings-retry :disabled="homeCapabilitiesLoading" @click="loadHomeCapabilities">{{ t('settings.retryCapabilities') }}</button>
+      <button v-if="homeCapabilities?.schemaVersion === '1.13'" class="secondary-button compact-button" type="button" data-global-settings @click="settingsOpen = true">{{ t('settings.title') }}</button>
       <select class="locale-picker" :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select>
     </header>
 
@@ -263,6 +280,7 @@ onUnmounted(() => {
         </div>
       </section>
     </main>
+    <GlobalSettingsDialog :open="settingsOpen" :capabilities="homeCapabilities" :languages="homeCapabilities?.languages" :credential-types="(homeCapabilities?.nodes || []).filter(node => !!node.inlineConnectionInput).map(node => node.type)" @close="settingsOpen = false" />
     <CanvasDialog class="project-create-modal" :open="createOpen" :title="t('app.title.create')" :close-disabled="formBusy" @close="cancelCreate">
       <form class="create-form" :aria-busy="formBusy" @submit.prevent="submitProject">
         <label class="field-label" for="project-name">{{ t('app.create.name') }} <span>{{ t('app.create.required') }}</span></label>

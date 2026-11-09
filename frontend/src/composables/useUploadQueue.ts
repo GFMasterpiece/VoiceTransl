@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { displayError, locale, message, messageRef, t } from '../i18n'
 
 export interface UploadPolicy {
+  upload_concurrency?: number
   allowed_extensions: string[]
   max_upload_bytes: number
 }

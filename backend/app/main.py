@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from .api.batches import router as batches_router
 from .api.capabilities import router as capabilities_router
 from .api.routes import router
+from .api.settings import router as settings_router
 from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
 from .application.batch_manager import BatchManager
@@ -17,6 +18,7 @@ from .config import load_settings
 from .domain.schema import SCHEMA_VERSION, SchemaVersionError
 from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
+from .storage.settings_store import SettingsStore
 
 
 def create_app(data_dir=None):
@@ -30,6 +32,10 @@ def create_app(data_dir=None):
     # avoid binding a process-global log handler to that shorter-lived root.
     configure_logging(settings.log_level, settings.data_dir if data_dir is None else None)
     store = FileSystemProjectStore(settings.data_dir)
+    settings_store = SettingsStore(settings.data_dir, settings)
+    persisted = settings_store.load()
+    settings.upload_concurrency = persisted.global_.upload_concurrency
+    settings.max_concurrent = persisted.global_.max_concurrent
     events = EventBus()
     jobs = JobManager(
         store,
@@ -130,6 +136,7 @@ def create_app(data_dir=None):
         )
 
     app.state.settings = settings
+    app.state.settings_store = settings_store
     app.state.store = store
     app.state.events = events
     app.state.jobs = jobs
@@ -138,6 +145,7 @@ def create_app(data_dir=None):
     app.include_router(capabilities_router)
     app.include_router(workflow_router)
     app.include_router(batches_router)
+    app.include_router(settings_router)
     return app
 
 

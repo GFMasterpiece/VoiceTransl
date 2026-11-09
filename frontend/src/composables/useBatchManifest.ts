@@ -64,6 +64,7 @@ export function useBatchManifest(projectId: string, onUploaded: (audio: Audio) =
       if (!response.ok) throw await parseApiError(response)
       const value = await response.json() as UploadPolicy
       if (!Array.isArray(value.allowed_extensions) || !value.allowed_extensions.every((entry) => typeof entry === 'string')
+        || (value.upload_concurrency !== undefined && (!Number.isSafeInteger(value.upload_concurrency) || value.upload_concurrency < 1))
         || !Number.isFinite(value.max_upload_bytes) || value.max_upload_bytes <= 0) throw message('app.errors.policy')
       if (alive) { policy.value = value; error.set('') }
     } catch (reason) { if (alive) error.set(reason) }
@@ -129,7 +130,7 @@ export function useBatchManifest(projectId: string, onUploaded: (audio: Audio) =
         finally { controllers.delete(request) }
       }
     }
-    try { await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker)) }
+    try { await Promise.all(Array.from({ length: Math.min(policy.value?.upload_concurrency ?? 3, queue.length) }, worker)) }
     finally { if (alive) uploading.value = false }
   }
   function dispose() { alive = false; for (const request of controllers) request.abort(); controllers.clear() }

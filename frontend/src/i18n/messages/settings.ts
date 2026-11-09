@@ -1,0 +1,4 @@
+export const settingsMessages = {
+  'zh-CN': { title: '全局设置', retryCapabilities: '设置加载失败，重试', upload_concurrency: '上传并发数', max_concurrent: '工作流并发数', general: '通用', save: '保存', refresh: '刷新', loading: '加载中…', invalid: '全局设置响应无效。', discard: '放弃未保存的设置？', pendingDefault: '待保存默认密钥', unavailable: '全局设置加载失败，请刷新重试。', conflict: '设置已被修改，请刷新后重试。' },
+  en: { title: 'Global settings', retryCapabilities: 'Settings unavailable · Retry', upload_concurrency: 'Concurrent uploads', max_concurrent: 'Concurrent workflows', general: 'General', save: 'Save', refresh: 'Refresh', loading: 'Loading…', invalid: 'Invalid global settings response.', discard: 'Discard unsaved settings?', pendingDefault: 'Default key pending save', unavailable: 'Global settings failed to load. Refresh to retry.', conflict: 'Settings changed. Refresh and retry.' },
+}

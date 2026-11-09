@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, markRaw, ref, watch } from 'vue'
+import { computed, markRaw, ref, watch, toRaw } from 'vue'
 import { API_BASE_URL, parseApiError } from '../api'
 import { t, locale, message, messageRef, hasMessage, LocalizedError, type MessageParams } from '../i18n'
 import { computed as vueComputed } from 'vue'
@@ -9,6 +9,7 @@ import { createNodeRegistry } from '../workflow/nodeRegistry'
 import { TransferError, validateTransferGraph } from '../workflow/editorTransfer'
 import { providerErrorLabel } from '../workflow/providerErrors'
 import { workflowCredentials } from '../composables/workflowCredentials'
+import { loadSettings, settingsCache } from '../composables/globalSettings'
 import { inlineConnectionKeys } from '../workflow/providerConnections'
 
 export type { NodeType, PortName } from '../workflow/nodeRegistry'
@@ -487,6 +488,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const undoSteps = ref<EditorStep[]>([])
   const redoSteps = ref<EditorStep[]>([])
   const transaction = ref<EditorSnapshot | null>(null)
+  let defaultHistory = new WeakMap<EditorSnapshot, Map<string, string>>()
+  credentials.setDefaultOverrideHandler((nodeId) => {
+    for (const step of [...undoSteps.value, ...redoSteps.value]) for (const snapshot of [step.before, step.after]) defaultHistory.get(toRaw(snapshot))?.delete(nodeId)
+    if (transaction.value) defaultHistory.get(toRaw(transaction.value))?.delete(nodeId)
+  })
   let mergeGroup: string | undefined
 
   const dirty = computed(() => credentialPending.value || savedSignature.value !== executionSignature(draft.value, registry.value || undefined)
@@ -563,7 +569,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
   }
 
   function editorSnapshot(): EditorSnapshot {
-    return { graph: cloneDocument(draft.value), selection: [...selectedNodeIds.value], primary: selectedNodeId.value }
+    const snapshot = { graph: cloneDocument(draft.value), selection: [...selectedNodeIds.value], primary: selectedNodeId.value }
+    defaultHistory.set(snapshot, credentials.defaultIntents())
+    return snapshot
   }
 
   function sameGraph(left: WorkflowDocumentInput, right: WorkflowDocumentInput) {
@@ -572,6 +580,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   function restoreEditor(snapshot: EditorSnapshot) {
     draft.value = cloneDocument(snapshot.graph)
+    credentials.restoreDefaults(defaultHistory.get(toRaw(snapshot)) || new Map())
     setSelection(snapshot.selection)
     selectedPrimaryId.value = snapshot.primary && draft.value.nodes.some((node) => node.id === snapshot.primary)
       ? snapshot.primary : selectedNodeIds.value[selectedNodeIds.value.length - 1] || null
@@ -599,6 +608,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function resetEditorHistory() {
     undoSteps.value = []
     redoSteps.value = []
+    defaultHistory = new WeakMap()
     transaction.value = null
     closeHistoryGroup()
   }
@@ -785,6 +795,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
+      if (capabilities.value.schemaVersion === '1.13') await loadSettings()
+      if (!isCurrent(id, aid, token)) return
       draft.value = createDefaultWorkflow(registry.value)
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
@@ -838,7 +850,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
       if (!isCurrent(id, aid, token) || sequence !== saveSequence) return null
       document.value = value
       assignDraft(value)
+      // Materialized credentials belong to the same insertion in every reachable history snapshot.
+      for (const step of [...undoSteps.value, ...redoSteps.value]) for (const snapshot of [step.before, step.after]) {
+        const intents = defaultHistory.get(toRaw(snapshot))
+        for (const update of credentialUpdates) {
+          if (update.operation !== 'use_default' || intents?.get(update.node_id) !== update.default_credential_version) continue
+          const historical = snapshot.graph.nodes.find(node => node.id === update.node_id)
+          const saved = value.nodes.find(node => node.id === update.node_id && node.type === historical?.type)
+          const key = saved && registry.value?.kind(saved.type)?.inlineConnectionInput?.credentialRefKey
+          if (historical && saved && key) historical.config[key] = saved.config[key]
+        }
+      }
       credentials.forget()
+      defaultHistory = new WeakMap()
       savedSignature.value = executionSignature(value, registry.value || undefined)
       savedLayoutSignature.value = layoutSignature(value)
       validationIssues.value = []
@@ -1136,6 +1160,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
+    if (capabilities.value?.schemaVersion === '1.13' && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1153,13 +1178,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: registry.value.createDefaultConfig(type, true),
+      config: { ...registry.value.createDefaultConfig(type, true), ...(capabilities.value?.schemaVersion === '1.13' ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
+    const defaultToken = capabilities.value?.schemaVersion === '1.13' ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }
 

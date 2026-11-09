@@ -1,3 +1,4 @@
+import { settingsMessages } from './messages/settings'
 import { createI18n } from 'vue-i18n'
 import { appMessages } from './messages/app'
 import { commonMessages } from './messages/common'
@@ -20,8 +21,8 @@ export const i18n = createI18n({
   missingWarn: false,
   fallbackWarn: false,
   messages: {
-    'zh-CN': { languages: languageMessages['zh-CN'], connections: connectionMessages['zh-CN'], batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
-    en: { languages: languageMessages.en, connections: connectionMessages.en, batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
+    'zh-CN': { settings: settingsMessages['zh-CN'], languages: languageMessages['zh-CN'], connections: connectionMessages['zh-CN'], batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
+    en: { settings: settingsMessages.en, languages: languageMessages.en, connections: connectionMessages.en, batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
   },
 })
 

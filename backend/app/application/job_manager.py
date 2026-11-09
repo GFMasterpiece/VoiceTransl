@@ -18,6 +18,7 @@ from ..domain.workflow import (
     workflow_parameter_sources,
     workflow_snapshot,
 )
+from .adjustable_limiter import AdjustableLimiter
 from .workflow_connections import (
     freeze_workflow_connections,
     reject_connection_validation_errors,
@@ -56,7 +57,11 @@ class JobManager:
         self.workflow_runs: dict[tuple[str, str], WorkflowRun] = {}
         self.reservations: dict[tuple[str, str], str] = {}
         self.max_concurrent = max_concurrent
-        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.semaphore = AdjustableLimiter(max_concurrent)
+
+    def set_max_concurrent(self, limit):
+        self.semaphore.resize(limit)
+        self.max_concurrent = limit
 
     def job(self, project_id, audio_id=PRIMARY_AUDIO_ID):
         return self.store.scope(project_id, audio_id).load_job(project_id)

@@ -65,6 +65,7 @@ class NodeDefinition:
     required_input_ports: tuple[str, ...] | None = None
     is_parameter_source: bool = False
     category: NodeCategory | None = None
+    settings_default_fields: tuple[str, ...] = ()
 
     @property
     def required_ports(self) -> tuple[str, ...]:

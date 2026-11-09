@@ -384,6 +384,11 @@ def validate_node_definition(definition: NodeDefinition) -> None:
             raise ValueError("parameter input type must match its configuration field")
     if not definition.terminal and not definition.output_ports:
         raise ValueError("non-terminal nodes require at least one output port")
+    if not set(definition.settings_default_fields) <= set(field_keys):
+        raise ValueError("settings defaults must reference declared fields")
+    binding = (definition.presentation or {}).get("inline_connection_input")
+    if binding and binding["credential_ref_key"] in definition.settings_default_fields:
+        raise ValueError("credential references cannot be settings defaults")
     for port in all_ports:
         if port not in PORT_DEFINITIONS:
             raise ValueError(f"port has no registered runtime type: {port}")

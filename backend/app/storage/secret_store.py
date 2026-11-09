@@ -250,3 +250,24 @@ class SecretStore:
 
     def validate_ref(self, project_id, node_id, provider_type, credential_ref) -> None:
         self.read(project_id, node_id, provider_type, credential_ref)
+
+    def _defaults(self):
+        store = SecretStore(self._data_dir)
+        store._private = self._data_dir / ".default_credentials"
+        store._versions = store._private / "versions"
+        return store
+
+    def create_default(self, node_type, provider_type, api_key, *, request_id: str) -> str:
+        ref = self._defaults().create(
+            "global-defaults", node_type, provider_type, api_key, request_id=request_id
+        )
+        return "d" + ref
+
+    def read_default(self, node_type, provider_type, credential_version) -> str:
+        if not isinstance(credential_version, str) or not re.fullmatch(
+            r"dcred_[0-9a-f]{32}", credential_version
+        ):
+            _error("CREDENTIAL_INVALID", "默认凭据版本无效")
+        return self._defaults().read(
+            "global-defaults", node_type, provider_type, credential_version[1:]
+        )

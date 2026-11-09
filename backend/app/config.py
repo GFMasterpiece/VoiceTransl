@@ -14,6 +14,7 @@ class AppSettings(BaseModel):
         default_factory=lambda: ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"]
     )
     max_concurrent: int = Field(default=1, ge=1)
+    upload_concurrency: int = Field(default=3, ge=1, le=32)
     mock_delay_ms: int = Field(default=500, ge=0)
     log_level: str = "INFO"
 
@@ -55,6 +56,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "max_upload_mb": app.get("max_upload_mb", defaults.max_upload_mb),
         "allowed_extensions": app.get("allowed_extensions", defaults.allowed_extensions),
         "max_concurrent": jobs.get("max_concurrent", defaults.max_concurrent),
+        "upload_concurrency": app.get("upload_concurrency", defaults.upload_concurrency),
         "mock_delay_ms": yaml_mock_delay,
         "log_level": logging.get("level", defaults.log_level),
     }
@@ -64,6 +66,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "port": ("VOICETRANSL_PORT", int),
         "max_upload_mb": ("VOICETRANSL_MAX_UPLOAD_MB", int),
         "max_concurrent": ("VOICETRANSL_MAX_CONCURRENT", int),
+        "upload_concurrency": ("VOICETRANSL_UPLOAD_CONCURRENCY", int),
         "mock_delay_ms": ("VOICETRANSL_MOCK_DELAY_MS", int),
         "log_level": ("VOICETRANSL_LOG_LEVEL", str),
     }

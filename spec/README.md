@@ -27,6 +27,7 @@
 | [Qwen 文件流式识别](cloud-asr-qwen-streaming.md) | Implemented | 独立 WebSocket 节点、每实例连接/密钥、WAV 文件流式传输及统一结果 |
 | [仅保留节点独立连接](node-connections-only.md) | Implemented | 移除 Profile/环境变量连接、全局管理及旧执行兼容，保留历史产物 |
 | [可搜索语言候选](searchable-languages.md) | Implemented | 识别及源语言共用后端候选、搜索和自定义代码 |
+| [全局设置与节点创建默认值](global-settings.md) | Implemented | 上传与运行并发、节点默认配置、独立默认密钥及新节点物化 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 整体目标；当前音频直通、Mock、编辑器、批次及Qwen能力见各独立规格 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | OpenAI协议尚未实现；首个云端节点采用独立Qwen规格 |
 

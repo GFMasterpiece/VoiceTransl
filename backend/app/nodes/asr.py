@@ -38,6 +38,7 @@ def definition() -> NodeDefinition:
         output_ports=(TRANSCRIPT_PORT,),
         terminal=False,
         config_kind="asr",
+        settings_default_fields=("language",),
         fields=fields_from_model(
             MockASRNodeConfig,
             widgets={"provider": ("select", [{"value": "mock", "label": "Mock"}])},

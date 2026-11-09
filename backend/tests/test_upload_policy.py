@@ -19,6 +19,7 @@ async def test_upload_policy_defaults(tmp_path, monkeypatch):
     assert response.json() == {
         "allowed_extensions": ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"],
         "max_upload_bytes": 4096 * 1024 * 1024,
+        "upload_concurrency": 3,
     }
     assert list(app.state.store.projects_dir.iterdir()) == []
 
@@ -37,6 +38,7 @@ async def test_upload_policy_matches_configured_upload_validation(
         assert policy == {
             "allowed_extensions": app.state.settings.allowed_extensions,
             "max_upload_bytes": max_upload_mb * 1024 * 1024,
+            "upload_concurrency": app.state.settings.upload_concurrency,
         }
         extension = policy["allowed_extensions"][0]
         accepted = await client.post(
@@ -85,6 +87,7 @@ async def test_upload_policy_reads_active_settings_without_writing(tmp_path):
         assert response.json() == {
             "allowed_extensions": ["flac"],
             "max_upload_bytes": 7 * 1024 * 1024,
+            "upload_concurrency": app.state.settings.upload_concurrency,
         }
         assert app.state.settings.model_dump() == settings_before
         assert {

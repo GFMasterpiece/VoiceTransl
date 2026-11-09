@@ -70,6 +70,13 @@ class ClearCredential(BaseModel):
     operation: Literal["clear"]
 
 
+class UseDefaultCredential(BaseModel):
+    model_config = {"extra": "forbid"}
+    node_id: str
+    operation: Literal["use_default"]
+    default_credential_version: str = Field(min_length=1, max_length=256, exclude=True)
+
+
 class WorkflowSaveRequest(BaseModel):
     schema_version: str = SCHEMA_VERSION
     expected_revision: int = Field(ge=0)
@@ -77,7 +84,9 @@ class WorkflowSaveRequest(BaseModel):
     edges: list[WorkflowEdge] = Field(max_length=64)
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
     credential_updates: list[
-        Annotated[SetCredential | ClearCredential, Field(discriminator="operation")]
+        Annotated[
+            SetCredential | ClearCredential | UseDefaultCredential, Field(discriminator="operation")
+        ]
     ] = Field(default_factory=list, max_length=64, exclude=True)
 
     @field_validator("schema_version")
@@ -148,6 +157,8 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
                 body.credential_updates,
                 body.request_id,
                 body.expected_revision,
+                existing_node_ids={node.id for node in current.nodes},
+                replay=replay,
             )
             prepared, edges = normalize_workflow_graph(prepared, body.edges)
             if replay:

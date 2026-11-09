@@ -1,3 +1,4 @@
+import * as capabilitiesApi from './workflow/capabilities'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -769,4 +770,23 @@ describe('batch dialog navigation', () => {
     expect(root!.querySelector('[data-batch-panel]')).not.toBeNull()
     expect(root!.querySelector('.project-create-modal [role=dialog]')).toBeNull()
   })
+})
+
+
+it('retries failed home capabilities and opens settings without reloading projects or graphs', async () => {
+  const capabilities = readCapabilities({ schema_version: '1.0', workflow: { schema_version: '1.2', nodes: [{ type: 'extension', label: 'Extension', input_ports: [], output_ports: [], config: { kind: 'none', fields: [] } }], ports: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } })
+  capabilities.schemaVersion = '1.13'
+  const capabilitiesRequest = vi.spyOn(capabilitiesApi, 'fetchCapabilities').mockRejectedValueOnce(new TypeError('offline')).mockResolvedValue(capabilities)
+  const { fetcher } = await mount(false)
+  const projectsBefore = fetcher.mock.calls.filter(([path]) => String(path).includes('/projects?')).length
+  expect(root!.querySelector('[data-global-settings]')).toBeNull()
+  root!.querySelector<HTMLButtonElement>('[data-settings-retry]')!.click()
+  await settle()
+  expect(capabilitiesRequest).toHaveBeenCalledTimes(2)
+  expect(root!.querySelector('[data-settings-retry]')).toBeNull()
+  root!.querySelector<HTMLButtonElement>('[data-global-settings]')!.click()
+  await settle()
+  expect(root!.querySelector('.global-settings-dialog [role="dialog"]')).not.toBeNull()
+  expect(fetcher.mock.calls.filter(([path]) => String(path).includes('/projects?'))).toHaveLength(projectsBefore)
+  expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
 })

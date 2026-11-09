@@ -37,6 +37,9 @@ data/projects/<project-id>/
 
 | 方法与路径 | 行为 |
 | --- | --- |
+| `GET /settings` | 全局修订、并发配置及其字段声明、各节点创建默认字段/值和密钥状态；不返回明文 Key |
+| `PUT /settings` | `{expected_revision,request_id,global,node_defaults,credential_updates?}`，原子保存并发及新建节点模板；默认密钥只写更新 |
+| `GET /upload-policy` | `{allowed_extensions,max_upload_bytes,upload_concurrency}`，上传并发独立于工作流执行并发 |
 | `GET /projects` | `limit` 默认 20、最大 100，`offset` 默认 0；按更新时间/ID 倒序稳定分页，返回 `{items,total,limit,offset}` |
 | `POST /projects` | 旧上传创建兼容接口：multipart 必填 `file/source_language/target_language`，可选 `name`；201 返回 `{project,job}`，只上传不运行 |
 | `POST /projects/empty` | JSON 仅必填 `name`（去除首尾空白后长度 1–200）；201 返回 `{project,job:null}`。可选 `source_language/target_language` 为旧客户端保留，省略或 `null` 时不猜测默认值 |
@@ -79,11 +82,11 @@ data/projects/<project-id>/
 
 ## 云端连接快照
 
-`qwen_asr` 与 Mock 独立，沿用同一单运行和批次接口。节点保存自身 `base_url/timeout_seconds/region/credential_ref` 以及模型、语言及附加参数；实际 Key 经 `credential_updates` 的 set/clear 存入独立加密存储，不进入 config。校验允许无密钥草稿，运行前必须有本节点有效引用，不读其他节点或环境变量。引用绑定项目/节点/类型，替换生成新版本，稳定请求 ID 重试不得重复轮换。
+`qwen_asr` 与 Mock 独立，沿用同一单运行和批次接口。节点保存自身 `base_url/timeout_seconds/region/credential_ref` 以及模型、语言及附加参数；实际 Key 经 `credential_updates` 的 set/clear 存入独立加密存储，不进入 config。新节点还可显式提交 `use_default` 和创建时捕获的默认密钥版本，由后端物化独立节点凭据。校验允许无密钥草稿，运行前必须有本节点有效引用，不读其他节点或环境变量。引用绑定项目/节点/类型，替换生成新版本，稳定请求 ID 重试不得重复轮换。
 
 全局 `/provider-profiles` CRUD 已删除，旧连接文件不再加载。Filetrans 的 `provider_profile_id/connection_mode/api_key_env` 不再接受；含这些字段的旧图可以读取，但保存、运行及重试须明确拒绝，需删除后重新添加节点。原文件不自动改写；历史 `provider_profiles_snapshot` 仅作为不参与执行的原始元数据保留，不补读最新连接。
 
-`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.12`。
+`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.13`。
 
 `GET /capabilities` 顶层发布 `languages:[{code,names:{"zh-CN",en},native_name,aliases}]`，字段以 `suggestion_source:"languages"|null` 声明编辑候选。该清单不改变上传/配置的语言验证，不进入图和历史；传输继续只用原字符串代码，清单外的代码不因此被拒绝。源语言仍必填，云识别的空语言仍继承音频声明，Mock 保留非空校验及默认 `ja`。
 

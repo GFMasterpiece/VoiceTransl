@@ -151,6 +151,7 @@ class HealthResponse(BaseModel):
 class UploadPolicyResponse(BaseModel):
     allowed_extensions: list[str]
     max_upload_bytes: int
+    upload_concurrency: int
 
 
 class ProjectListResponse(BaseModel):
@@ -182,6 +183,7 @@ async def upload_policy(request: Request):
     return UploadPolicyResponse(
         allowed_extensions=settings.allowed_extensions,
         max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
+        upload_concurrency=settings.upload_concurrency,
     )
 
 
