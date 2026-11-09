@@ -4,6 +4,9 @@ import { useProjectsStore, type Audio, type Project } from './stores/projects'
 import { useProjectDetailStore } from './stores/projectDetail'
 import { useWorkflowStore } from './stores/workflow'
 import WorkflowEditor from './components/WorkflowEditor.vue'
+import BackendConnectionDialog from './components/BackendConnectionDialog.vue'
+import { API_BASE_URL } from './api'
+import { probeBackend } from './backendConnection'
 import GlobalSettingsDialog from './components/GlobalSettingsDialog.vue'
 import { fetchCapabilities, type Capabilities } from './workflow/capabilities'
 import CanvasDialog from './components/CanvasDialog.vue'
@@ -18,6 +21,14 @@ const view = ref<View>('list')
 const workflowEditor = ref<InstanceType<typeof WorkflowEditor> | null>(null)
 const createOpen = ref(false)
 const settingsOpen = ref(false)
+const backendOpen = ref(false)
+const backendSwitching = ref(false)
+const deleting = ref(false)
+const connectionStatus = ref<'checking' | 'connected' | 'unavailable'>('checking')
+const healthController = new AbortController()
+onMounted(async () => { try { await probeBackend(API_BASE_URL, { signal: healthController.signal }); if (!healthController.signal.aborted) connectionStatus.value = 'connected' } catch { if (!healthController.signal.aborted) connectionStatus.value = 'unavailable' } })
+function showBackendConnection() { if (view.value === 'list' && guardCreateNavigation() && !createOpen.value) backendOpen.value = true }
+function showSettings() { if (guardCreateNavigation() && !createOpen.value) settingsOpen.value = true }
 const homeCapabilities = ref<Capabilities | null>(null)
 const homeCapabilitiesFailed = ref(false)
 const homeCapabilitiesLoading = ref(false)
@@ -50,7 +61,7 @@ const workflowLeaveError = computed(() => {
   return ''
 })
 
-function guardCreateNavigation() { return !formBusy.value }
+function guardCreateNavigation() { return !formBusy.value && !deleting.value && !backendSwitching.value && !backendOpen.value && !settingsOpen.value }
 function guardUnload(event: BeforeUnloadEvent) {
   if (!formBusy.value) return
   event.preventDefault()
@@ -195,6 +206,7 @@ function showList() {
 async function deleteProjectNow(id: string, name: string) {
   if (!window.confirm(t('app.confirm.delete', { name }))) return
   try {
+    deleting.value = true
     await store.deleteProject(id)
     if (detail.project?.id === id) {
       workflowStore.stop()
@@ -203,7 +215,7 @@ async function deleteProjectNow(id: string, name: string) {
     }
   } catch (reason) {
     store.setError(reason instanceof Error ? reason : message('app.errors.delete'))
-  }
+  } finally { deleting.value = false }
 }
 
 async function deleteProject(id: string, name: string) {
@@ -222,6 +234,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', guardUnload)
 })
 onUnmounted(() => {
+  healthController.abort()
   workflowStore.stop()
   detail.stop()
   window.removeEventListener('beforeunload', guardUnload)
@@ -229,12 +242,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'is-canvas-workspace': view === 'detail' }">
+  <div class="app-shell" :inert="backendSwitching || undefined" :class="{ 'is-canvas-workspace': view === 'detail' }">
     <header v-if="view !== 'detail'" class="topbar">
       <a class="brand" href="#" :aria-label="t('app.brandHome')" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
-      <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><div class="topbar-status"><span class="status-dot"></span>{{ t('app.connected') }}</div>
+      <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><button class="topbar-status" type="button" data-backend-connection :class="`is-${connectionStatus}`" :disabled="formBusy || deleting || backendSwitching || backendOpen || settingsOpen || createOpen" :aria-label="t('backend.title')" @click="showBackendConnection"><span class="status-dot"></span>{{ t(`backend.${connectionStatus}`) }}</button>
       <button v-if="homeCapabilitiesFailed" class="secondary-button compact-button" type="button" data-settings-retry :disabled="homeCapabilitiesLoading" @click="loadHomeCapabilities">{{ t('settings.retryCapabilities') }}</button>
-      <button v-if="['1.13', '1.14', '1.15'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings @click="settingsOpen = true">{{ t('settings.title') }}</button>
+      <button v-if="['1.13', '1.14', '1.15'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings :disabled="formBusy || deleting || backendSwitching || backendOpen || settingsOpen || createOpen" @click="showSettings">{{ t('settings.title') }}</button>
     </header>
 
     <main class="main-content">
@@ -276,6 +289,7 @@ onUnmounted(() => {
         </div>
       </section>
     </main>
+    <BackendConnectionDialog :open="backendOpen" @close="backendOpen = false" @switching="backendSwitching = true" />
     <GlobalSettingsDialog :open="settingsOpen" :capabilities="homeCapabilities" :languages="homeCapabilities?.languages" :credential-types="(homeCapabilities?.nodes || []).filter(node => !!node.inlineConnectionInput).map(node => node.type)" @close="settingsOpen = false" />
     <CanvasDialog class="project-create-modal" :open="createOpen" :title="t('app.title.create')" :close-disabled="formBusy" @close="cancelCreate">
       <form class="create-form" :aria-busy="formBusy" @submit.prevent="submitProject">

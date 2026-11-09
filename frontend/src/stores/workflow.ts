@@ -284,7 +284,8 @@ export function resolveArtifactUrl(
     }
     const base = new URL(apiBase, pageOrigin)
     const baseDirectory = new URL(base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`, base.origin)
-    const resolved = new URL(downloadUrl, baseDirectory)
+    const path = downloadUrl === '/api/v1' ? '' : downloadUrl.startsWith('/api/v1/') ? downloadUrl.slice('/api/v1/'.length) : downloadUrl
+    const resolved = new URL(path, baseDirectory)
     return ['http:', 'https:'].includes(resolved.protocol) ? resolved.href : ''
   } catch {
     return ''

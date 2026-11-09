@@ -1,3 +1,4 @@
+import * as backendConnection from './backendConnection'
 import * as capabilitiesApi from './workflow/capabilities'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App as VueApp } from 'vue'
@@ -794,4 +795,44 @@ it.each(['1.13', '1.14', '1.15'])('retries failed home capabilities and opens se
   expect(root!.querySelector('.global-settings-dialog .canvas-dialog-header h2')!.textContent).toBe('Global settings')
   expect(fetcher.mock.calls.filter(([path]) => String(path).includes('/projects?'))).toHaveLength(projectsBefore)
   expect(fetcher.mock.calls.some(([path]) => String(path).endsWith('/workflow'))).toBe(false)
+})
+
+
+describe('homepage backend connection', () => {
+  it('opens independently of failed capabilities and prevents create/settings overlap', async () => {
+    vi.spyOn(capabilitiesApi, 'fetchCapabilities').mockRejectedValue(new TypeError('offline'))
+    await mount(false)
+    const status = root!.querySelector<HTMLButtonElement>('[data-backend-connection]')!
+    expect(status.disabled).toBe(false); expect(status.classList.contains('is-unavailable')).toBe(true)
+    status.click(); await settle()
+    expect(root!.querySelector('.backend-connection-dialog [role=dialog]')).not.toBeNull()
+    app!._instance!.exposed!.showCreate(); await settle()
+    expect(root!.querySelector('.project-create-modal [role=dialog]')).toBeNull()
+    expect(root!.querySelectorAll('[role=dialog]')).toHaveLength(1)
+    root!.querySelector<HTMLButtonElement>('.backend-connection-dialog .canvas-dialog-close')!.click(); await settle()
+    app!._instance!.exposed!.showCreate(); await settle()
+    expect(status.disabled).toBe(true)
+  })
+  it('blocks backend switching while a deletion is writing', async () => {
+    const { fetcher } = await mount(false)
+    let resolve!: (value: Response) => void
+    fetcher.mockImplementation((_path, init) => init?.method === 'DELETE' ? new Promise<Response>(done => { resolve = done }) : Promise.resolve(response({ items: [], total: 0, limit: 20, offset: 0 })))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    root!.querySelector<HTMLButtonElement>('.project-delete')!.click(); await settle()
+    expect(root!.querySelector<HTMLButtonElement>('[data-backend-connection]')!.disabled).toBe(true)
+    resolve(response({})); await settle()
+    expect(root!.querySelector<HTMLButtonElement>('[data-backend-connection]')!.disabled).toBe(false)
+  })
+  it('locks all navigation after a healthy save before reloading the page', async () => {
+    const { fetcher } = await mount(false)
+    fetcher.mockImplementation(() => Promise.resolve(response({ status: 'ok' })))
+    const reload = vi.spyOn(backendConnection, 'reloadBackendPage').mockImplementation(() => {})
+    root!.querySelector<HTMLButtonElement>('[data-backend-connection]')!.click(); await settle()
+    const address = root!.querySelector<HTMLInputElement>('[data-backend-address]')!
+    address.value = 'https://new-api.test/voice'; address.dispatchEvent(new Event('input', { bubbles: true })); await nextTick()
+    root!.querySelector<HTMLButtonElement>('[data-backend-save]')!.click(); await settle()
+    expect(localStorage.getItem(backendConnection.BACKEND_ADDRESS_STORAGE_KEY)).toBe('https://new-api.test/voice/api/v1')
+    expect(root!.querySelector('.app-shell')!.hasAttribute('inert')).toBe(true); expect(reload).toHaveBeenCalledOnce()
+    app!._instance!.exposed!.showCreate(); await settle(); expect(root!.querySelector('.project-create-modal [role=dialog]')).toBeNull()
+  })
 })

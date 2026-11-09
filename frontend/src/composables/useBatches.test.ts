@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { batchError, batchStatus, batchTerminal, useBatches, type BatchSummary } from './useBatches'
+import { batchPendingStorageKey, restoreBatchPending, batchError, batchStatus, batchTerminal, useBatches, type BatchSummary } from './useBatches'
 import { setLocale } from '../i18n'
 
 const response = (payload: unknown, status = 200) => ({ ok: status < 400, status, json: async () => structuredClone(payload) }) as Response
@@ -156,4 +156,45 @@ describe('batch REST state', () => {
     expect(batches.history.value.items).toHaveLength(0)
     expect(batches.error.value).not.toBe('')
   })
+})
+
+
+describe('pending requests isolated by actual backend', () => {
+  const request = { path: '', body: { request_id: 'do-not-duplicate', workflow_revision: 7, audio_ids: ['a1'] } }
+  it('migrates a legacy request once only for the default deployment and never reads it from a custom service', () => {
+    sessionStorage.setItem('voicetransl.batch.pending:p1', JSON.stringify(request))
+    expect(restoreBatchPending('p1', 'https://api-b.test/voice/api/v1')).toBeNull()
+    expect(sessionStorage.getItem('voicetransl.batch.pending:p1')).not.toBeNull()
+    expect(restoreBatchPending('p1')).toEqual(request)
+    expect(sessionStorage.getItem('voicetransl.batch.pending:p1')).toBeNull()
+    expect(sessionStorage.getItem(batchPendingStorageKey('p1'))).not.toBeNull()
+    expect(restoreBatchPending('p1', 'https://api-b.test/voice/api/v1')).toBeNull()
+  })
+  it('keeps same-project requests separate by API origin and prefix while sharing equivalent identities', () => {
+    const a = 'https://API.test:443/voice/api/v1'; const b = 'https://api.test/other/api/v1'; const c = 'https://another.test/voice/api/v1'
+    sessionStorage.setItem(batchPendingStorageKey('p1', a), JSON.stringify(request))
+    expect(restoreBatchPending('p1', a.toLowerCase())).toEqual(request)
+    expect(restoreBatchPending('p1', b)).toBeNull(); expect(restoreBatchPending('p1', c)).toBeNull(); expect(restoreBatchPending('p2', a)).toBeNull()
+  })
+  it('retains the legacy request and key when migration cannot be written', () => {
+    sessionStorage.setItem('voicetransl.batch.pending:p1', JSON.stringify(request))
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(restoreBatchPending('p1')).toEqual(request)
+    expect(sessionStorage.getItem('voicetransl.batch.pending:p1')).not.toBeNull(); write.mockRestore()
+  })
+})
+
+
+it('reconstructs ZIP and mutation endpoints under a custom startup API prefix without reading legacy pending requests', async () => {
+  localStorage.setItem('voicetransl.backendAddress', 'https://new-api.test/voice/api/v1')
+  sessionStorage.setItem('voicetransl.batch.pending:p1', JSON.stringify({ path: '', body: { request_id: 'old-service-key', workflow_revision: 7, audio_ids: ['a1'] } }))
+  vi.resetModules(); const isolated = await import('./useBatches')
+  const session = isolated.useBatches('p1'); sessions.push(session)
+  expect(session.pending.value).toBeNull()
+  expect(session.download('b1')).toBe('https://new-api.test/voice/api/v1/projects/p1/batches/b1/download')
+  const fetcher = vi.fn((_path: string) => Promise.reject(new TypeError('lost response'))); vi.stubGlobal('fetch', fetcher)
+  await session.create(7, ['a1'])
+  expect(fetcher.mock.calls[0]![0]).toBe('https://new-api.test/voice/api/v1/projects/p1/batches')
+  expect(session.pending.value!.body.request_id).not.toBe('old-service-key')
+  expect(sessionStorage.getItem('voicetransl.batch.pending:p1')).not.toBeNull()
 })

@@ -573,6 +573,10 @@ describe('workflow validation and helpers', () => {
     expect(resolveArtifactUrl('outputs/output/download', 'https://api.example/api/v1', 'https://ui.example'))
       .toBe('https://api.example/api/v1/outputs/output/download')
     expect(resolveArtifactUrl('javascript:alert(1)', '/api/v1', 'https://ui.example')).toBe('')
+    expect(resolveArtifactUrl('/api/v1/projects/p1/preview', 'https://api.example/voice/api/v1', 'https://ui.example')).toBe('https://api.example/voice/api/v1/projects/p1/preview')
+    expect(resolveArtifactUrl('projects/p1/preview', '/voice/api/v1', 'https://ui.example')).toBe('https://ui.example/voice/api/v1/projects/p1/preview')
+    expect(resolveArtifactUrl('https://cdn.example/file.wav', 'https://api.example/voice/api/v1', 'https://ui.example')).toBe('https://cdn.example/file.wav')
+    expect(resolveArtifactUrl('/api/v1/projects/p1/preview', 'https://api.example/bridge', 'https://ui.example')).toBe('https://api.example/bridge/projects/p1/preview')
   })
 })
 

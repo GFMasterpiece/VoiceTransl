@@ -1,8 +1,14 @@
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
+
+_ORIGIN_PORT = (
+    r"(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
+)
+LOOPBACK_ORIGIN_REGEX = rf"https?://(?:(?i:localhost)|127\.0\.0\.1|\[::1\])(?::{_ORIGIN_PORT})?"
 
 
 class AppSettings(BaseModel):
@@ -17,6 +23,34 @@ class AppSettings(BaseModel):
     upload_concurrency: int = Field(default=3, ge=1, le=32)
     mock_delay_ms: int = Field(default=500, ge=0)
     log_level: str = "INFO"
+    cors_origins: list[str] = Field(default_factory=list)
+
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, values: list[str]) -> list[str]:
+        normalized = []
+        for origin in values:
+            if any(char.isspace() for char in origin) or any(char in origin for char in "*? #\\"):
+                raise ValueError("cors_origins must contain explicit HTTP(S) origins")
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or parsed.netloc.endswith(":")
+            ):
+                raise ValueError(
+                    "cors_origins must be origins without credentials, paths or queries"
+                )
+            validated = AnyHttpUrl(origin)
+            if validated.port == 0:
+                raise ValueError("cors_origins port must be between 1 and 65535")
+            normalized.append(str(validated).removesuffix("/"))
+        return list(dict.fromkeys(normalized))
 
     @field_validator("log_level")
     @classmethod
@@ -59,6 +93,7 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         "upload_concurrency": app.get("upload_concurrency", defaults.upload_concurrency),
         "mock_delay_ms": yaml_mock_delay,
         "log_level": logging.get("level", defaults.log_level),
+        "cors_origins": app.get("cors_origins", defaults.cors_origins),
     }
     env_overrides = {
         "data_dir": ("VOICETRANSL_DATA_DIR", str),
@@ -79,4 +114,10 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
             for extension in os.environ["VOICETRANSL_ALLOWED_EXTENSIONS"].split(",")
             if extension.strip()
         ]
+    if os.getenv("VOICETRANSL_CORS_ORIGINS") is not None:
+        values["cors_origins"] = (
+            [origin.strip() for origin in os.environ["VOICETRANSL_CORS_ORIGINS"].split(",")]
+            if os.environ["VOICETRANSL_CORS_ORIGINS"].strip()
+            else []
+        )
     return AppSettings(**values)

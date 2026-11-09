@@ -69,6 +69,8 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 - API 健康检查：[http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
 - API 交互文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
+主页点击连接状态可设置其他后端，测试成功后保存并刷新；支持服务根地址和带前缀的 `/api/v1` 地址。地址仅保存在当前浏览器，恢复默认继续使用部署配置或 Vite 代理。本机前端跨源访问默认可用；其他前端域须在后端配置 `app.cors_origins` 或 `VOICETRANSL_CORS_ORIGINS`，例如 `https://ui.example.com`。详见[连接规格](spec/backend-connection.md)。
+
 Vite 将 `/api` 代理到本机后端。上述是本机开发启动方式，不是生产部署方案，不应直接暴露到公网。多 worker 会产生独立的内存调度器，当前不支持。
 
 ## 配置与数据

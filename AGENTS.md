@@ -31,6 +31,7 @@
 - 已删除的本地 Provider 不作为当前配置或实现依据，不擅自恢复。
 - 节点独立连接、凭据与已移除的旧连接边界：`docs/node_connections.md`。
 - 主页全局并发设置、节点创建默认值及默认密钥：`docs/global_settings.md`。
+- 主页后端地址设置：`spec/backend-connection.md`；浏览器保存后刷新应用，请求与未确认批次须按目标后端隔离，不与节点云连接混用。
 - 节点调试展示及按类别组织默认设置：`spec/settings-node-organization.md`；调试属性由后端声明，不能按名称、类型或 Provider 猜测，也不能删除旧图中的 Mock 节点。
 - 已完成里程碑和后续方向：`docs/roadmap.md`。计划项不代表已实现，不能描述为当前可用能力。
 - 整体产品目标：`docs/product_requirements.md`。其中的目标方向不等同于当前架构或已实现功能。

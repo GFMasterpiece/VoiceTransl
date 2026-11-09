@@ -1,3 +1,4 @@
+import { backendIdentity, DEFAULT_API_BASE_URL } from '../backendConnection'
 import { computed, ref, shallowRef } from 'vue'
 import { API_BASE_URL, parseApiError, type ApiError } from '../api'
 import { displayError, hasMessage, message, t } from '../i18n'
@@ -66,6 +67,21 @@ function validPending(value: unknown): value is PendingRequest {
   return /^\/[A-Za-z0-9_-]+\/retry$/.test(request.path) && typeof request.body.include_cancelled === 'boolean'
 }
 
+export function batchPendingStorageKey(projectId: string, apiBase = API_BASE_URL) { return `voicetransl.batch.pending:${encodeURIComponent(backendIdentity(apiBase))}:${encodeURIComponent(projectId)}` }
+export function restoreBatchPending(projectId: string, apiBase = API_BASE_URL): PendingRequest | null {
+  try {
+    const key = batchPendingStorageKey(projectId, apiBase)
+    const scoped = sessionStorage.getItem(key)
+    if (scoped !== null) { const value: unknown = JSON.parse(scoped); return validPending(value) ? value : null }
+    if (backendIdentity(apiBase) !== backendIdentity(DEFAULT_API_BASE_URL)) return null
+    const legacyKey = `voicetransl.batch.pending:${projectId}`
+    const legacy: unknown = JSON.parse(sessionStorage.getItem(legacyKey) || 'null')
+    if (!validPending(legacy)) return null
+    try { sessionStorage.setItem(key, JSON.stringify(legacy)); sessionStorage.removeItem(legacyKey) } catch { /* Keep the old request available if migration cannot be persisted. */ }
+    return legacy
+  } catch { return null }
+}
+
 export function useBatches(projectId: string) {
   const history = shallowRef<BatchPage<BatchSummary>>({ items: [], total: 0, limit: 20, offset: 0 })
   const detail = shallowRef<BatchDetail | null>(null)
@@ -75,19 +91,16 @@ export function useBatches(projectId: string) {
   const submitting = ref(false)
   const errorSource = shallowRef<unknown>('')
   const error = computed(() => batchError(errorSource.value))
-  const storageKey = `voicetransl.batch.pending:${projectId}`
-  function restorePending(): PendingRequest | null {
-    try {
-      const value: unknown = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
-      return validPending(value) ? value : null
-    } catch { return null }
-  }
-  const pending = shallowRef<PendingRequest | null>(restorePending())
+  const storageKey = batchPendingStorageKey(projectId)
+  const pending = shallowRef<PendingRequest | null>(restoreBatchPending(projectId))
   const pendingStored = ref(true)
   function setPending(value: PendingRequest | null) {
     pending.value = value
     try {
-      if (value) sessionStorage.setItem(storageKey, JSON.stringify(value)); else sessionStorage.removeItem(storageKey)
+      if (value) sessionStorage.setItem(storageKey, JSON.stringify(value)); else {
+        sessionStorage.removeItem(storageKey)
+        if (backendIdentity(API_BASE_URL) === backendIdentity(DEFAULT_API_BASE_URL)) sessionStorage.removeItem(`voicetransl.batch.pending:${projectId}`)
+      }
       pendingStored.value = true
     } catch { pendingStored.value = false }
   }

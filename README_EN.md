@@ -69,6 +69,8 @@ npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 - Health check: [http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
 - Interactive API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
+Click the connection status on the home page to select another backend. The address accepts a service root or a prefixed `/api/v1` URL, is saved in this browser after a successful check, and takes effect on reload. Reset restores the deployment default or Vite proxy. Loopback frontend origins work across origins by default; configure other frontend origins through backend `app.cors_origins` or `VOICETRANSL_CORS_ORIGINS`, such as `https://ui.example.com`. See the [connection specification](spec/backend-connection.md).
+
 Vite proxies `/api` to the local backend. This is a local development setup, not a production deployment; do not expose it directly to the public internet. Multiple workers would have independent in-memory schedulers and are unsupported.
 
 ## Configuration and Data

@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.middleware.cors import CORSMiddleware
 
 from .api.batches import router as batches_router
 from .api.capabilities import router as capabilities_router
@@ -14,7 +15,7 @@ from .api.settings import router as settings_router
 from .api.workflow import router as workflow_router
 from .application import EventBus, JobManager
 from .application.batch_manager import BatchManager
-from .config import load_settings
+from .config import LOOPBACK_ORIGIN_REGEX, load_settings
 from .domain.schema import SCHEMA_VERSION, SchemaVersionError
 from .logging_utils import configure_logging
 from .storage import FileSystemProjectStore
@@ -60,6 +61,15 @@ def create_app(data_dir=None):
             await jobs.shutdown()
 
     app = FastAPI(title="VoiceTransl API", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_origin_regex=LOOPBACK_ORIGIN_REGEX,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Range", "If-Range"],
+        expose_headers=["Content-Disposition", "Content-Range", "Accept-Ranges", "Content-Length"],
+    )
     logger = logging.getLogger("voicetransl.api")
 
     def schema_version_response() -> JSONResponse:

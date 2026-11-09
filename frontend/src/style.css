@@ -471,3 +471,12 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .global-settings-dialog .settings-field-section { display: grid; gap: 16px; min-width: 0; }
 .global-settings-dialog .settings-debug-control { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; }
 .global-settings-dialog .settings-debug-control input { width: 18px; height: 18px; accent-color: var(--teal); }
+
+button.topbar-status { border: 0; padding: 8px 0; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+button.topbar-status:disabled { cursor: default; opacity: .6; }
+.topbar-status.is-checking .status-dot { background: var(--muted); box-shadow: none; }
+.topbar-status.is-unavailable .status-dot { background: var(--danger, #b04736); box-shadow: none; }
+.backend-connection-dialog .canvas-dialog { width: min(580px, 100%); }
+.backend-connection-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.backend-connection-actions .text-button { margin-right: auto; }
+.backend-connection-feedback { color: var(--muted); font-size: 12px; }
