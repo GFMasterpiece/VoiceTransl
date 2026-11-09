@@ -9,6 +9,7 @@ from ..domain.workflow import (
     WorkflowNodeError,
     WorkflowNodeRecord,
     WorkflowNodeStatus,
+    WorkflowReusedFrom,
     WorkflowRun,
     WorkflowRunError,
     WorkflowRunStatus,
@@ -24,6 +25,7 @@ from .workflow_connections import (
     reject_connection_validation_errors,
     validate_frozen_workflow_connections,
 )
+from .workflow_reuse import digest, prepare_reuse, reject
 from .workflow_runner import execute_workflow_run
 
 logger = logging.getLogger("voicetransl.jobs")
@@ -51,6 +53,8 @@ class JobManager:
         self._initial_delay_ms = delay_ms
         self.delay_explicit = delay_explicit
         self.tasks: dict[tuple[str, str], asyncio.Task] = AudioTaskMap()
+        self.preparations: set[asyncio.Task] = set()
+        self.stopping = False
         self.cancel_events: dict[tuple[str, str], asyncio.Event] = {}
         self.locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.workflow_cancel_events: dict[tuple[str, str], asyncio.Event] = {}
@@ -105,7 +109,17 @@ class JobManager:
             previous.status == JobStatus.PENDING and previous.config_snapshot is not None
         )
 
-    async def start_workflow(
+    async def start_workflow(self, project_id, audio_id, workflow_revision, **kwargs):
+        # Track the whole submission, including lock waits and reuse preflight.
+        # There is no run record yet when shutdown cancels those early stages.
+        preparation_task = asyncio.current_task()
+        self.preparations.add(preparation_task)
+        try:
+            return await self._start_workflow(project_id, audio_id, workflow_revision, **kwargs)
+        finally:
+            self.preparations.discard(preparation_task)
+
+    async def _start_workflow(
         self,
         project_id,
         audio_id,
@@ -114,10 +128,32 @@ class JobManager:
         _snapshot=None,
         _owner=None,
         _sequence=None,
+        rerun=None,
+        request_id=None,
     ):
         async with self.store.mutation_lock(project_id):
             async with self._lock(project_id, audio_id):
                 key = (project_id, audio_id)
+                request_digest = (
+                    digest(
+                        {
+                            "workflow_revision": workflow_revision,
+                            "rerun": rerun.model_dump() if rerun else None,
+                        }
+                    )
+                    if request_id
+                    else None
+                )
+                if request_id:
+                    for existing in self.store.list_workflow_runs(
+                        project_id, audio_id, limit=2**63 - 1, offset=0
+                    )[0]:
+                        if existing.request_id == request_id:
+                            if existing.request_digest != request_digest:
+                                raise RuntimeError("WORKFLOW_REQUEST_CONFLICT")
+                            return existing
+                if self.stopping:
+                    raise RuntimeError("WORKFLOW_STOPPING")
                 if self.audio_busy(project_id, audio_id, _owner):
                     raise RuntimeError("AUDIO_BUSY")
                 store = self.store
@@ -134,15 +170,28 @@ class JobManager:
                 validate_workflow_audio_selection(
                     document.nodes,
                     audio_id=audio_id,
-                    allow_collection_subset=_snapshot is not None and _owner is not None,
+                    allow_collection_subset=rerun is not None
+                    or (_snapshot is not None and _owner is not None),
                 )
                 snapshot = (
                     _snapshot.model_copy(deep=True)
                     if _snapshot is not None
                     else workflow_snapshot(document)
                 )
+                reuse = (
+                    await prepare_reuse(self.store, project_id, audio_id, snapshot, rerun)
+                    if rerun
+                    else None
+                )
+                if self.stopping:
+                    raise RuntimeError("WORKFLOW_STOPPING")
                 if _snapshot is None:
-                    snapshot = freeze_workflow_connections(self.store, snapshot, project_id)
+                    snapshot = freeze_workflow_connections(
+                        self.store,
+                        snapshot,
+                        project_id,
+                        node_ids=set(reuse.plan.execute_node_ids) if reuse else None,
+                    )
                 else:
                     validate_frozen_workflow_connections(snapshot, self.store, project_id)
                 queued_mock_delay_ms = self.delay_ms
@@ -151,7 +200,15 @@ class JobManager:
                     project_id=project_id,
                     audio_id=audio_id,
                     batch_id=_owner if _snapshot is not None else None,
-                    batch_item_sequence=_sequence if _snapshot is not None else None,
+                    batch_item_sequence=reuse.source.batch_item_sequence
+                    if reuse
+                    else _sequence
+                    if _snapshot is not None
+                    else None,
+                    rerun=reuse.metadata(rerun) if reuse else None,
+                    source_identity=reuse.source_identity if reuse else None,
+                    request_id=request_id,
+                    request_digest=request_digest,
                     workflow_revision=document.workflow_revision,
                     workflow=snapshot,
                     nodes=[
@@ -159,13 +216,87 @@ class JobManager:
                             node_id=node.id,
                             node_type=node.type,
                             config=node.config,
+                            execution_kind="executed"
+                            if reuse and node.id in reuse.plan.execute_node_ids
+                            else None,
                             parameter_sources=workflow_parameter_sources(node, snapshot.edges),
                         )
                         for node in snapshot.nodes
                     ],
                 )
-                self.store.create_workflow_run(run)
+                try:
+                    self.store.create_workflow_run(run)
+                except OSError:
+                    # run.json is the commit point. A later project timestamp
+                    # failure must not leave a published pending run unscheduled.
+                    published = self.store.load_workflow_run(project_id, audio_id, run.id)
+                    if published != run:
+                        raise
                 event = asyncio.Event()
+                if reuse:
+                    from ..domain.checkpoint import CheckpointDescriptor
+                    from .workflow_checkpoints import copy_checkpoint
+
+                    source_records = {record.node_id: record for record in reuse.source.nodes}
+                    nodes = {node.id: node for node in snapshot.nodes}
+                    for record in run.nodes:
+                        if record.node_id in reuse.plan.skipped_node_ids:
+                            record.status = WorkflowNodeStatus.SKIPPED
+                    try:
+                        for record in run.nodes:
+                            if record.node_id in reuse.plan.reuse_node_ids:
+                                original = source_records[record.node_id]
+                                descriptor, result = await copy_checkpoint(
+                                    store,
+                                    reuse.source,
+                                    run,
+                                    nodes[record.node_id],
+                                    CheckpointDescriptor.model_validate(original.checkpoint),
+                                    event,
+                                )
+                                record.checkpoint = descriptor.model_dump(mode="json")
+                                record.status = WorkflowNodeStatus.COMPLETED
+                                record.execution_kind = "reused"
+                                record.reused_from = WorkflowReusedFrom(
+                                    run_id=reuse.source.id, node_id=record.node_id
+                                )
+                                record.effective_config = original.effective_config
+                                record.artifact = result.artifact
+                                record.preview = result.preview
+                        store.save_workflow_run(run)
+                    except asyncio.CancelledError:
+                        # No job task exists until all reuse files have been
+                        # copied. The HTTP task owns preparation and must
+                        # publish a terminal record after copy cleanup joins.
+                        run.status = WorkflowRunStatus.INTERRUPTED
+                        run.finished_at = datetime.now(timezone.utc)
+                        for record in run.nodes:
+                            if record.status == WorkflowNodeStatus.PENDING:
+                                record.status = WorkflowNodeStatus.INTERRUPTED
+                                record.finished_at = run.finished_at
+                        store.save_workflow_run(run)
+                        raise
+                    except Exception:
+                        run.status = WorkflowRunStatus.FAILED
+                        run.error = WorkflowRunError(
+                            type="RERUN_CHECKPOINT_INVALID", message="复用结果复制失败"
+                        )
+                        run.finished_at = datetime.now(timezone.utc)
+                        for record in run.nodes:
+                            if record.status == WorkflowNodeStatus.PENDING:
+                                record.status = WorkflowNodeStatus.BLOCKED
+                                record.finished_at = run.finished_at
+                        store.save_workflow_run(run)
+                        reject(reuse.plan, "RERUN_CHECKPOINT_INVALID", "复用结果复制失败")
+                if self.stopping:
+                    run.status = WorkflowRunStatus.INTERRUPTED
+                    run.finished_at = datetime.now(timezone.utc)
+                    for record in run.nodes:
+                        if record.status == WorkflowNodeStatus.PENDING:
+                            record.status = WorkflowNodeStatus.INTERRUPTED
+                            record.finished_at = run.finished_at
+                    store.save_workflow_run(run)
+                    raise RuntimeError("WORKFLOW_STOPPING")
                 self.workflow_cancel_events[key] = event
                 self.workflow_runs[key] = run
 
@@ -178,8 +309,12 @@ class JobManager:
                                 run.status = WorkflowRunStatus.CANCELLED
                                 run.finished_at = datetime.now(timezone.utc)
                                 for node in run.nodes:
-                                    node.status = WorkflowNodeStatus.CANCELLED
-                                    node.finished_at = run.finished_at
+                                    if node.status in {
+                                        WorkflowNodeStatus.PENDING,
+                                        WorkflowNodeStatus.RUNNING,
+                                    }:
+                                        node.status = WorkflowNodeStatus.CANCELLED
+                                        node.finished_at = run.finished_at
                                 store.save_workflow_run(run)
                                 return
                             await execute_workflow_run(
@@ -350,7 +485,8 @@ class JobManager:
         is also cancelled so shutdown cannot leave a dangling task waiting on
         the global semaphore.
         """
-        tasks = list(self.tasks.values())
+        self.stopping = True
+        tasks = list(dict.fromkeys([*self.tasks.values(), *self.preparations]))
         for task in tasks:
             if not task.done():
                 task.cancel()

@@ -87,6 +87,7 @@ class WorkflowNodeStatus(StrEnum):
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
+    SKIPPED = "skipped"
 
 
 class WorkflowPosition(BaseModel):
@@ -225,6 +226,23 @@ class WorkflowParameterSource(BaseModel):
         return self
 
 
+class WorkflowRerunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_run_id: str = Field(pattern=r"^wfr_[0-9a-f]{32}$")
+    from_node_id: str = Field(min_length=1, max_length=64)
+
+
+class WorkflowRerun(WorkflowRerunRequest):
+    execute_node_ids: list[str]
+    reuse_node_ids: list[str]
+    skipped_node_ids: list[str]
+
+
+class WorkflowReusedFrom(BaseModel):
+    run_id: str
+    node_id: str
+
+
 class WorkflowNodeRecord(BaseModel):
     node_id: str
     node_type: str
@@ -237,6 +255,17 @@ class WorkflowNodeRecord(BaseModel):
     artifact: WorkflowArtifact | None = None
     preview: WorkflowPreview | None = None
     error: WorkflowNodeError | None = None
+    execution_kind: Literal["executed", "reused"] | None = None
+    reused_from: WorkflowReusedFrom | None = None
+    checkpoint: dict[str, object] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_record(self, handler):
+        data = handler(self)
+        for key in ("execution_kind", "reused_from", "checkpoint"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class WorkflowRunError(BaseModel):
@@ -264,6 +293,18 @@ class WorkflowRun(BaseModel):
     workflow: WorkflowSnapshot
     nodes: list[WorkflowNodeRecord] = Field(default_factory=list)
     asr_capabilities: ASRCapabilitySnapshot | None = None
+    rerun: WorkflowRerun | None = None
+    source_identity: dict[str, object] | None = None
+    request_id: str | None = None
+    request_digest: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_run(self, handler):
+        data = handler(self)
+        for key in ("rerun", "source_identity", "request_id", "request_digest"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
     @field_validator("batch_id")
     @classmethod

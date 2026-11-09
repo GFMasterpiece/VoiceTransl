@@ -13,7 +13,7 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - Recognition and source languages offer searchable suggestions by Chinese or English name, native name, code, or alias, with custom codes also supported.
 - [Global settings](docs/global_settings.md) on the home page control upload and workflow concurrency and defaults for new ASR nodes, including connections, models, regions, languages, and API keys. New nodes receive their own copied credentials; existing nodes and history remain unchanged.
 - A project-level workflow canvas with independent node settings, typed-port validation, saved revisions, and conflict detection. The backend capability API supplies the node catalog, categories, and settings; the add menu groups nodes by function.
-- An Edit menu with undo/redo, multi-selection and group dragging, copy/paste, and workflow JSON import/export. Imports become undoable drafts; audio files and run history remain separate.
+- An Edit menu and node context menu with undo/redo, multi-selection and group dragging, copy/cut/paste, and workflow JSON import/export. Cuts can be undone in one step; audio files and run history remain separate.
 - A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
 - Optional Mock preprocessing, Mock ASR, and TXT/SRT/VTT/LRC text exports. ASR produces fixed examples, not recognition of the uploaded audio.
 - A separate Qwen Filetrans ASR node uploads audio and returns real text and timestamps, reusing previews, subtitles and batches. Each instance owns its URL, timeout and API key; keys are encrypted separately and runs freeze their versions. Global profiles and environment-variable fallbacks have been removed. Recreate nodes containing retired connection fields; historical artifacts remain available. See [node connections](docs/node_connections.md).
@@ -22,7 +22,9 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
 - The audio input node imports files or multiple folders, validates uploads and source languages, and saves an ordered resource list. The shared Run action applies one frozen workflow independently to each file. The batch panel manages progress, cancellation, retries, and ZIP results. New outputs use a prefix and stable sequence, such as `name_00001.wav`; retries retain the original numbers, and existing graphs keep their filenames. Current File Info supplies per-file naming and language parameters.
 
-Other cloud protocols, local models, video processing, node-level resume, cache reuse, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
+Select a finished historical run, then right-click a node to rerun it and its descendants using the saved graph. Required upstream results are verified and copied without repeating reused ASR requests; invalid results require an earlier starting node. Individual batch items retain their sequence numbers. See the [rerun specification](spec/node-rerun-reuse.md).
+
+Other cloud protocols, local models, video processing, whole-batch node reruns, automatic cache scheduling, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
 
 ## Development Requirements
 

@@ -33,6 +33,7 @@ class NodeExecutionCancelled(Exception):
 class NodeData:
     port: str
     value: object
+    type_id: str | None = None
 
     def __post_init__(self):
         if not self.port or "/" in self.port or "\\" in self.port:
@@ -45,10 +46,10 @@ class NodeResult:
     artifact: object | None = None
     preview: WorkflowPreview | None = None
 
-    def add(self, port: str, value: object) -> None:
+    def add(self, port: str, value: object, *, type_id: str | None = None) -> None:
         if port in self.outputs:
             raise ValueError(f"duplicate node output port: {port}")
-        self.outputs[port] = NodeData(port=port, value=value)
+        self.outputs[port] = NodeData(port=port, value=value, type_id=type_id)
 
 
 @dataclass(frozen=True)

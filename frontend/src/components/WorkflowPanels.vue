@@ -86,7 +86,7 @@ async function retryOutputs() {
           <div v-if="store.run" class="workflow-run-nodes">
             <CloudWorkflowNotice :workflow="store.run.workflow" :audio-count="1" historical />
             <article v-for="node in store.run.nodes" :key="node.node_id" class="workflow-run-node">
-              <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span></div>
+              <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span><span v-if="node.execution_kind === 'reused'" class="run-node-status">{{ t('workflow.rerunReused') }}</span></div>
               <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>
               <NodeRunParameters :node="node" />
             </article>
@@ -106,7 +106,7 @@ async function retryOutputs() {
         <p v-if="!artifacts.length" class="workflow-panel-empty">{{ store.run ? t('workflow.panelArtifactEmpty') : t('workflow.noRuns') }}</p>
         <div class="workflow-run-nodes">
           <article v-for="node in artifacts" :key="node.node_id" class="workflow-run-node">
-            <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span></div>
+            <div><strong>{{ node.node_id }}</strong><span class="run-node-status" :class="`is-${node.status}`">{{ statusLabel(node.status, true) }}</span><span v-if="node.execution_kind === 'reused'" class="run-node-status">{{ t('workflow.rerunReused') }}</span></div>
             <p>{{ node.artifact!.filename }}</p>
             <p>{{ t('workflow.snapshotArtifact', { port: node.artifact!.port.toUpperCase(), type: node.artifact!.media_type, size: sizeLabel(node.artifact!.size_bytes) }) }}</p>
             <p v-if="node.error">{{ workflowErrorLabel(node.error) }}</p>

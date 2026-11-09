@@ -266,6 +266,7 @@ async def execute_text_output_node(
         f".{config.format}",
         batch_id=getattr(run, "batch_id", None),
         batch_item_sequence=getattr(run, "batch_item_sequence", None),
+        rerun_sequence=run.batch_item_sequence if run.rerun else None,
     )
     target = store.workflow_artifact_path(run.project_id, run.audio_id, run.id, node.id, filename)
     size, digest = await _write_bytes(target, payload, cancel_event)

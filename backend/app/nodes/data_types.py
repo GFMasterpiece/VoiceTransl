@@ -3,6 +3,7 @@
 import math
 
 from ..domain.node_constants import AUDIO_PORT, TEXT_PORT, TRANSCRIPT_PORT
+from .checkpoint_codecs import AUDIO_CODEC, SCALAR_CODEC, TEXT_CODEC, TRANSCRIPT_CODEC
 
 
 def _is_audio_data(value: object) -> bool:
@@ -31,24 +32,46 @@ def _is_text_artifact(value: object) -> bool:
 
 
 def register_builtin_types(register_type, register_port):
-    register_type(AUDIO_PORT, label="音频", validator=_is_audio_data)
-    register_type(TRANSCRIPT_PORT, label="转写结果", validator=_is_transcript_data)
-    register_type(TEXT_PORT, label="文本产物", validator=_is_text_artifact)
+    register_type(AUDIO_PORT, label="音频", validator=_is_audio_data, checkpoint_codec=AUDIO_CODEC)
+    register_type(
+        TRANSCRIPT_PORT,
+        label="转写结果",
+        validator=_is_transcript_data,
+        checkpoint_codec=TRANSCRIPT_CODEC,
+    )
+    register_type(
+        TEXT_PORT, label="文本产物", validator=_is_text_artifact, checkpoint_codec=TEXT_CODEC
+    )
     register_port(AUDIO_PORT, type_id=AUDIO_PORT)
     register_port(TRANSCRIPT_PORT, type_id=TRANSCRIPT_PORT)
     register_port(TEXT_PORT, type_id=TEXT_PORT)
-    register_type("string", label="字符串", validator=lambda value: isinstance(value, str))
+    register_type(
+        "string",
+        label="字符串",
+        validator=lambda value: isinstance(value, str),
+        checkpoint_codec=SCALAR_CODEC,
+    )
     register_type(
         "number",
         label="数字",
+        checkpoint_codec=SCALAR_CODEC,
         validator=lambda value: (
             type(value) in (int, float) and (type(value) is int or math.isfinite(value))
         ),
     )
     register_type(
-        "integer", label="整数", parent_type_id="number", validator=lambda value: type(value) is int
+        "integer",
+        label="整数",
+        parent_type_id="number",
+        validator=lambda value: type(value) is int,
+        checkpoint_codec=SCALAR_CODEC,
     )
-    register_type("boolean", label="布尔值", validator=lambda value: type(value) is bool)
+    register_type(
+        "boolean",
+        label="布尔值",
+        validator=lambda value: type(value) is bool,
+        checkpoint_codec=SCALAR_CODEC,
+    )
     for port in ("string", "number", "integer", "boolean"):
         register_port(port, type_id=port)
     for port in ("language", "filename_stem", "text_format"):

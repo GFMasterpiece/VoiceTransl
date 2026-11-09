@@ -246,3 +246,11 @@ describe('shared language controls in the editor',()=>{
     expect((request[1]!.body as FormData).get('source_language')).toBe('zh')
   })
 })
+
+
+it.each(['1.13', '1.14'])('preserves language metadata and strict shape in catalog %s', version => {
+  const value = catalog(); value.workflow.schema_version = version
+  expect(readCapabilities(value).languages).toEqual(languages)
+  value.languages[0].names.extra = 'invalid'
+  expect(() => readCapabilities(value)).toThrow()
+})

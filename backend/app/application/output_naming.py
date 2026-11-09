@@ -10,13 +10,20 @@ def output_filename(
     *,
     batch_id: str | None = None,
     batch_item_sequence: int | None = None,
+    rerun_sequence: int | None = None,
 ) -> str:
     valid, message = valid_filename_stem(config.filename_stem)
     if not valid:
         raise NodeExecutionError("INVALID_NODE_CONFIG", message or "输出名称 / 前缀无效")
     stem = config.filename_stem
     if config.naming_mode == "prefix_sequence":
-        sequence = 1 if batch_id is None else batch_item_sequence
+        sequence = (
+            rerun_sequence
+            if rerun_sequence is not None
+            else 1
+            if batch_id is None
+            else batch_item_sequence
+        )
         if type(sequence) is not int or sequence < 1:
             raise NodeExecutionError(
                 "OUTPUT_SEQUENCE_UNAVAILABLE", "批次缺少有效的固定文件序号，无法生成输出名称"

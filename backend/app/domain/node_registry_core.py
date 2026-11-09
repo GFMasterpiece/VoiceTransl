@@ -6,6 +6,7 @@ import math
 import re
 from typing import Callable
 
+from .checkpoint import CheckpointCodec
 from .node_constants import BINDING_IDENTIFIER_PATTERN, NODE_TYPE_PATTERN, PORT_PATTERN
 from .node_contracts import CapabilityField as CapabilityField
 from .node_contracts import DataTypeDefinition as DataTypeDefinition
@@ -32,10 +33,19 @@ def register_type(
     data_type: type = object,
     parent_type_id: str | None = None,
     capabilities: set[str] | frozenset[str] = frozenset(),
+    checkpoint_codec: CheckpointCodec | None = None,
 ) -> DataTypeDefinition:
     """Register a logical runtime type used by one or more ports."""
 
     _validate_identifier(type_id, "type id must be a lowercase identifier")
+    if checkpoint_codec is not None and (
+        not isinstance(checkpoint_codec, CheckpointCodec)
+        or not checkpoint_codec.id
+        or not checkpoint_codec.version
+        or not callable(checkpoint_codec.encode)
+        or not callable(checkpoint_codec.decode)
+    ):
+        raise ValueError("checkpoint codec must have an explicit id, version and handlers")
     if parent_type_id is not None and parent_type_id not in TYPE_DEFINITIONS:
         raise ValueError(f"parent type is not registered: {parent_type_id}")
     if type_id in TYPE_DEFINITIONS:
@@ -47,6 +57,7 @@ def register_type(
         is_valid=check,
         parent_type_id=parent_type_id,
         capabilities=frozenset(capabilities),
+        checkpoint_codec=checkpoint_codec,
     )
     TYPE_DEFINITIONS[type_id] = definition
     return definition
@@ -315,6 +326,8 @@ def _validate_categories(definitions):
 
 
 def validate_node_definition(definition: NodeDefinition) -> None:
+    if not isinstance(definition.execution_version, str) or not definition.execution_version:
+        raise ValueError("node execution version must be a non-empty string")
     _validate_categories((*NODE_DEFINITIONS.values(), definition))
     if not re.fullmatch(NODE_TYPE_PATTERN, definition.type):
         raise ValueError("node type must be a lowercase identifier")
@@ -422,7 +435,13 @@ def validate_node_result(definition: NodeDefinition, result: NodeResult) -> Node
         port_definition = PORT_DEFINITIONS.get(port)
         if port_definition is None:
             raise TypeError(f"node output {port} has no registered runtime type")
-        if not validate_port_value(port, data.value):
+        actual = TYPE_DEFINITIONS.get(data.type_id or port_definition.type_id)
+        if (
+            actual is None
+            or not type_is_compatible(actual.type_id, port_definition.type_id)
+            or not actual.is_valid(data.value)
+            or not validate_port_value(port, data.value)
+        ):
             raise TypeError(f"node output {port} has an invalid runtime type")
     return result
 

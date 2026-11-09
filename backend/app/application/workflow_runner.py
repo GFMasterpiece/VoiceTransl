@@ -1,7 +1,5 @@
 import asyncio
-import json
 import logging
-from copy import deepcopy
 from datetime import datetime, timezone
 
 from ..domain import (
@@ -22,16 +20,21 @@ from ..domain.node_execution import (
 )
 from ..domain.node_registry import (
     NODE_DEFINITIONS,
+    PORT_DEFINITIONS,
+    TYPE_DEFINITIONS,
+    type_is_compatible,
     validate_node_result,
     validate_port_value,
 )
 from ..domain.workflow import WorkflowNodeRecord
+from .workflow_checkpoints import capture_source_identity, create_checkpoint, load_checkpoint
 from .workflow_media import (
     WorkflowRunCancelled as WorkflowRunCancelled,
 )
 from .workflow_media import (
     _copy_audio as _copy_audio,
 )
+from .workflow_reuse import execution_config, node_fingerprint
 
 logger = logging.getLogger("voicetransl.workflow")
 
@@ -75,7 +78,17 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
         if (
             port not in definition.input_ports
             or data.port != port
-            or not validate_port_value(port, data.value)
+            or (data.type_id is None and not validate_port_value(port, data.value))
+            or (
+                data.type_id is not None
+                and (
+                    data.type_id not in TYPE_DEFINITIONS
+                    or not type_is_compatible(data.type_id, PORT_DEFINITIONS[port].type_id)
+                    or not TYPE_DEFINITIONS[data.type_id].is_valid(data.value)
+                    or not PORT_DEFINITIONS[port].capability_requirements
+                    <= TYPE_DEFINITIONS[data.type_id].capabilities
+                )
+            )
         ):
             raise TypeError("node input violates its declared port contract")
     result = await definition.execute(context)
@@ -92,27 +105,12 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
 
 def _execution_node(node, definition, inputs, record: WorkflowNodeRecord):
     """Resolve into a separate node, preserving manual settings and graph snapshots."""
-    config = deepcopy(node.config)
-    for item in definition.fields:
-        if item.input_port is not None and item.input_port in inputs:
-            config[item.key] = deepcopy(inputs[item.input_port].value)
     try:
-        json.dumps(config, allow_nan=False)
-        record.effective_config = deepcopy(config)
-        if definition.validate_config is not None:
-            definition.validate_config(config)
-        if definition.normalize_config is not None:
-            config = definition.normalize_config(config)
-            if not isinstance(config, dict):
-                raise ValueError("normalized configuration must be an object")
-        if definition.validate_config is not None:
-            definition.validate_config(config)
-        json.dumps(config, allow_nan=False)
+        config = execution_config(node, inputs, record)
     except (TypeError, ValueError) as error:
         raise NodeExecutionError(
             "INVALID_NODE_CONFIG", f"{node.type} 执行配置无效: {error}"
         ) from error
-    record.effective_config = deepcopy(config)
     return node.model_copy(update={"config": config}, deep=True)
 
 
@@ -131,11 +129,16 @@ async def execute_workflow_run(
 
     records = {node.node_id: node for node in run.nodes}
     node_by_id = {node.id: node for node in run.workflow.nodes}
+    execution_ids = set(run.rerun.execute_node_ids) if run.rerun else set(node_by_id)
     output_ids = [
         node.id
         for node in run.workflow.nodes
-        if NODE_DEFINITIONS.get(node.type) is not None and NODE_DEFINITIONS[node.type].terminal
+        if node.id in execution_ids
+        and NODE_DEFINITIONS.get(node.type) is not None
+        and NODE_DEFINITIONS[node.type].terminal
     ]
+    if not output_ids:
+        output_ids = list(execution_ids)
     input_nodes = [
         node
         for node in run.workflow.nodes
@@ -146,8 +149,22 @@ async def execute_workflow_run(
 
     try:
         project = store.load_project(run.project_id)
+        identity = await capture_source_identity(store, run, cancel_event)
+    except NodeExecutionCancelled:
+        run.cancel_requested = True
+        run.status = WorkflowRunStatus.CANCELLED
+        run.finished_at = now()
+        for record in run.nodes:
+            if record.status in {WorkflowNodeStatus.PENDING, WorkflowNodeStatus.RUNNING}:
+                record.status = WorkflowNodeStatus.CANCELLED
+                record.finished_at = run.finished_at
+        store.save_workflow_run(run)
+        return run
     except Exception:
-        if input_record is not None:
+        if input_record is not None and input_record.status in {
+            WorkflowNodeStatus.PENDING,
+            WorkflowNodeStatus.RUNNING,
+        }:
             input_record.status = WorkflowNodeStatus.FAILED
             input_record.started_at = input_record.started_at or now()
             input_record.finished_at = now()
@@ -155,7 +172,10 @@ async def execute_workflow_run(
                 type="INPUT_SOURCE_UNAVAILABLE", message="源音频不可用"
             )
         for record in run.nodes:
-            if record is not input_record:
+            if record is not input_record and record.status in {
+                WorkflowNodeStatus.PENDING,
+                WorkflowNodeStatus.RUNNING,
+            }:
                 record.status = WorkflowNodeStatus.BLOCKED
                 record.finished_at = now()
                 record.error = WorkflowNodeError(
@@ -163,14 +183,43 @@ async def execute_workflow_run(
                 )
         run.status = WorkflowRunStatus.FAILED
         run.finished_at = now()
-        run.error = WorkflowRunError(type="INPUT_SOURCE_UNAVAILABLE", message="源音频不可用")
+        run.error = WorkflowRunError(
+            type="RERUN_SOURCE_CHANGED" if run.rerun else "INPUT_SOURCE_UNAVAILABLE",
+            message="源音频不可用",
+        )
         store.save_workflow_run(run)
         return run
 
     outputs_by_node: dict[str, dict[str, NodeData]] = {}
     failed_or_blocked: set[str] = set()
     try:
+        if run.rerun and identity != run.source_identity:
+            raise NodeExecutionError("RERUN_SOURCE_CHANGED", "排队期间源音频或文件信息已改变")
+        run.source_identity = identity
+        store.save_workflow_run(run)
+        checkpoints = {}
+        if run.rerun:
+            from ..domain.checkpoint import CheckpointDescriptor
+
+            for node_id in run.rerun.reuse_node_ids:
+                record = records[node_id]
+                try:
+                    result = await load_checkpoint(
+                        store,
+                        run,
+                        node_by_id[node_id],
+                        CheckpointDescriptor.model_validate(record.checkpoint),
+                        cancel_event,
+                    )
+                except (OSError, ValueError, TypeError):
+                    raise NodeExecutionError(
+                        "RERUN_CHECKPOINT_INVALID", "排队复用结果缺失或损坏，请重新提交"
+                    ) from None
+                outputs_by_node[node_id] = result.outputs
+                checkpoints[node_id] = record.checkpoint
         for node_id in order:
+            if node_id not in execution_ids:
+                continue
             if cancel_event.is_set():
                 raise WorkflowRunCancelled
             node = node_by_id[node_id]
@@ -188,7 +237,9 @@ async def execute_workflow_run(
                 if edge.source in failed_or_blocked or data is None:
                     blocked = True
                     break
-                inputs[edge.target_port] = NodeData(edge.target_port, data.value)
+                inputs[edge.target_port] = NodeData(
+                    edge.target_port, data.value, type_id=data.type_id
+                )
             if blocked:
                 record.status = WorkflowNodeStatus.BLOCKED
                 record.finished_at = now()
@@ -202,6 +253,7 @@ async def execute_workflow_run(
                 raise WorkflowRunCancelled
             record.finished_at = None
             record.error = None
+            record.execution_kind = "executed"
             record.status = WorkflowNodeStatus.RUNNING
             record.started_at = now()
             store.save_workflow_run(run)
@@ -219,6 +271,21 @@ async def execute_workflow_run(
                         mock_delay_ms=mock_delay_ms,
                     )
                 )
+                fingerprint = node_fingerprint(
+                    node,
+                    execution_node.config,
+                    incoming.get(node_id, []),
+                    checkpoints,
+                    run.source_identity,
+                )
+                descriptor = (
+                    await create_checkpoint(store, run, node, result, fingerprint, cancel_event)
+                    if fingerprint
+                    else None
+                )
+                if descriptor is not None:
+                    record.checkpoint = descriptor.model_dump(mode="json")
+                    checkpoints[node_id] = record.checkpoint
                 record.artifact = result.artifact
                 record.preview = result.preview
                 outputs_by_node[node.id] = result.outputs
@@ -264,6 +331,13 @@ async def execute_workflow_run(
         return run
     except asyncio.CancelledError:
         raise
+    except NodeExecutionError as error:
+        run.status = WorkflowRunStatus.FAILED
+        run.error = WorkflowRunError(type=error.code, message=str(error))
+        for record in run.nodes:
+            if record.status in {WorkflowNodeStatus.PENDING, WorkflowNodeStatus.RUNNING}:
+                record.status = WorkflowNodeStatus.BLOCKED
+                record.finished_at = now()
     except Exception:
         logger.exception("workflow run failed run=%s", run.id)
         run.status = WorkflowRunStatus.FAILED

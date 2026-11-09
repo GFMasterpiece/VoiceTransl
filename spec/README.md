@@ -20,7 +20,7 @@
 | [节点资源与独立预览](node-resources-preview.md) | Implemented | 空项目、输入节点音频绑定、独立文本/音频预览及历史隔离 |
 | [节点模块化与多端口](node-modularity.md) | Implemented | 节点模块独立、命名多端口与汇合调度、后端声明分类、目录和历史兼容 |
 | [节点参数与连线输入统一](node-parameters.md) | Implemented | 可连线参数、基础值节点、参数来源与实际执行值 |
-| [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制粘贴及工作流导入导出 |
+| [编辑器常用操作](editor-operations.md) | Implemented | 撤销/重做、多选、整组编辑、复制/剪切/粘贴及工作流导入导出 |
 | [文件夹音频批处理](batch-processing.md) | Implemented | 多目录导入、固定快照逐文件调度、取消/重试及批次结果 |
 | [输入节点资源清单与编号输出](node-batch-input.md) | Implemented | 输入节点导入、统一单/批运行、输出前缀与稳定编号 |
 | [Qwen 录音文件识别](cloud-asr-qwen.md) | Implemented | 独立云端识别、节点内连接与密钥、临时上传及冻结快照 |
@@ -28,6 +28,7 @@
 | [仅保留节点独立连接](node-connections-only.md) | Implemented | 移除 Profile/环境变量连接、全局管理及旧执行兼容，保留历史产物 |
 | [可搜索语言候选](searchable-languages.md) | Implemented | 识别及源语言共用后端候选、搜索和自定义代码 |
 | [全局设置与节点创建默认值](global-settings.md) | Implemented | 上传与运行并发、节点默认配置、独立默认密钥及新节点物化 |
+| [节点级重跑与结果复用](node-rerun-reuse.md) | Implemented | 指定起点强制重算、上游 typed checkpoint 验证及新运行隔离 |
 | [可视化节点工作流编辑器](workflow-editor.md) | Draft | 整体目标；当前音频直通、Mock、编辑器、批次及Qwen能力见各独立规格 |
 | [OpenAI 云端 ASR](cloud-asr-openai.md) | Draft | OpenAI协议尚未实现；首个云端节点采用独立Qwen规格 |
 

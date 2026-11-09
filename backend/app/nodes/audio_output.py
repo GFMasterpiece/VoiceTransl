@@ -28,6 +28,7 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
             audio.suffix,
             batch_id=getattr(context.run, "batch_id", None),
             batch_item_sequence=getattr(context.run, "batch_item_sequence", None),
+            rerun_sequence=context.run.batch_item_sequence if context.run.rerun else None,
         ),
     )
     return NodeResult(artifact=artifact)

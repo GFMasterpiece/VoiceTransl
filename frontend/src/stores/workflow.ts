@@ -16,7 +16,7 @@ export type { NodeType, PortName } from '../workflow/nodeRegistry'
 export type OutputPortName = string
 export type InputPortName = string
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled' | 'interrupted'
-export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted'
+export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted' | 'skipped'
 export const WORKFLOW_NODE_WIDTH = 188
 export const WORKFLOW_NODE_FORM_WIDTH = 272
 export const WORKFLOW_NODE_CONNECTION_WIDTH = 336
@@ -141,6 +141,8 @@ export type WorkflowParameterSource = { kind: 'config' } | {
 }
 
 export interface WorkflowNodeRun {
+  execution_kind?: 'executed' | 'reused' | null
+  reused_from?: { run_id: string; node_id: string } | null
   node_id: string
   node_type: NodeType
   config: Record<string, unknown>
@@ -155,6 +157,7 @@ export interface WorkflowNodeRun {
 }
 
 export interface WorkflowRun {
+  rerun?: { source_run_id: string; from_node_id: string; execute_node_ids: string[]; reuse_node_ids: string[]; skipped_node_ids: string[] } | null
   id: string
   project_id: string
   audio_id: string
@@ -795,7 +798,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (capabilities.value.schemaVersion === '1.13') await loadSettings()
+      if (['1.13', '1.14'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
       draft.value = createDefaultWorkflow(registry.value)
       const response = await fetch(endpoint(projectPath(id)))
@@ -916,12 +919,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return true
   }
 
-  async function startRun() {
+  async function startRun(rerun?: { audioId: string; sourceRunId: string; fromNodeId: string; requestId: string; revision: number }) {
     if (legacyConnectionUnsupported.value) { errorState.set(message('connections.error_LEGACY_CONNECTION_UNSUPPORTED')); return null }
-    if (boundAudioIds.value && boundAudioIds.value.length !== 1) { errorState.set(message(boundAudioIds.value.length ? 'batch.multiRequiresBatch' : 'batch.empty')); return null }
+    if (!rerun && boundAudioIds.value && boundAudioIds.value.length !== 1) { errorState.set(message(boundAudioIds.value.length ? 'batch.multiRequiresBatch' : 'batch.empty')); return null }
     if (batchSubmitting.value) { errorState.set(message('batch.busy')); return null }
     if (resourceUploading.value || saving.value || validating.value || loading.value || transaction.value) return null
-    if (!dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
+    if (rerun && audioId.value !== rerun.audioId) { if (!await setAudioContext(rerun.audioId)) return null }
+    if (!rerun && !dirty.value && boundAudioId.value && boundAudioId.value !== audioId.value) await setAudioContext(boundAudioId.value)
     const { id, audioId: aid } = currentKey()
     if (!id || !aid || stopped.value || starting.value || activeRun.value || !document.value) return null
     if (dirty.value) {
@@ -937,7 +941,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const response = await fetch(endpoint(runPath(id, aid)), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflow_revision: document.value.workflow_revision }),
+        body: JSON.stringify(rerun ? { workflow_revision: rerun.revision, request_id: rerun.requestId, rerun: { source_run_id: rerun.sourceRunId, from_node_id: rerun.fromNodeId } } : { workflow_revision: document.value.workflow_revision }),
       })
       if (!response.ok) throw await readApiError(response)
       const value = readRun(await readJson(response, 'workflow.invalidRun'))
@@ -1160,7 +1164,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (capabilities.value?.schemaVersion === '1.13' && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1178,14 +1182,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(capabilities.value?.schemaVersion === '1.13' ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = capabilities.value?.schemaVersion === '1.13' ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.13', '1.14'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }

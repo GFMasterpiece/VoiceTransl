@@ -58,10 +58,14 @@ def _validate_node_config(node):
     return definition
 
 
-def validate_frozen_workflow_connections(snapshot, store=None, project_id=None) -> None:
+def validate_frozen_workflow_connections(
+    snapshot, store=None, project_id=None, *, node_ids=None
+) -> None:
     from ..domain.workflow import workflow_inline_connection_inputs
 
     for node, binding, provider_type in workflow_inline_connection_inputs(snapshot.nodes):
+        if node_ids is not None and node.id not in node_ids:
+            continue
         _validate_node_config(node)
         _connection(node, binding)
         ref = node.config.get(binding["credential_ref_key"])
@@ -72,11 +76,13 @@ def validate_frozen_workflow_connections(snapshot, store=None, project_id=None) 
         credential_operation(store, "validate_ref", project_id, node.id, provider_type, ref)
 
 
-def freeze_workflow_connections(store, snapshot, project_id=None):
+def freeze_workflow_connections(store, snapshot, project_id=None, *, node_ids=None):
     from ..domain.workflow import workflow_inline_connection_inputs
 
     frozen = snapshot.model_copy(deep=True)
     for node, binding, provider_type in workflow_inline_connection_inputs(frozen.nodes):
+        if node_ids is not None and node.id not in node_ids:
+            continue
         definition = _validate_node_config(node)
         if definition.normalize_config is not None:
             node.config = definition.normalize_config(dict(node.config))

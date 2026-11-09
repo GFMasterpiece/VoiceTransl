@@ -22,14 +22,16 @@ import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
 import { measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
+import { useNodeRerun } from '../composables/useNodeRerun'
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
 import { groupNodeKinds } from '../workflow/nodeCategories'
 
 const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
+const rerunModalOpen = ref(false)
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
-const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive)
+const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
@@ -60,11 +62,11 @@ const editMenuElement = ref<HTMLElement | null>(null)
 const editMenuButton = ref<HTMLButtonElement | null>(null)
 let pendingClose: (() => void) | null = null
 const controlsLocked = computed(() => store.saving || store.validating || store.activeSingleRun || store.actionLoading || store.resourceUploading || resourceBusy.value)
-const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !store.loading && !drag.value && !resizing.value && !readingImport.value && !pendingImport.value)
+const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value && !rerunModalOpen.value && !store.loading && !drag.value && !resizing.value && !readingImport.value && !pendingImport.value)
 const commands = useEditorCommands(store, {
   stage,
   context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
-  blocked: () => controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value,
+  blocked: () => controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value || rerunModalOpen.value,
   pastePoint: () => {
     const bounds = stage.value?.getBoundingClientRect()
     return bounds && bounds.width > 0 && bounds.height > 0
@@ -72,16 +74,21 @@ const commands = useEditorCommands(store, {
   },
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
-const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value)
+const rerun = useNodeRerun({ context: () => JSON.stringify([props.projectId, props.audioId]), blocked: () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || batch.manifest.uploading.value || batch.collection.incomplete.value || !!batch.batches.pending.value })
+watch(rerun.target, target => { rerunModalOpen.value = !!target }, { flush: 'sync' })
+const rerunAudioName = computed(() => props.audios?.find(audio => audio.id === rerun.target.value?.audioId)?.source.original_name || rerun.target.value?.audioId || t('workflow.rerunChooseSource'))
+function rerunFromMenu() { const id = contextMenu.value?.nodeId; closeMenu(true); if (id) void rerun.open(id) }
+function locateRerunNode(id: string) { if (rerun.submitting.value) return; store.selectNode(id); rerun.close(); commands.focusCanvas() }
+const editingBlocked = computed(() => controlsLocked.value || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || rerunModalOpen.value)
 provide(languageSuggestionsKey, { languages: computed(() => store.capabilities?.languages),
   suspended: computed(() => editingBlocked.value || !!contextMenu.value || editMenuOpen.value || !!drag.value || !!resizing.value || !!panning.value || !!connectionStart.value || !!marquee.value),
   context: computed(() => props.projectId), finishEdit: store.closeHistoryGroup })
 
-type EditorCommand = 'undo' | 'redo' | 'select-all' | 'copy' | 'paste' | 'duplicate' | 'delete' | 'import' | 'export'
+type EditorCommand = 'undo' | 'redo' | 'select-all' | 'copy' | 'cut' | 'paste' | 'duplicate' | 'delete' | 'import' | 'export'
 const editorCommands: Array<{ id: EditorCommand; shortcut: string }> = [
   { id: 'undo', shortcut: 'Ctrl/Cmd+Z' }, { id: 'redo', shortcut: 'Ctrl/Cmd+Shift+Z' },
   { id: 'select-all', shortcut: 'Ctrl/Cmd+A' }, { id: 'copy', shortcut: 'Ctrl/Cmd+C' },
-  { id: 'paste', shortcut: 'Ctrl/Cmd+V' }, { id: 'duplicate', shortcut: 'Ctrl/Cmd+D' },
+  { id: 'cut', shortcut: 'Ctrl/Cmd+X' }, { id: 'paste', shortcut: 'Ctrl/Cmd+V' }, { id: 'duplicate', shortcut: 'Ctrl/Cmd+D' },
   { id: 'delete', shortcut: 'Delete / Backspace' }, { id: 'import', shortcut: '' }, { id: 'export', shortcut: '' },
 ]
 function commandDisabled(command: EditorCommand) {
@@ -89,7 +96,7 @@ function commandDisabled(command: EditorCommand) {
   if (command === 'undo') return !store.canUndo
   if (command === 'redo') return !store.canRedo
   if (command === 'paste') return clipboardBusy.value
-  return ['copy', 'duplicate', 'delete'].includes(command) && !store.selectedNodeIds.length
+  return ['copy', 'cut', 'duplicate', 'delete'].includes(command) && !store.selectedNodeIds.length
 }
 function closeEditMenu(focus = false) { editMenuOpen.value = false; if (focus) commands.focusCanvas() }
 async function toggleEditMenu() {
@@ -104,6 +111,7 @@ function runEditorCommand(command: EditorCommand) {
   else if (command === 'redo') store.redo()
   else if (command === 'select-all') store.setSelection(store.draft.nodes.map((node) => node.id))
   else if (command === 'copy') void commands.copySelected()
+  else if (command === 'cut') void commands.cutSelected()
   else if (command === 'paste') void commands.pasteClipboard()
   else if (command === 'duplicate') commands.duplicateSelected()
   else if (command === 'delete') {
@@ -179,7 +187,7 @@ async function uploadedResource(node: WorkflowNode, audio: Audio) {
 watch(() => props.audioId, (id) => { void store.setAudioContext(id) })
 watch(() => store.audioId, (id) => { if (id && id !== props.audioId) emit('selectAudio', id) })
 function guardUnload(event: BeforeUnloadEvent) {
-  if (resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
+  if (rerun.submitting.value || resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
 }
 
 const filteredKindGroups = computed(() => groupNodeKinds(nodeKinds.value, menuSearch.value))
@@ -214,7 +222,7 @@ async function showMenu(x: number, y: number, world: { x: number; y: number }, n
 }
 function canvasContextMenu(event: MouseEvent) {
   const target = event.target as Element
-  if (target.closest('input, textarea, select, audio, video, button, [contenteditable="true"]')) return
+  if (target.closest('input, textarea, select, audio, video, button, [contenteditable]:not([contenteditable="false"])')) return
   event.preventDefault()
   const group = target.closest<SVGGElement>('.workflow-node')
   void showMenu(event.clientX, event.clientY, canvasPoint(event as PointerEvent), group?.dataset.nodeId, group || stage.value || undefined)
@@ -235,12 +243,22 @@ function addFromMenu(type: string) {
   store.addNode(type, menu.world)
   closeMenu(true)
 }
-function deleteFromMenu() {
-  const node = store.draft.nodes.find((entry) => entry.id === contextMenu.value?.nodeId)
-  if (!node || controlsLocked.value || registry.value?.kind(node.type)?.removable === false) return
+function runContextCommand(command: 'copy' | 'cut' | 'paste' | 'duplicate') {
+  if (commandDisabled(command)) return
+  const point = contextMenu.value?.world
   closeMenu(true)
-  if (window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(node) }))) store.removeNode(node.id)
+  if (command === 'paste') void commands.pasteClipboard(point)
+  else runEditorCommand(command)
 }
+function deleteFromMenu() {
+  if (commandDisabled('delete')) return
+  const selected = store.selectedNode
+  closeMenu(true)
+  if (store.selectedNodeIds.length === 1 && selected) {
+    if (window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(selected) }))) store.deleteSelection()
+  } else runEditorCommand('delete')
+}
+
 function menuKey(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); closeMenu(true); return }
   const items = [...(menuElement.value?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || [])]
@@ -267,7 +285,7 @@ function canvasKeyboard(event: KeyboardEvent) {
     // Native paste dispatches one ClipboardEvent; the menu alone uses readText.
     if (key === 'v') return
     const command: EditorCommand | undefined = key === 'z' ? (event.shiftKey ? 'redo' : 'undo')
-      : key === 'y' ? 'redo' : key === 'a' ? 'select-all' : key === 'c' ? 'copy' : key === 'd' ? 'duplicate' : undefined
+      : key === 'y' ? 'redo' : key === 'a' ? 'select-all' : key === 'c' ? 'copy' : key === 'x' ? 'cut' : key === 'd' ? 'duplicate' : undefined
     if (command) { event.preventDefault(); event.stopPropagation(); runEditorCommand(command); return }
   }
   if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -283,6 +301,7 @@ function canvasPaste(event: ClipboardEvent) {
 }
 watch(() => [store.pan.x, store.pan.y, store.zoom, controlsLocked.value, activePanel.value, props.projectId], () => { closeMenu(); closeEditMenu() }, { flush: 'sync' })
 
+function isReused(node: WorkflowNode) { return store.runMatchesDraft && runByNode.value.get(node.id)?.execution_kind === 'reused' }
 function nodeStatus(node: WorkflowNode) {
   if (!store.runMatchesDraft) return 'draft'
   return runByNode.value.get(node.id)?.status || 'draft'
@@ -690,6 +709,8 @@ async function reloadCapabilities() {
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
+  if (rerun.submitting.value) { store.setError(message('workflow.leaveSaving')); return 'blocked' }
+  if (rerun.target.value) rerun.close()
   if (batch.manifest.uploading.value || batch.batches.submitting.value) { store.setError(message('batch.uploadBusy')); return 'blocked' }
   if (readingImport.value || pendingImport.value || clipboardBusy.value) { store.setError(message('workflow.editorImportPending')); return 'blocked' }
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
@@ -760,7 +781,7 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value })
+defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || !!rerun.target.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
@@ -815,8 +836,8 @@ onUnmounted(() => {
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomIn')" :disabled="store.zoom >= 1.8" @click="setZoom(store.zoom + .1)">+</button>
         <button class="secondary-button compact-button" type="button" @click="fitCanvas">{{ t('workflow.fit') }}</button>
         <button class="secondary-button compact-button" type="button" @click="store.pan = { x: 0, y: 0 }">{{ t('workflow.resetView') }}</button>
-        <button v-for="panel in (['run', 'artifacts', 'logs'] as const)" :key="panel" class="secondary-button compact-button" type="button" :data-open-panel="panel" :aria-expanded="activePanel === panel" @click="activePanel = panel">{{ t(`workflow.${panel === 'run' ? 'panelRun' : panel === 'artifacts' ? 'panelArtifacts' : 'panelLogs'}`) }}</button>
-        <button class="secondary-button compact-button" type="button" data-open-panel="batch" :aria-expanded="activePanel === 'batch'" @click="activePanel = 'batch'">{{ t('batch.title') }}</button>
+        <button v-for="panel in (['run', 'artifacts', 'logs'] as const)" :key="panel" class="secondary-button compact-button" type="button" :data-open-panel="panel" :aria-expanded="activePanel === panel" :disabled="rerunModalOpen" @click="activePanel = panel">{{ t(`workflow.${panel === 'run' ? 'panelRun' : panel === 'artifacts' ? 'panelArtifacts' : 'panelLogs'}`) }}</button>
+        <button class="secondary-button compact-button" type="button" data-open-panel="batch" :aria-expanded="activePanel === 'batch'" :disabled="rerunModalOpen" @click="activePanel = 'batch'">{{ t('batch.title') }}</button>
       </div>
     </div>
     <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
@@ -848,7 +869,7 @@ onUnmounted(() => {
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
               <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeIds.includes(node.id), 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="onNodeClick($event, node)" @keydown="keyboardSelect($event, node)">
                 <defs>
-                  <clipPath :id="`${clipId}-${node.id}-title`"><rect x="22" y="0" :width="nodeWidth(node) - 64" height="30" /></clipPath>
+                  <clipPath :id="`${clipId}-${node.id}-title`"><rect x="22" y="0" :width="nodeWidth(node) - (isReused(node) ? 114 : 64)" height="30" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-port-in`"><rect x="10" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-port-out`"><rect :x="nodeWidth(node) - 10 - portClipWidth(node)" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
                 </defs>
@@ -856,6 +877,7 @@ onUnmounted(() => {
                 <path class="node-header" :d="headerPath(node)" />
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-${node.id}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ nodeLabel(node) }}</text>
+                <text v-if="isReused(node)" data-reuse-badge class="node-subtitle" :x="nodeWidth(node) - 26" text-anchor="end" y="19">{{ t('workflow.rerunReused') }}</text>
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
                 <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - WORKFLOW_NODE_BODY_BOTTOM">
                   <div class="node-body" :style="bodyStyle(node)">
@@ -904,8 +926,21 @@ onUnmounted(() => {
         </div>
         <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
-      <button v-else role="menuitem" type="button" data-delete-node :disabled="controlsLocked || registry?.kind(store.selectedNode?.type || '')?.removable === false" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
+      <button v-if="contextMenu.nodeId && store.capabilities?.schemaVersion === '1.14'" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
+      <button v-else role="menuitem" type="button" data-context-command="paste" :disabled="commandDisabled('paste')" @click="runContextCommand('paste')">{{ t('workflow.editorCommand_paste') }}</button>
+      <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
+    <CanvasDialog class="node-rerun-dialog" :open="!!rerun.target.value" :title="t('workflow.rerunTitle')" :close-disabled="rerun.submitting.value" @close="rerun.close">
+      <p class="workflow-panel-meta" data-rerun-audio>{{ rerunAudioName }}</p>
+      <p v-if="rerun.planning.value" role="status">{{ t('workflow.rerunPlanning') }}</p>
+      <p v-if="rerun.error.value" class="workflow-run-error" role="alert">{{ rerun.error.value }}</p>
+      <template v-if="rerun.plan.value">
+        <ul class="rerun-plan-counts"><li>{{ t('workflow.rerunExecute', { count: rerun.plan.value.execute_node_ids.length }) }}</li><li>{{ t('workflow.rerunReuse', { count: rerun.plan.value.reuse_node_ids.length }) }}</li><li>{{ t('workflow.rerunSkipped', { count: rerun.plan.value.skipped_node_ids.length }) }}</li></ul>
+        <div v-for="(issue, index) in rerun.plan.value.issues" :key="index" class="workflow-run-error" role="alert"><p>{{ rerun.issueLabel(issue) }}</p><button v-for="id in issue.restart_node_ids" :key="id" class="text-button" type="button" :disabled="rerun.submitting.value" @click="locateRerunNode(id)">{{ t('workflow.rerunLocate', { node: id }) }}</button></div>
+      </template>
+      <div class="settings-actions"><button v-if="!rerun.plan.value && !rerun.planning.value" class="secondary-button" type="button" :disabled="rerun.submitting.value" @click="rerun.open(rerun.target.value!.fromNodeId)">{{ t('workflow.rerunRetry') }}</button><button class="primary-button" type="button" data-rerun-submit :disabled="!rerun.plan.value?.valid || rerun.planning.value || rerun.submitting.value" @click="rerun.submit">{{ rerun.submitting.value ? t('workflow.starting') : t('workflow.rerunStart') }}</button></div>
+    </CanvasDialog>
     <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
     <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" :locked="batch.locked.value" @close="activePanel = null" />
   </section>

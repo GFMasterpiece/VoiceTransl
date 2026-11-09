@@ -1246,7 +1246,7 @@ describe('canvas context menus', () => {
     expect(store.draft.nodes.map((node) => node.id)).toEqual(['input'])
     menu(node('audio_input')); await settle()
     expect(root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.disabled).toBe(true)
-    expect(document.activeElement).toBe(root!.querySelector('.canvas-context-menu'))
+    expect(document.activeElement).toBe(root!.querySelector('[data-context-command=copy]'))
     document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     expect(root!.querySelector('.canvas-context-menu')).toBeNull()
   })
@@ -2404,6 +2404,43 @@ describe('editor operations UI', () => {
     expect(root!.textContent).toContain(t('workflow.editorPasteFallback'))
   })
 
+  it('cuts only removable selections once, retains protected sources and falls back to the application clipboard', async () => {
+    setup(); await settle(); const store = useWorkflowStore()
+    const original = cloneDocument(store.draft)
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('navigator', { clipboard: { writeText, readText: vi.fn().mockRejectedValue(new Error('denied')) } })
+    store.setSelection(['input', 'output'])
+    expect(key(svg(), 'x', { metaKey: true }).defaultPrevented).toBe(true); await settle()
+    expect(store.draft.nodes.map(node => node.id)).toEqual(['input'])
+    expect(JSON.parse(writeText.mock.calls[0]![0]).nodes.map((node: WorkflowNode) => node.id)).toEqual(['output'])
+    expect(root!.textContent).toContain(t('workflow.editorCutProtectedFallback', { count: 1 }))
+    expect(store.undo()).toBe(true); expect(store.draft).toEqual(original); expect(store.canUndo).toBe(false)
+    expect(store.redo()).toBe(true); await command('paste')
+    expect(store.draft.nodes).toHaveLength(2)
+    store.setSelection(['input']); const before = cloneDocument(store.draft)
+    await command('cut'); expect(store.draft).toEqual(before)
+    store.selectNode(store.draft.nodes.find(node => node.id !== 'input')!.id)
+    store.updateNodeConfig(store.selectedNodeId!, { filename_stem: 'x'.repeat(5 * 1024 * 1024) })
+    const unsafe = cloneDocument(store.draft); await command('cut')
+    expect(store.draft).toEqual(unsafe)
+  })
+
+  it('exposes node clipboard actions and pastes at the captured blank context-menu position', async () => {
+    setup(); await settle(); const store = useWorkflowStore(); store.selectNode('output')
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')), readText: vi.fn().mockRejectedValue(new Error('denied')) } })
+    const menu = async (target: Element, x = 300, y = 220) => { target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })); await settle() }
+    await menu(node('audio_output'))
+    expect([...root!.querySelectorAll('[data-context-command]')].map(item => item.getAttribute('data-context-command'))).toEqual(['copy', 'cut', 'paste', 'duplicate'])
+    root!.querySelector<HTMLButtonElement>('[data-context-command=copy]')!.click(); await settle()
+    await menu(svg(), 610, 330)
+    root!.querySelector<HTMLButtonElement>('[data-context-command=paste]')!.click(); await settle()
+    expect(store.draft.nodes).toHaveLength(3)
+    const pasted = store.selectedNode!
+    const bounds = svg().getBoundingClientRect()
+    expect(pasted.position).toEqual({ x: Math.round((610 - bounds.left - store.pan.x) / store.zoom), y: Math.round((330 - bounds.top - store.pan.y) / store.zoom) })
+    store.undo(); expect(store.draft.nodes).toHaveLength(2)
+  })
+
   it('duplicates and deletes by menu or shortcut, keeps protected nodes and never captures native editing or locked commands', async () => {
     setup(); await settle(); const store = useWorkflowStore()
     store.selectNode('output')
@@ -2414,7 +2451,7 @@ describe('editor operations UI', () => {
     const input = node('audio_output').querySelector<HTMLInputElement>('input')!
     const snapshot = cloneDocument(store.draft)
     const edit = vi.spyOn(store, 'undo')
-    for (const value of ['z', 'c', 'v', 'a', 'd', 'Delete', 'Backspace']) {
+    for (const value of ['z', 'c', 'x', 'v', 'a', 'd', 'Delete', 'Backspace']) {
       expect(key(input, value, { ctrlKey: true }).defaultPrevented).toBe(false)
     }
     expect(paste('native text', input).defaultPrevented).toBe(false)
@@ -2422,7 +2459,7 @@ describe('editor operations UI', () => {
       const control = document.createElement(tag)
       if (tag === 'div') control.setAttribute('contenteditable', 'true')
       node('audio_output').querySelector('.node-body-fields')!.append(control)
-      for (const value of ['z', 'c', 'v', 'Delete', 'Backspace']) expect(key(control, value, { ctrlKey: true }).defaultPrevented).toBe(false)
+      for (const value of ['z', 'c', 'x', 'v', 'Delete', 'Backspace']) expect(key(control, value, { ctrlKey: true }).defaultPrevented).toBe(false)
       expect(paste('native text', control).defaultPrevented).toBe(false)
       control.remove()
     }
@@ -2434,7 +2471,7 @@ describe('editor operations UI', () => {
     key(svg(), 'z', { ctrlKey: true }); await settle()
     expect(store.draft).toEqual(snapshot)
     store.run = runBody({ status: 'running' }); await settle()
-    key(svg(), 'd', { ctrlKey: true }); key(svg(), 'Delete'); paste('bad')
+    key(svg(), 'd', { ctrlKey: true }); key(svg(), 'x', { ctrlKey: true }); key(svg(), 'Delete'); paste('bad')
     expect(store.draft).toEqual(snapshot)
     expect(root!.querySelector<HTMLButtonElement>('[data-editor-menu]')!.disabled).toBe(true)
   })
@@ -3085,5 +3122,96 @@ describe('resource collection and shared execution', () => {
     expect(run.disabled).toBe(false)
     run.click(); await settle()
     expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/audios/a2/workflow-runs') && init?.method === 'POST')).toBe(true)
+  })
+})
+describe('node rerun planning UI', () => {
+  const validPlan = { valid: true, execute_node_ids: ['output'], reuse_node_ids: ['input'], skipped_node_ids: [], issues: [] }
+  async function ready(override?: FetchOverride) {
+    setup(override, createPinia(), { audios: ['a1', 'a2'].map(id => ({ id, source: { original_name: id === 'a1' ? 'chosen-audio.wav' : 'second.wav', language: 'ja', size_bytes: 5 } })) }); await settle()
+    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.14'; store.run = runBody({ status: 'completed' }); await settle(); return store
+  }
+  async function openRerun() {
+    node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 400, clientY: 220 })); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-rerun-node]')!.click(); await settle()
+  }
+  it('plans the chosen historical source and retries submission with the exact request ID after a lost response', async () => {
+    const submissions: any[] = []; let lose = true
+    const store = await ready((path, init) => {
+      if (path.endsWith('/workflow-runs/plan')) return Promise.resolve(response(validPlan))
+      if (path.endsWith('/workflow-runs') && init?.method === 'POST') {
+        submissions.push(JSON.parse(String(init.body)))
+        if (lose) { lose = false; return Promise.reject(new TypeError('lost response')) }
+        return Promise.resolve(response(runBody({ id: 'rerun-2', status: 'pending', rerun: { source_run_id: 'run-1', from_node_id: 'output', ...validPlan } }), 202))
+      }
+    })
+    await openRerun()
+    expect(root!.querySelector<HTMLButtonElement>('[data-editor-menu]')!.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-open-panel=run]')!.disabled).toBe(true)
+    expect(root!.querySelector('[data-rerun-audio]')!.textContent).toBe('chosen-audio.wav')
+    const call = fetchMock.mock.calls.find(([path]) => String(path).endsWith('/workflow-runs/plan'))!
+    expect(JSON.parse(String(call[1]!.body))).toEqual({ workflow_revision: 1, rerun: { source_run_id: 'run-1', from_node_id: 'output' } })
+    root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!.click(); await settle()
+    expect(root!.querySelector('.node-rerun-dialog')).not.toBeNull()
+    root!.querySelector<HTMLButtonElement>('.node-rerun-dialog .canvas-dialog-close')!.click(); await settle()
+    await openRerun()
+    root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!.click(); await settle()
+    expect(submissions).toHaveLength(2); expect(submissions[1]).toEqual(submissions[0]); expect(submissions[0].request_id).toBeTruthy()
+    expect(store.run!.id).toBe('rerun-2'); expect(root!.querySelector('.node-rerun-dialog [role=dialog]')).toBeNull()
+  })
+  it('reruns one selected historical audio from a multi-audio input and renders reused/skipped records', async () => {
+    const store = await ready(path => path.endsWith('/workflow-runs/plan') ? Promise.resolve(response(validPlan)) : undefined)
+    const source = store.capabilities!.nodes.find(node => node.type === 'audio_input')! as any
+    source.fields = [{ key: 'many', type: 'json', default: null, inputPort: null, required: false, minimum: null, maximum: null, minLength: null, maxLength: null, pattern: null, validator: null, options: [], label: 'Audio list', description: '' }]
+    source.resourceInput = { resourceType: 'audio', configKey: 'single', collectionKey: 'many' }
+    const graph = cloneDocument(store.draft); graph.nodes[0]!.config = { many: ['a1', 'a2'] }
+    store.document = { ...store.document!, ...graph }; store.setCleanBaseline(graph)
+    await openRerun(); expect(root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!.disabled).toBe(false)
+    root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!.click(); await settle()
+    const submits = fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/workflow-runs') && init?.method === 'POST')
+    expect(submits).toHaveLength(1); expect(String(submits[0]![0])).toContain('/audios/a1/')
+    store.run = runBody({ status: 'completed', nodes: runBody().nodes.map((node, index) => ({ ...node, status: index ? 'skipped' : 'completed', execution_kind: index ? null : 'reused', reused_from: index ? null : { run_id: 'old-run', node_id: node.node_id } })) })
+    await openPanel('run'); expect(root!.textContent).toContain(t('workflow.rerunReused')); expect(root!.textContent).toContain(t('workflow.nodeStatus_skipped'))
+  })
+
+  it('reserves a separate header region for reused status without covering node titles', async () => {
+    const store = await ready()
+    store.run!.nodes[1]!.execution_kind = 'reused'; await settle()
+    const group = node('audio_output')
+    const title = group.querySelector('clipPath rect')!
+    const badge = group.querySelector('[data-reuse-badge]')!
+    const titleEnd = Number(title.getAttribute('x')) + Number(title.getAttribute('width'))
+    expect(titleEnd).toBeLessThan(Number(badge.getAttribute('x')) - 56)
+    expect(badge.getAttribute('text-anchor')).toBe('end')
+  })
+
+  it('blocks close, duplicate submission and workspace leave while a rerun is being submitted', async () => {
+    const pending = deferred<Response>()
+    await ready((path, init) => path.endsWith('/workflow-runs/plan') ? Promise.resolve(response(validPlan)) : path.endsWith('/workflow-runs') && init?.method === 'POST' ? pending.promise : undefined)
+    await openRerun()
+    const submit = root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!
+    submit.click(); await settle(); submit.click()
+    expect(submit.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('.node-rerun-dialog .canvas-dialog-close')!.disabled).toBe(true)
+    const leave = vi.fn(); expect(app!._instance!.exposed!.requestClose(leave)).toBe('blocked'); expect(leave).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/workflow-runs') && init?.method === 'POST')).toHaveLength(1)
+    pending.resolve(response(runBody({ id: 'created-rerun' }), 202)); await settle()
+  })
+
+  it('shows unavailable checkpoints, allows locating an earlier node and never silently runs it', async () => {
+    await ready((path) => path.endsWith('/workflow-runs/plan') ? Promise.resolve(response({ ...validPlan, valid: false, issues: [{ code: 'RERUN_CHECKPOINT_UNAVAILABLE', message: 'missing', node_id: 'input', restart_node_ids: ['input'] }] })) : undefined)
+    await openRerun(); expect(root!.textContent).toContain(t('workflow.error_RERUN_CHECKPOINT_UNAVAILABLE'))
+    expect(root!.querySelector<HTMLButtonElement>('[data-rerun-submit]')!.disabled).toBe(true)
+    const locate = [...root!.querySelectorAll<HTMLButtonElement>('.node-rerun-dialog button')].find(button => button.textContent === t('workflow.rerunLocate', { node: 'input' }))!
+    locate.click(); await settle(); expect(useWorkflowStore().selectedNodeId).toBe('input')
+    expect(fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/workflow-runs') && init?.method === 'POST')).toHaveLength(0)
+  })
+  it('allows closing a pending plan and ignores its late response, and rejects dirty graphs visibly', async () => {
+    const pending = deferred<Response>()
+    const store = await ready(path => path.endsWith('/workflow-runs/plan') ? pending.promise : undefined)
+    await openRerun(); root!.querySelector<HTMLButtonElement>('.node-rerun-dialog .canvas-dialog-close')!.click(); await settle()
+    pending.resolve(response(validPlan)); await settle(); expect(root!.querySelector('.node-rerun-dialog [role=dialog]')).toBeNull()
+    store.updateNodeConfig('output', { filename_stem: 'changed' }); await openRerun()
+    expect(root!.querySelector('.node-rerun-dialog')!.textContent).toContain(t('workflow.saveBeforeRun'))
+    expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/workflow-runs/plan'))).toHaveLength(1)
   })
 })

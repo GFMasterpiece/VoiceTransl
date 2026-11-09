@@ -7,6 +7,7 @@ from typing import Awaitable, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .checkpoint import CheckpointCodec
 from .node_execution import NodeExecutionContext, NodeResult
 
 
@@ -66,6 +67,7 @@ class NodeDefinition:
     is_parameter_source: bool = False
     category: NodeCategory | None = None
     settings_default_fields: tuple[str, ...] = ()
+    execution_version: str = "1"
 
     @property
     def required_ports(self) -> tuple[str, ...]:
@@ -92,6 +94,7 @@ class DataTypeDefinition:
     is_valid: Callable[[object], bool]
     parent_type_id: str | None = None
     capabilities: frozenset[str] = frozenset()
+    checkpoint_codec: CheckpointCodec | None = None
 
 
 class PortDefinition(BaseModel):

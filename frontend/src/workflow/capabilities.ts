@@ -289,10 +289,10 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
+  if (typeof workflow.schema_version !== 'string' || !['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(workflow.schema_version)) fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
-  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(workflow.schema_version)
-  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.11', '1.12', '1.13'].includes(String(workflow.schema_version)), ['1.12', '1.13'].includes(String(workflow.schema_version))))
+  const parameters = ['1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(workflow.schema_version)
+  const nodes = workflow.nodes.map((entry) => node(entry, workflow.schema_version === '1.4' || parameters, parameters, ['1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.11', '1.12', '1.13', '1.14'].includes(String(workflow.schema_version)), ['1.12', '1.13', '1.14'].includes(String(workflow.schema_version))))
   const categoryLabels = new Map<string, string>()
   for (const entry of nodes) if (entry.category) {
     if (categoryLabels.has(entry.category.id) && categoryLabels.get(entry.category.id) !== entry.category.label) fail('workflow.capCategory')
@@ -356,7 +356,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
     schemaVersion: String(workflow.schema_version),
-    ...(['1.12', '1.13'].includes(String(workflow.schema_version)) ? { languages: languages(root.languages) } : {}),
+    ...(['1.12', '1.13', '1.14'].includes(String(workflow.schema_version)) ? { languages: languages(root.languages) } : {}),
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,
     ports,

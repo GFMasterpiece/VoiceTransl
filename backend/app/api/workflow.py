@@ -9,6 +9,7 @@ from ..application.workflow_connections import (
     reject_connection_validation_errors,
 )
 from ..application.workflow_credentials import prepare_workflow_credentials
+from ..application.workflow_reuse import ReuseError, ReuseIssue, ReusePlan, prepare_reuse
 from ..domain import (
     WorkflowDocument,
     WorkflowEdge,
@@ -20,7 +21,13 @@ from ..domain import (
     validate_workflow_graph,
 )
 from ..domain.schema import SCHEMA_VERSION, SchemaVersionError, require_schema_version
-from ..domain.workflow import normalize_workflow_graph, validate_workflow_resources
+from ..domain.workflow import (
+    WorkflowRerunRequest,
+    normalize_workflow_graph,
+    validate_workflow_audio_selection,
+    validate_workflow_resources,
+    workflow_snapshot,
+)
 from ..storage import ProjectNotFound
 from ..storage.project_store import WorkflowRevisionConflict
 
@@ -107,7 +114,10 @@ class WorkflowValidateRequest(BaseModel):
 
 
 class WorkflowRunRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     workflow_revision: int = Field(ge=0)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    rerun: WorkflowRerunRequest | None = None
 
 
 @router.get("/projects/{pid}/workflow", response_model=WorkflowDocument)
@@ -220,6 +230,51 @@ async def validate_workflow(pid: str, body: WorkflowValidateRequest, request: Re
     return WorkflowValidationResponse(valid=not issues, errors=issues)
 
 
+@router.post("/projects/{pid}/audios/{aid}/workflow-runs/plan", response_model=ReusePlan)
+async def plan_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, request: Request):
+    project = _audio(request, pid, aid)
+    store = request.app.state.store
+    if body.rerun is None:
+        raise HTTPException(422, detail=_error("RERUN_REQUIRED", "请选择重跑节点和来源运行"))
+    async with store.mutation_lock(pid):
+        document = store.load_workflow(pid)
+        if document.workflow_revision != body.workflow_revision:
+            raise HTTPException(
+                409, detail=_error("WORKFLOW_REVISION_CONFLICT", "工作流版本已变化，请刷新后重试")
+            )
+        issues = validate_workflow_graph(document.nodes, document.edges)
+        issues.extend(validate_workflow_resources(project, document.nodes))
+        if issues:
+            return ReusePlan(
+                valid=False, issues=[ReuseIssue(code="INVALID_WORKFLOW", message="当前保存图无效")]
+            )
+        try:
+            validate_workflow_audio_selection(
+                document.nodes, audio_id=aid, allow_collection_subset=True
+            )
+            prepared = await prepare_reuse(store, pid, aid, workflow_snapshot(document), body.rerun)
+            from ..application.workflow_connections import freeze_workflow_connections
+
+            freeze_workflow_connections(
+                store,
+                workflow_snapshot(document),
+                pid,
+                node_ids=set(prepared.plan.execute_node_ids),
+            )
+            return prepared.plan
+        except ReuseError as error:
+            return error.plan
+        except ConnectionSnapshotError as error:
+            return ReusePlan(valid=False, issues=[ReuseIssue(code=error.code, message=str(error))])
+        except ValueError:
+            return ReusePlan(
+                valid=False,
+                issues=[
+                    ReuseIssue(code="INPUT_AUDIO_MISMATCH", message="当前音频不在输入节点清单中")
+                ],
+            )
+
+
 @router.post(
     "/projects/{pid}/audios/{aid}/workflow-runs",
     status_code=202,
@@ -227,11 +282,28 @@ async def validate_workflow(pid: str, body: WorkflowValidateRequest, request: Re
 )
 async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, request: Request):
     _audio(request, pid, aid)
+    if body.rerun and not body.request_id:
+        raise HTTPException(422, detail=_error("WORKFLOW_REQUEST_ID_REQUIRED", "重跑需要请求标识"))
     try:
-        return await request.app.state.jobs.start_workflow(pid, aid, body.workflow_revision)
+        return await request.app.state.jobs.start_workflow(
+            pid, aid, body.workflow_revision, rerun=body.rerun, request_id=body.request_id
+        )
+    except ReuseError as error:
+        issue = error.plan.issues[0]
+        raise HTTPException(
+            422, detail=_error(issue.code, issue.message, error.plan.model_dump())
+        ) from None
     except ConnectionSnapshotError as error:
         raise HTTPException(422, detail=_error(error.code, str(error))) from error
     except RuntimeError as error:
+        if str(error) == "WORKFLOW_STOPPING":
+            raise HTTPException(
+                503, detail=_error("WORKFLOW_STOPPING", "服务正在关闭，请稍后重试")
+            ) from None
+        if str(error) == "WORKFLOW_REQUEST_CONFLICT":
+            raise HTTPException(
+                409, detail=_error("WORKFLOW_REQUEST_CONFLICT", "请求标识已用于不同运行")
+            ) from None
         if str(error) == "WORKFLOW_REVISION_CONFLICT":
             raise HTTPException(
                 409,

@@ -45,6 +45,26 @@ export function useEditorCommands(store: ReturnType<typeof useWorkflowStore>, op
     clipboardBusy.value = false
   }, { flush: 'sync' })
   function focusCanvas() { options.stage.value?.focus() }
+  async function cutSelected() {
+    if (options.blocked() || !store.registry || store.historyTransactionActive) return
+    const removable = store.draft.nodes.filter(node => store.selectedNodeIds.includes(node.id) && store.registry!.kind(node.type)?.removable !== false).map(node => node.id)
+    const protectedCount = store.selectedNodeIds.length - removable.length
+    if (!removable.length) { notice.set(message('workflow.editorCutProtected', { count: protectedCount })); return }
+    try {
+      const text = copySelection(store.draft, removable, store.registry)
+      applicationClipboard = text
+      const context = options.context()
+      // Delete synchronously only after the portable application clipboard is ready.
+      if (!store.deleteSelection()) return
+      notice.set(message(protectedCount ? 'workflow.editorCutProtected' : 'workflow.editorCut', { count: protectedCount }))
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error()
+        await navigator.clipboard.writeText(text)
+      } catch {
+        if (alive && options.context() === context) notice.set(message(protectedCount ? 'workflow.editorCutProtectedFallback' : 'workflow.editorCutFallback', { count: protectedCount }))
+      }
+    } catch (reason) { report(reason, 'workflow.editorCopyFailed') }
+  }
   async function copySelected() {
     if (options.blocked() || !store.registry) return
     try {
@@ -79,7 +99,7 @@ export function useEditorCommands(store: ReturnType<typeof useWorkflowStore>, op
       pasteText(applicationClipboard)
     } else store.setError(message('workflow.editorClipboardEmpty'))
   }
-  async function pasteClipboard() {
+  async function pasteClipboard(point = options.pastePoint()) {
     if (options.blocked() || clipboardBusy.value || readingImport.value || pendingImport.value) return
     const ticket = ++clipboardGeneration
     const context = options.context()
@@ -95,7 +115,7 @@ export function useEditorCommands(store: ReturnType<typeof useWorkflowStore>, op
     if (!alive || ticket !== clipboardGeneration || context !== options.context() || options.blocked()) return
     clipboardBusy.value = false
     if (!text) { store.setError(message('workflow.editorClipboardEmpty')); return }
-    pasteText(text)
+    pasteText(text, point)
   }
   function duplicateSelected() {
     if (options.blocked() || !store.registry) return
@@ -156,6 +176,6 @@ export function useEditorCommands(store: ReturnType<typeof useWorkflowStore>, op
   onUnmounted(() => { alive = false; cancelImport(); clipboardGeneration += 1 })
   return {
     fileInput, readingImport, clipboardBusy, pendingImport, notice: notice.text, focusCanvas,
-    copySelected, onPaste, pasteClipboard, duplicateSelected, exportWorkflow, chooseImport, readImport, cancelImport, applyImport,
+    copySelected, cutSelected, onPaste, pasteClipboard, duplicateSelected, exportWorkflow, chooseImport, readImport, cancelImport, applyImport,
   }
 }

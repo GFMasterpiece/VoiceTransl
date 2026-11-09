@@ -51,7 +51,8 @@ data/projects/<project-id>/
 | `GET /projects/{pid}/workflow` | 项目工作流，无已保存图时返回默认音频直通图 |
 | `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges,request_id?,credential_updates?}`，保存有效图并返回新修订；密钥更新为只写，附稳定请求 ID |
 | `POST /projects/{pid}/workflow/validate` | `{nodes,edges}`，返回 `{valid,errors}`，错误关联节点/边 |
-| `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision}`，202 返回绑定该音频的新运行 |
+| `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision}` 全图运行；可加 `rerun:{source_run_id,from_node_id}` 和必填稳定 `request_id` 创建节点重跑；202 返回新运行 |
+| `POST /projects/{pid}/audios/{aid}/workflow-runs/plan` | `{workflow_revision,rerun}`，只读预检返回 `valid/execute_node_ids/reuse_node_ids/skipped_node_ids/issues` |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs` | 分页历史摘要 `{items,total,limit,offset}`，默认 20、最大 100 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}` | 不可变图快照、节点状态及 artifact |
 | `POST /projects/{pid}/audios/{aid}/workflow-runs/{rid}/cancel` | 提交活动运行取消；终态幂等返回已有记录 |
@@ -86,7 +87,7 @@ data/projects/<project-id>/
 
 全局 `/provider-profiles` CRUD 已删除，旧连接文件不再加载。Filetrans 的 `provider_profile_id/connection_mode/api_key_env` 不再接受；含这些字段的旧图可以读取，但保存、运行及重试须明确拒绝，需删除后重新添加节点。原文件不自动改写；历史 `provider_profiles_snapshot` 仅作为不参与执行的原始元数据保留，不补读最新连接。
 
-`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传或运行路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.13`。
+`qwen_asr_streaming` 复用相同保存、单运行和批次 API，无新增上传路由，保存 `endpoint/timeout_seconds/credential_ref` 及模型、语言和附加参数。Provider 类型和凭据归属各自独立。批次与重试仅使用原图及凭据版本；持久化仍 `1.0`，当前能力目录为 `1.14`。
 
 `GET /capabilities` 顶层发布 `languages:[{code,names:{"zh-CN",en},native_name,aliases}]`，字段以 `suggestion_source:"languages"|null` 声明编辑候选。该清单不改变上传/配置的语言验证，不进入图和历史；传输继续只用原字符串代码，清单外的代码不因此被拒绝。源语言仍必填，云识别的空语言仍继承音频声明，Mock 保留非空校验及默认 `ja`。
 
@@ -107,4 +108,8 @@ data/projects/<project-id>/
 
 同一音频最多一个运行/排队任务，其他音频独立排队并共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等执行资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
 
-当前没有音频删除/重排、跨音频上下文、合并时间轴、指定节点重跑或历史清理。验证覆盖多音频上传与重试、固定快照批次、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录只读且不迁移；目录规模的性能限制见批处理规格。
+节点重跑创建独立运行，保存 `rerun` 来源及执行/复用/未参与列表；节点新增可省略的 `execution_kind/reused_from/checkpoint`，源身份保存实际哈希及相关元数据。checkpoint 文件位于自身运行 `.checkpoints/{node_id}/`，完整输出不塞进运行 JSON，旧历史缺字段不补写。多项输入清单允许目标音频属于清单的单项重跑；原批次的条目、计数、运行 ID 和 ZIP 不变，新运行 `batch_id=null` 且保留原 `batch_item_sequence`。请求 ID 相同且内容相同返回原运行，内容不同返回 `WORKFLOW_REQUEST_CONFLICT`；必要上游缺失、变化或损坏通过 `RERUN_*` issue 拒绝并指出前移节点，见[重跑规格](../spec/node-rerun-reuse.md)。
+
+服务关闭后拒绝新的调度，返回 `503 WORKFLOW_STOPPING`，原请求仍可返回已发布记录。关闭准备中的提交会回收读取/复制任务；已经发布的记录落为中断，不能留下无执行任务的排队记录。
+
+当前没有音频删除/重排、跨音频上下文、合并时间轴、整批节点重跑、自动缓存调度或历史清理。验证覆盖多音频上传与重试、固定快照批次、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录只读且不迁移；目录规模的性能限制见批处理规格。
