@@ -2,7 +2,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import CanvasDialog from './CanvasDialog.vue'
 import NodeConfigField from './NodeConfigField.vue'
-import { t, displayError, hasMessage } from '../i18n'
+import { t, displayError, hasMessage, locale, setLocale } from '../i18n'
 import { loadSettings, saveSettings, type GlobalSettings } from '../composables/globalSettings'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import type { Capabilities, CapabilityField, CapabilityLanguage } from '../workflow/capabilities'
@@ -46,6 +46,7 @@ function edit(field: CapabilityField, input: string) {
   if (!input && field.default === null) value = null
   config.value[field.key] = value
 }
+function changeLocale(event: Event) { setLocale((event.target as HTMLSelectElement).value) }
 function secret() { void secretVersion.value; return secrets.get(active.value) }
 function secretText() { const entry = secret(); return entry?.operation === 'set' ? entry.api_key : '' }
 function editSecret(value: string) { if (value) secrets.set(active.value, { operation: 'set', api_key: value }); else secrets.delete(active.value); secretVersion.value++ }
@@ -63,17 +64,21 @@ async function save() {
 </script>
 <template>
   <CanvasDialog class="global-settings-dialog" :open="open" :title="t('settings.title')" :close-disabled="saving" @close="close">
-    <div v-if="error" class="alert" role="alert">{{ error }}</div>
-    <p v-if="busy && !draft" role="status">{{ t('settings.loading') }}</p>
-    <template v-if="draft">
-      <nav class="settings-tabs" :aria-label="t('settings.title')"><button type="button" :class="{ active: !active }" :disabled="busy" @click="active = ''">{{ t('settings.general') }}</button><button v-for="(node, type) in draft.node_defaults" :key="type" type="button" :class="{ active: active === type }" :disabled="busy" @click="active = String(type)">{{ nodeLabel(String(type), node.label) }}</button></nav>
-      <div class="settings-fields"><NodeConfigField v-for="field in fields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
-        <div v-if="selected && credentialTypes.includes(active)" class="node-credential-group">
-          <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-settings-key autocomplete="new-password" :aria-label="t('connections.apiKey')" :value="secretText()" :disabled="busy" :placeholder="t('connections.keyUnchanged')" @input="editSecret(($event.target as HTMLInputElement).value)" /></label>
-          <p class="node-credential-status" role="status">{{ secret()?.operation === 'clear' ? t('connections.keyClearing') : secret()?.operation === 'set' ? t('connections.keyPending') : selected.credential_configured ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p><button type="button" class="text-button" :disabled="busy" @click="clearSecret">{{ t('connections.clearKey') }}</button>
-        </div>
+    <nav class="settings-tabs" data-settings-tabs :aria-label="t('settings.title')"><button type="button" :class="{ active: !active }" :disabled="busy" @click="active = ''">{{ t('settings.general') }}</button><button v-for="(node, type) in draft?.node_defaults || {}" :key="type" type="button" :class="{ active: active === type }" :disabled="busy" @click="active = String(type)">{{ nodeLabel(String(type), node.label) }}</button></nav>
+    <div class="settings-content" data-settings-content>
+      <div v-if="error" class="alert" role="alert">{{ error }}</div>
+      <p v-if="busy && !draft" role="status">{{ t('settings.loading') }}</p>
+      <div class="settings-fields">
+        <label v-if="!active" class="node-config-row"><span class="node-config-label">{{ t('app.language') }}</span><select class="locale-picker" data-settings-locale :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></label>
+        <template v-if="draft">
+          <NodeConfigField v-for="field in fields" :key="`${active}:${field.key}`" :field="field" :text="text(field)" :languages="languages" :disabled="busy" @edit="edit(field, $event)" />
+          <div v-if="selected && credentialTypes.includes(active)" class="node-credential-group">
+            <label class="node-config-row"><span class="node-config-label">{{ t('connections.apiKey') }}</span><input type="password" data-settings-key autocomplete="new-password" :aria-label="t('connections.apiKey')" :value="secretText()" :disabled="busy" :placeholder="t('connections.keyUnchanged')" @input="editSecret(($event.target as HTMLInputElement).value)" /></label>
+            <p class="node-credential-status" role="status">{{ secret()?.operation === 'clear' ? t('connections.keyClearing') : secret()?.operation === 'set' ? t('connections.keyPending') : selected.credential_configured ? t('connections.keyStored') : t('connections.keyNotStoredDirect') }}</p><button type="button" class="text-button" :disabled="busy" @click="clearSecret">{{ t('connections.clearKey') }}</button>
+          </div>
+        </template>
       </div>
-    </template>
-    <div class="settings-actions"><button type="button" class="secondary-button" :disabled="busy" @click="refresh">{{ t('settings.refresh') }}</button><button type="button" class="primary-button" :disabled="busy || !dirty" @click="save">{{ t('settings.save') }}</button></div>
+    </div>
+    <div class="settings-actions" data-settings-actions><button type="button" class="secondary-button" :disabled="busy" @click="refresh">{{ t('settings.refresh') }}</button><button type="button" class="primary-button" :disabled="busy || !dirty" @click="save">{{ t('settings.save') }}</button></div>
   </CanvasDialog>
 </template>

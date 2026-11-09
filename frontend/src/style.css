@@ -450,7 +450,17 @@ textarea:focus-visible { outline: 3px solid oklch(72% .12 175 / .45); outline-of
 .language-options [role="option"]:hover, .language-options .is-active { background: var(--teal-soft); }
 .language-options small { font-size: 11px; color: var(--muted); }
 
-.global-settings-dialog .canvas-dialog { width: min(640px, calc(100vw - 32px)); }
+.global-settings-dialog .canvas-dialog { width: min(640px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 48px)); }
+.global-settings-dialog .canvas-dialog-header { flex: 0 0 auto; }
+.global-settings-dialog .canvas-dialog-header h2 { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.global-settings-dialog .canvas-dialog-close { flex-shrink: 0; }
+.global-settings-dialog .canvas-dialog-body { display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; overflow: hidden; }
+.global-settings-dialog .settings-tabs { flex: 0 0 64px; flex-wrap: nowrap; min-height: 0; margin-bottom: 16px; overflow-x: auto; overflow-y: hidden; }
+.global-settings-dialog .settings-tabs button { flex: 0 0 auto; align-self: flex-start; white-space: nowrap; }
+.global-settings-dialog .settings-content { flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.global-settings-dialog .settings-fields { padding: 2px 4px 8px; }
+.global-settings-dialog .settings-actions { flex: 0 0 auto; margin-top: 16px; }
+@media (max-width: 640px) { .global-settings-dialog .canvas-dialog { height: min(720px, calc(100dvh - 16px)); } }
 .settings-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .settings-tabs button { padding: 8px 12px; border: 1px solid var(--border, #ddd); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
 .settings-tabs button.active { background: var(--accent-soft, #e9e8ff); }
