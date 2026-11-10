@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from dataclasses import replace
 
@@ -20,6 +21,60 @@ def save_body(settings, **changes):
     return body
 
 
+def test_retired_registered_defaults_are_read_without_rewriting_or_losing_other_settings(tmp_path):
+    client = TestClient(create_app(tmp_path))
+    original = client.get("/api/v1/settings").json()
+    body = save_body(
+        original,
+        credential_updates=[
+            {"node_type": "llm_service", "operation": "set", "api_key": "preserved-default-key"}
+        ],
+    )
+    body["global"]["max_concurrent"] = 5
+    body["node_defaults"]["llm_model"]["model_name"] = "preserved-model"
+    saved = client.put("/api/v1/settings", json=body)
+    assert saved.status_code == 200, saved.text
+    token = saved.json()["node_defaults"]["llm_service"]["credential_version"]
+    path = tmp_path / "settings-v4.json"
+    payload = json.loads(path.read_bytes())
+    payload["node_defaults"]["text_join"] = {"separator": "obsolete separator"}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+    restarted = TestClient(create_app(tmp_path))
+    loaded = restarted.get("/api/v1/settings")
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json() == saved.json()
+    assert (
+        SecretStore(tmp_path).read_default("llm_service", "llm_service", token)
+        == "preserved-default-key"
+    )
+    assert path.read_bytes() == before
+    stale = save_body(loaded.json(), request_id="stale-template")
+    stale["node_defaults"]["text_join"] = {"separator": "obsolete separator"}
+    assert restarted.put("/api/v1/settings", json=stale).status_code == 422
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid", ["unknown_node", "active_field", "retired_credential"])
+def test_retired_default_read_filter_does_not_accept_other_unknown_values(tmp_path, invalid):
+    client = TestClient(create_app(tmp_path))
+    saved = client.put("/api/v1/settings", json=save_body(client.get("/api/v1/settings").json()))
+    assert saved.status_code == 200
+    path = tmp_path / "settings-v4.json"
+    payload = json.loads(path.read_bytes())
+    if invalid == "unknown_node":
+        payload["node_defaults"]["not_registered"] = {}
+    elif invalid == "active_field":
+        payload["node_defaults"]["llm_service"]["unknown"] = "invalid"
+    else:
+        payload["credentials"]["text_join"] = "invalid"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        create_app(tmp_path)
+    assert path.read_bytes() == before
+
+
 def test_settings_roundtrip_revision_restart_and_runtime(tmp_path):
     app = create_app(tmp_path)
     client = TestClient(app)
@@ -34,7 +89,6 @@ def test_settings_roundtrip_revision_restart_and_runtime(tmp_path):
         "translation_options",
         "asr_options",
         "json_value",
-        "text_join",
         "json_merge",
     }
     body = save_body(initial, **{"global": {"max_concurrent": 4, "upload_concurrency": 7}})

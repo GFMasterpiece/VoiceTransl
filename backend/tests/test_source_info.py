@@ -245,7 +245,7 @@ async def test_source_info_parameter_naming_records_and_immutable_history(tmp_pa
                 dict(
                     id="context",
                     type="text_join",
-                    config={"items": [{"id": "a1", "value": "ja"}], "separator": ""},
+                    config={"items": [{"id": "a1", "value": "ja"}]},
                 ),
                 dict(id="text", type="text_output", config={}),
             ],

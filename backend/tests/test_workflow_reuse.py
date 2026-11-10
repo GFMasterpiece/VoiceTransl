@@ -19,7 +19,7 @@ def graph(document):
         {
             "id": "cloud_context",
             "type": "text_join",
-            "config": {"items": [{"id": "a1", "value": "vocabulary"}], "separator": ""},
+            "config": {"items": [{"id": "a1", "value": "vocabulary"}]},
         }
     )
     body["edges"].append(

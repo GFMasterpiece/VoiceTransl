@@ -32,16 +32,73 @@ async def test_text_chain_has_explicit_order_and_preserves_fallback():
     )
     fallback = {
         "items": [{"id": "a1", "value": "不会变"}, {"id": "b2", "value": "要求"}],
-        "separator": " | ",
     }
     second = await evaluate("text_join", fallback, {"text_a1": first.outputs["string"]})
-    assert second.outputs["string"].value == "背景\n\n角色 | 要求"
+    assert second.outputs["string"].value == "背景角色要求"
     assert fallback["items"][0]["value"] == "不会变"
     with pytest.raises(ValueError):
         await evaluate(
             "text_join",
-            {"items": [{"id": "a1", "value": "a" * 32768}, {"id": "a2", "value": "b" * 32768}]},
+            {"items": [{"id": "a1", "value": "a" * 32769}, {"id": "a2", "value": "b" * 32768}]},
         )
+
+
+@pytest.mark.asyncio
+async def test_join_preserves_explicit_whitespace_empty_slots_and_utf8_boundary():
+    config = {
+        "items": [
+            {"id": "a", "value": " a "},
+            {"id": "b", "value": ""},
+            {"id": "c", "value": "\n尾"},
+        ]
+    }
+    result = await evaluate("text_join", config)
+    assert result.outputs["string"].value == " a \n尾"
+    boundary = {"items": [{"id": "a", "value": "x" * 32768}, {"id": "b", "value": "y" * 32768}]}
+    assert len((await evaluate("text_join", boundary)).outputs["string"].value.encode()) == 65536
+    boundary["items"][1]["value"] += "x"
+    with pytest.raises(ValueError):
+        await evaluate("text_join", boundary)
+
+
+def test_removed_separator_is_invalid_and_join_execution_semantics_are_versioned(monkeypatch):
+    from dataclasses import replace
+
+    from app.application.workflow_reuse import node_fingerprint
+    from app.domain.workflow import WorkflowEdge, default_workflow, validate_workflow_graph
+
+    definition = NODE_DEFINITIONS["text_join"]
+    assert definition.fields == definition.input_ports == definition.settings_default_fields == ()
+    assert definition.execution_version == "4"
+    with pytest.raises(ValueError):
+        definition.validate_config({"items": [{"id": "a", "value": "text"}], "separator": "|"})
+    graph = default_workflow("project")
+    legacy = WorkflowNode(
+        id="join",
+        type="text_join",
+        config={"items": [{"id": "a", "value": "text"}], "separator": "|"},
+    )
+    issues = validate_workflow_graph(
+        [*graph.nodes, legacy],
+        [
+            *graph.edges,
+            WorkflowEdge(
+                id="join_output",
+                source="join",
+                source_port="string",
+                target="output",
+                target_port="filename_stem",
+            ),
+        ],
+    )
+    assert any(issue.code == "INVALID_NODE_CONFIG" and issue.node_id == "join" for issue in issues)
+    node = WorkflowNode(
+        id="join", type="text_join", config={"items": [{"id": "a", "value": "text"}]}
+    )
+    current = node_fingerprint(node, node.config, [], {}, {"source": "stable"})
+    monkeypatch.setitem(NODE_DEFINITIONS, "text_join", replace(definition, execution_version="3"))
+    previous = node_fingerprint(node, node.config, [], {}, {"source": "stable"})
+    assert current != previous
 
 
 @pytest.mark.asyncio
@@ -81,10 +138,9 @@ async def test_plain_context_has_no_dedicated_node_and_requires_nonempty_string(
                 {"id": "y", "value": "terms"},
                 {"id": "z", "value": ""},
             ],
-            "separator": "|",
         },
     )
-    assert result.outputs["string"].value == "English|terms|"
+    assert result.outputs["string"].value == "Englishterms"
 
 
 @pytest.mark.asyncio
@@ -175,7 +231,7 @@ async def test_actual_configuration_graph_materializes_json_and_text_ancestors()
     result = await evaluate_configuration_graph(
         None, run, None, asyncio.Event(), required_ids={"context"}
     )
-    assert result["context"].outputs["string"].value == "English\n\nterms\n\nworld"
+    assert result["context"].outputs["string"].value == "Englishtermsworld"
     assert nodes[1].config["items"][0]["value"] == "fallback"
 
 

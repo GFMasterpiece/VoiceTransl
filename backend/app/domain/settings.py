@@ -29,6 +29,12 @@ def default_fields(definition):
 
 def normalize_defaults(values, *, allow_missing=False):
     definitions = default_definitions()
+    if allow_missing:
+        values = {
+            key: value
+            for key, value in values.items()
+            if key not in NODE_DEFINITIONS or NODE_DEFINITIONS[key].settings_default_fields
+        }
     if set(values) - set(definitions) or (not allow_missing and set(values) != set(definitions)):
         raise ValueError("默认节点类型必须与目录一致")
     result = {}

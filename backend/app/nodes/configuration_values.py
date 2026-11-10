@@ -53,12 +53,6 @@ class TextJoinConfig(_Config):
         min_length=1,
         max_length=32,
     )
-    separator: str = Field(default="\n\n", json_schema_extra={"widget": "multiline"})
-
-    @field_validator("separator")
-    @classmethod
-    def validate_separator(cls, value):
-        return validate_text(value)
 
     @model_validator(mode="after")
     def unique_ids(self):
@@ -132,7 +126,7 @@ def _definition(node_type, label, config_model, output, build, ports=None, *, ch
 
 
 def _join(config):
-    return validate_text(config["separator"].join(item["value"] for item in config["items"]))
+    return validate_text("".join(item["value"] for item in config["items"]))
 
 
 def _merge(config):
@@ -159,13 +153,10 @@ def builtin_definitions():
                 TextJoinConfig,
                 "string",
                 _join,
-                {"separator": "separator"},
                 check=_join,
             ),
-            fields=fields_from_model(
-                TextJoinConfig, excluded={"items"}, input_ports={"separator": "separator"}
-            ),
-            settings_default_fields=("separator",),
+            fields=(),
+            settings_default_fields=(),
             dynamic_inputs={
                 "config_key": "items",
                 "port_prefix": "text_",
@@ -177,7 +168,7 @@ def builtin_definitions():
                     mode="json"
                 ),
             },
-            execution_version="3",
+            execution_version="4",
         ),
         _definition(
             "json_merge",
@@ -237,15 +228,7 @@ def register_configuration_types(register_type, register_port):
         "json_right": "json_object",
     }
     ports.update({type_id: type_id for type_id in CONFIGURATION_TYPES if type_id != "json_object"})
-    ports.update(
-        {
-            key: "string"
-            for key in (
-                "separator",
-                "context",
-            )
-        }
-    )
+    ports.update({key: "string" for key in ("context",)})
     ports.update({key: "integer" for key in TranslationOptionsFields.model_fields})
     for port, type_id in ports.items():
         if port not in PORT_DEFINITIONS:

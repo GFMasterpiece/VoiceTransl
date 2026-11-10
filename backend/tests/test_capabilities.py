@@ -409,12 +409,7 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         asr = next(
             node for node in after.json()["workflow"]["nodes"] if node["type"] == "text_join"
         )
-        assert (
-            next(field for field in asr["config"]["fields"] if field["key"] == "separator")[
-                "suggestion_source"
-            ]
-            is None
-        )
+        assert asr["config"]["fields"] == []
         assert workflow_path.read_bytes() == original_bytes
         reloaded = await client.get(f"/api/v1/projects/{pid}/workflow")
         assert reloaded.status_code == 200

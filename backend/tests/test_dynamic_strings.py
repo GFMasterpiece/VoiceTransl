@@ -80,7 +80,6 @@ async def test_custom_dynamic_node_projects_stable_ids_and_reuses_checkpoints(
         type=custom.type,
         config={
             "items": [{"id": "a1", "value": "fallback"}, {"id": "b2", "value": "tail"}],
-            "separator": "|",
         },
     )
     # A globally registered port with this ID must not override the node instance.
@@ -89,7 +88,7 @@ async def test_custom_dynamic_node_projects_stable_ids_and_reuses_checkpoints(
     config = execution_config(node, {"slot_a1": NodeData("slot_a1", "wired", "string")})
     assert config["items"][0]["value"] == "wired"
     assert node.config["items"][0]["value"] == "fallback"
-    assert resolved_fields(custom, config)[1].input_port == "slot_a1"
+    assert resolved_fields(custom, config)[0].input_port == "slot_a1"
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aids, document = await setup(client, 1)

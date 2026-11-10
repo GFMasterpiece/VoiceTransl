@@ -167,13 +167,15 @@ describe('catalog-driven API translation', () => {
     const { store } = setup(); await settle()
     const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
     const first = add('string_value'), join = add('text_join'), object = add('json_value'), merge = add('json_merge'), model = add('llm_model')
-    store.updateNodeConfig(join, { items: [{ id: 'a', value: 'first' }, { id: 'b', value: 'fallback' }, { id: 'c', value: 'last' }], separator: '\n' })
+    store.updateNodeConfig(join, { items: [{ id: 'a', value: 'first' }, { id: 'b', value: 'fallback' }, { id: 'c', value: 'last' }] })
     expect(store.connect(first, join, 'string', 'text_b')).toBe(true)
     expect(store.connect(object, merge, 'json', 'json_left')).toBe(true)
     expect(store.connect(object, merge, 'json', 'json_right')).toBe(true)
     expect(store.connect(merge, model, 'json', 'additional_parameters')).toBe(true)
     await settle()
     const node = root!.querySelector(`[data-node-id="${join}"]`)!
+    expect(node.querySelector('[data-field=separator], [data-port-id=separator]')).toBeNull()
+    expect(store.registry!.fieldsForNode('text_join', store.draft.nodes.find(node => node.id === join)!.config).map(field => field.key)).toEqual(['items.a.value', 'items.b.value', 'items.c.value'])
     const bound = node.querySelector<HTMLTextAreaElement>('[data-field="items.b.value"]')!
     expect(bound.disabled).toBe(true); expect(bound.closest('.node-field-control')!.getAttribute('style')).toContain('display: none')
     const buttons = node.querySelectorAll<HTMLButtonElement>('[data-slot=b] button')

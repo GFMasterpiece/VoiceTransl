@@ -12,7 +12,7 @@ describe('modular capability declarations', () => {
   it('reads typed builders, optional parameter dependencies and configuration roots without a node whitelist', () => {
     const capabilities = readCapabilities(fixture())
     const registry = createNodeRegistry(capabilities)
-    expect(registry.kind('text_join')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: true, isParameterSource: false, requiredInputPorts: [] })
+    expect(registry.kind('text_join')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: true, isParameterSource: false, requiredInputPorts: [], inputPorts: [], fields: [] })
     expect(registry.kind('llm_model')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: false, requiredInputPorts: ['llm_connection'] })
     expect(registry.kind('llm_service')!.inlineConnectionInput!.timeoutKey).toBeNull()
     expect(registry.portsCompatible('string', 'context')).toBe(true)
@@ -63,10 +63,10 @@ it('resolves ordered dynamic extension slots without mutating global ports and a
   const value = fixture(); const declaration = owner(value, 'text_join')
   declaration.type = 'extension_join'; declaration.dynamic_inputs.field.max_length = 4
   const caps = readCapabilities(value); const registry = createNodeRegistry(caps)
-  const config = { separator: '', items: [{ id: 'last', value: 'end' }, { id: 'first', value: 'start' }] }
+  const config = { items: [{ id: 'last', value: 'end' }, { id: 'first', value: 'start' }] }
   const node = { type: 'extension_join', config }
-  expect(registry.inputPortsForNode(node.type, config)).toEqual(['separator', 'text_last', 'text_first'])
-  expect(registry.fieldsForNode(node.type, config).map(field => field.key)).toEqual(['separator', 'items.last.value', 'items.first.value'])
+  expect(registry.inputPortsForNode(node.type, config)).toEqual(['text_last', 'text_first'])
+  expect(registry.fieldsForNode(node.type, config).map(field => field.key)).toEqual(['items.last.value', 'items.first.value'])
   expect(registry.port('text_last')).toBeNull()
   expect(registry.port('text_last', node)?.typeId).toBe('string')
   expect(registry.portsCompatible('string', 'text_last', node)).toBe(true)
@@ -96,10 +96,10 @@ it('validates nullable fields independently from connection presentation', () =>
 it('accepts 32 ordered string inputs and rejects invalid slot identity, shape and count', () => {
   const registry = createNodeRegistry(readCapabilities(fixture()))
   const items = Array.from({ length: 32 }, (_, index) => ({ id: `s${index}`, value: '' }))
-  expect(registry.validateConfig('text_join', { items, separator: '' })).toEqual([])
-  expect(registry.inputPortsForNode('text_join', { items })).toHaveLength(33)
+  expect(registry.validateConfig('text_join', { items })).toEqual([])
+  expect(registry.inputPortsForNode('text_join', { items })).toHaveLength(32)
   for (const invalid of [[], [...items, { id: 'overflow', value: '' }], [{ id: 'same', value: '' }, { id: 'same', value: '' }], [{ id: 'Invalid', value: '' }], [{ id: 'safe' }], [{ id: 'safe', value: 1 }]]) {
-    expect(registry.validateConfig('text_join', { items: invalid, separator: '' })).not.toEqual([])
+    expect(registry.validateConfig('text_join', { items: invalid })).not.toEqual([])
   }
 })
 

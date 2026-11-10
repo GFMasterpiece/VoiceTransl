@@ -467,12 +467,6 @@
         "capability_requirements": []
       },
       {
-        "id": "separator",
-        "type_id": "string",
-        "label": "字符串",
-        "capability_requirements": []
-      },
-      {
         "id": "context",
         "type_id": "string",
         "label": "上下文",
@@ -825,9 +819,7 @@
           "id": "parameters",
           "label": "参数"
         },
-        "input_ports": [
-          "separator"
-        ],
+        "input_ports": [],
         "output_ports": [
           "string"
         ],
@@ -841,28 +833,7 @@
         "presentation": null,
         "config": {
           "kind": "text_join",
-          "fields": [
-            {
-              "key": "separator",
-              "type": "string",
-              "required": false,
-              "nullable": false,
-              "default": "\n\n",
-              "creation_default": null,
-              "minimum": null,
-              "maximum": null,
-              "min_length": null,
-              "max_length": null,
-              "pattern": null,
-              "description": null,
-              "validator": null,
-              "suggestion_source": null,
-              "input_port": "separator",
-              "input_type_id": null,
-              "widget": "multiline",
-              "options": []
-            }
-          ]
+          "fields": []
         }
       },
       {

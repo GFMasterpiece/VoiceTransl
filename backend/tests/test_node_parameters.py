@@ -70,7 +70,7 @@ def parameter_graph():
             dict(
                 id="asr_context",
                 type="text_join",
-                config={"items": [{"id": "a1", "value": "ja"}], "separator": ""},
+                config={"items": [{"id": "a1", "value": "ja"}]},
             ),
         ],
         "edges": [
@@ -457,7 +457,7 @@ def test_non_json_candidate_fails_without_poisoning_execution_record(candidate):
     node = WorkflowNode(
         id="asr_context",
         type="text_join",
-        config={"items": [{"id": "a1", "value": "ja"}], "separator": ""},
+        config={"items": [{"id": "a1", "value": "ja"}]},
     )
     record = WorkflowNodeRecord(node_id=node.id, node_type=node.type, config=node.config)
     with pytest.raises(NodeExecutionError, match="执行配置无效") as error:
@@ -471,9 +471,8 @@ def test_non_json_candidate_fails_without_poisoning_execution_record(candidate):
     assert record.effective_config is None
     assert json.loads(record.model_dump_json())["config"] == {
         "items": [{"id": "a1", "value": "ja"}],
-        "separator": "",
     }
-    assert node.config == {"items": [{"id": "a1", "value": "ja"}], "separator": ""}
+    assert node.config == {"items": [{"id": "a1", "value": "ja"}]}
 
 
 @pytest.mark.asyncio
