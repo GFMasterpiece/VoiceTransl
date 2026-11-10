@@ -15,9 +15,9 @@ VoiceTransl 正在构建一个可视化音频节点工作流：像 ComfyUI 一�
 - 项目级节点画布、节点独立配置、端口类型校验、图保存和修订冲突检测；节点目录、分类与配置来自后端能力接口，添加菜单按功能分组。
 - 编辑菜单及节点右键提供撤销/重做、多选与整组拖动、复制/剪切/粘贴、工作流 JSON 导入导出；剪切可一步撤销，导入先进入草稿，音频文件和运行历史独立保留。
 - 默认 `audio_input -> audio_output`，复制原始音频字节为独立输出，不转码；允许不包含任何处理节点。
-- LLM 翻译节点使用兼容 Chat Completions 的 API，从独立连接、模型、普通字符串上下文及执行参数取得设置。多输入文本拼接可组织目标语言、背景、要求与术语，支持分批及相邻上下文。翻译、预览和导出读取直接上游当前文本；连续翻译使用上一步译文，保留原文与时间轴。详见[翻译说明](docs/translation_providers.md)。
+- LLM 翻译节点使用兼容 Chat Completions 的 API，使用独立 LLM 服务、LLM 模型及执行参数，节点内直接填写普通文本上下文，也可从控件左侧接线覆盖。多输入文本拼接可组织目标语言、背景、要求与术语，支持分批及相邻上下文。翻译、预览和导出读取直接上游当前文本；连续翻译使用上一步译文，保留原文与时间轴。详见[翻译说明](docs/translation_providers.md)。
 - Mock 预处理和 Mock ASR 仅在调试模式下提供添加入口，ASR 生成固定示例。文本输出支持 TXT/SRT/VTT/LRC。
-- 独立 Qwen Filetrans 识别：上传音频、异步识别并输出真实文本/时间戳，模型可配置，复用文本预览、字幕及批次。配置从独立模型、连接、可选字符串上下文及执行参数输入取得，同一配置可显式供多节点复用；连接拥有加密密钥，运行冻结其版本，无 Profile 或环境变量备用。设置见[节点连接](docs/node_connections.md)。
+- 独立 Qwen Filetrans 识别：上传音频、异步识别并输出真实文本/时间戳，模型可配置，复用文本预览、字幕及批次。配置从独立 ASR 模型、ASR 服务及执行参数输入取得，不提供上下文，同一配置可显式供多节点复用；连接拥有加密密钥，运行冻结其版本，无 Profile 或环境变量备用。设置见[节点连接](docs/node_connections.md)。
 - 独立 Qwen Streaming 识别节点：通过 WebSocket 流式发送已有的 PCM16 单声道 WAV，自动读取采样率，完成后复用文本预览、字幕和批次。使用独立配置节点提供 WebSocket 连接与模型，复制连接后重新填写密钥；首版不包含麦克风或实时字幕界面。范围见[文件流式识别](spec/cloud-asr-qwen-streaming.md)。
 - 多行文本、整数、数字、布尔和 JSON 值节点，以及文本拼接、JSON 顶层合并。可复用上下文、模型及执行参数，按后端声明接线；接线保留手填后备值，运行详情记录参数来源及实际值。
 - 每音频独立运行、取消、运行历史及安全产物下载；执行始终使用提交时的图快照。
@@ -27,7 +27,7 @@ VoiceTransl 正在构建一个可视化音频节点工作流：像 ComfyUI 一�
 
 其他云端协议、本地模型、视频处理、整批节点重跑、自动缓存调度和历史清理尚未实现。目标与计划分别见[产品目标](docs/product_requirements.md)和[线路图](docs/roadmap.md)，不能当作现有功能。
 
-当前使用图/运行/批次/默认设置schema 3.0和能力目录1.17。旧图、旧运行与旧模板不读取、不迁移；已有项目音频继续可用。配置方法见[文本上下文规格](spec/plain-text-context.md)。
+当前使用图/运行/批次/默认设置schema 4.0和能力目录1.18。旧图、旧运行与旧模板不读取、不迁移；已有项目音频继续可用。配置方法见[服务分类与字段连线](spec/service-families-field-inputs.md)。
 
 ## 开发环境
 
@@ -120,4 +120,4 @@ Web CI 配置了 Linux/Windows 后端测试及 Ruff 检查、Linux 前端测试�
 
 本项目历史基于 [shinnpuru/VoiceTransl](https://github.com/shinnpuru/VoiceTransl) 和 [GalTransl](https://github.com/xd2333/GalTransl)，感谢 [shinnpuru](https://github.com/shinnpuru)、[MurthiNext](https://github.com/MurthiNext) 等原项目贡献者。旧实现可从 Git 历史追溯；当前 Web 版不承诺提供上游桌面功能。
 
-项目沿用 [GNU GPLv3](LICENSE)。请遵守许可证、素材版权及当地法律法规；许可证原文保留不变。
+项目沿用 [GNU GPLv4](LICENSE)。请遵守许可证、素材版权及当地法律法规；许可证原文保留不变。

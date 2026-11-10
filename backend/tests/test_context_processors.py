@@ -44,7 +44,7 @@ def context(tmp_path, node_type, inputs, *, audio_id="a", node_id="processor"):
     )
 
 
-@pytest.mark.parametrize("node_type", ["asr", "qwen_asr", "qwen_asr_streaming", "llm_translate"])
+@pytest.mark.parametrize("node_type", ["asr", "qwen_asr", "qwen_asr_streaming"])
 def test_processors_have_no_inline_configuration(node_type):
     definition = NODE_DEFINITIONS[node_type]
     assert definition.fields == ()
@@ -62,7 +62,7 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
     calls, resolutions = [], []
     model = object()
 
-    def resolve(ctx, value, operation, timeout):
+    async def resolve(ctx, value, operation, timeout):
         assert value is model
         resolutions.append((operation, timeout))
         return "connection", "model", {"seed": 1}, "private-key"
@@ -84,7 +84,7 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
             tmp_path,
             "llm_translate",
             {
-                "model": model,
+                "llm_model": model,
                 "transcript": TranscriptData(tmp_path / "raw.json", original),
                 "context": first_context,
                 "translation_options": TranslationOptions(timeout_seconds=33, batch_size=4),
@@ -97,7 +97,7 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
             tmp_path,
             "llm_translate",
             {
-                "model": model,
+                "llm_model": model,
                 "transcript": first.outputs["transcript"].value,
                 "context": "second preferences",
             },
@@ -152,7 +152,7 @@ async def test_cloud_asr_reads_each_current_audio_language_and_independent_optio
 ):
     calls = []
 
-    def resolve(ctx, value, op, timeout):
+    async def resolve(ctx, value, op, timeout):
         assert (op, timeout) == (operation, 19)
         return "connection", "named-model", {"custom": True}, "private-key"
 
@@ -177,8 +177,7 @@ async def test_cloud_asr_reads_each_current_audio_language_and_independent_optio
             module.definition().type,
             {
                 "audio": SimpleNamespace(path=tmp_path / "audio.wav"),
-                "model": object(),
-                "context": override,
+                "asr_model": object(),
                 "asr_options": ASROptions(timeout_seconds=19),
             },
             audio_id=audio_id,

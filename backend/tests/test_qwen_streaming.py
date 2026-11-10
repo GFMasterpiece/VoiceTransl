@@ -477,6 +477,8 @@ async def test_handshake_failure_and_redirect_never_leak_key(tmp_path, caplog, s
     [
         "model",
         "input",
+        "context",
+        "Con-Text",
         "format",
         "sample_rate",
         "language_hints",
@@ -644,22 +646,12 @@ async def test_secret_is_explicit_and_never_read_from_environment(tmp_path, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", [None, "", "password secret 普通领域词\n😀", "😀" * 400])
-async def test_plain_context_wire_mapping(tmp_path, text):
+async def test_context_parameter_rejected_before_handshake(tmp_path):
     wire = Wire()
     async with platform(wire) as connection:
-        await transcribe(audio(tmp_path), connection, context=text)
-    expected = (
-        [{"role": "user", "content": [{"type": "input_text", "text": text}]}] if text else None
-    )
-    assert wire.runs[0]["payload"]["input"].get("context") == expected
-
-
-@pytest.mark.asyncio
-async def test_context_over_limit_rejected_before_handshake(tmp_path):
-    wire = Wire()
-    async with platform(wire) as connection:
-        with pytest.raises(Exception) as error:
-            await transcribe(audio(tmp_path), connection, context="😀" * 401)
-    assert error.value.code == "QWEN_CONTEXT_TOO_LONG"
+        with pytest.raises(qwen.QwenStreamingError) as caught:
+            await transcribe(
+                audio(tmp_path), connection, additional_parameters={"context": [{"role": "user"}]}
+            )
+    assert caught.value.code == "QWEN_STREAM_PARAMETERS_INVALID"
     assert not wire.handshakes

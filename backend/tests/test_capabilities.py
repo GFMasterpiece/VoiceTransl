@@ -28,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export", "languages"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.17"
+    assert body["workflow"]["schema_version"] == "1.18"
     assert [
         port for port in body["workflow"]["ports"] if port["id"] in {"audio", "transcript", "text"}
     ] == [
@@ -86,8 +86,10 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "qwen_asr",
         "qwen_asr_streaming",
         "llm_translate",
-        "service_connection",
-        "model_config",
+        "asr_service",
+        "asr_model",
+        "llm_service",
+        "llm_model",
         "translation_options",
         "asr_options",
         "json_value",
@@ -100,8 +102,16 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     } == {
         "input": {"audio_input", "source_info"},
         "preprocessing": {"preprocess"},
-        "speech_recognition": {"asr", "qwen_asr", "qwen_asr_streaming"},
-        "translation": {"llm_translate"},
+        "speech_recognition": {
+            "asr",
+            "qwen_asr",
+            "qwen_asr_streaming",
+            "asr_service",
+            "asr_model",
+            "asr_options",
+        },
+        "translation": {"llm_translate", "translation_options"},
+        "llm": {"llm_service", "llm_model"},
         "preview": {"audio_preview", "text_preview"},
         "output": {"audio_output", "text_output"},
         "parameters": {
@@ -109,10 +119,6 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
             "integer_value",
             "number_value",
             "boolean_value",
-            "service_connection",
-            "model_config",
-            "translation_options",
-            "asr_options",
             "json_value",
             "text_join",
             "json_merge",
@@ -163,12 +169,11 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "collection_key": "audio_ids",
     }
     assert "translation_context" not in nodes and "asr_context" not in nodes
-    region = next(
-        field
-        for field in nodes["service_connection"]["config"]["fields"]
-        if field["key"] == "region"
+    assert all(
+        field["key"] != "region"
+        for kind in ("asr_service", "llm_service")
+        for field in nodes[kind]["config"]["fields"]
     )
-    assert region["nullable"] is True and region["max_length"] == 64
     output_stem = next(
         field
         for field in nodes["text_output"]["config"]["fields"]
@@ -288,8 +293,8 @@ def test_category_label_conflicts_are_rejected_at_registration_and_catalog(monke
     ],
 )
 @pytest.mark.parametrize("value", ["contains space", "x" * 65])
-def test_inline_connection_binding_values_must_be_safe_identifiers(role, value):
-    definition = NODE_DEFINITIONS["service_connection"]
+def test_inline_asr_connection_values_must_be_safe_identifiers(role, value):
+    definition = NODE_DEFINITIONS["asr_service"]
     presentation = {
         **definition.presentation,
         "inline_connection_input": {
@@ -377,7 +382,7 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         ] = "x-Custom"
         saved = await save_graph(client, pid, 0, graph)
         document = WorkflowDocument.model_validate(saved)
-        workflow_path = app.state.store.project_dir(pid) / "workflow-v3.json"
+        workflow_path = app.state.store.project_dir(pid) / "workflow-v4.json"
         original_bytes = workflow_path.read_bytes()
         snapshot = workflow_snapshot(document).model_dump_json()
         digest = workflow_semantic_digest(document.nodes, document.edges)

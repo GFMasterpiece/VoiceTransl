@@ -8,21 +8,21 @@
 - `Project.source` 是可空的主音频兼容字段，`Project.audios` 包含 `{id, source, name}`。旧项目存在 `source` 时继续构造虚拟 `aud_primary`，不搬迁文件；空项目 `source=null`、`audios=[]`，随后上传只追加真实资源，不捏造主音频。`source_language/target_language` 是可选的旧项目语言元数据；新界面只提交名称，两字段保持 `null`，旧字段或缺少字段的项目均继续可读。
 - 新增音频 ID 由服务端生成，不用用户文件名作路径。不同同名文件可以独立保存。
 - `SourceAsset.origin` 可空；目录导入保存 `{root_id,root_name,relative_path}`，仅作来源和导出组织元数据，不改变实际路径。根名及相对路径必须可跨平台使用，相对路径 basename 与上传文件名一致；旧音频缺失时不补写。
-- 项目级 `workflow-v3.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
+- 项目级 `workflow-v4.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
 
 ```text
 data/projects/<project-id>/
   project.json
   source/original.<ext>                    # 主音频
-  workflow-v3.json                           # 首次保存后存在
-  workflow-revisions-v3/<revision>.json
-  batches-v3/<batch-id>.json                 # 固定图、文件清单与逐项状态
-  workflow-runs-v3/<run-id>/                  # 主音频运行
+  workflow-v4.json                           # 首次保存后存在
+  workflow-revisions-v4/<revision>.json
+  batches-v4/<batch-id>.json                 # 固定图、文件清单与逐项状态
+  workflow-runs-v4/<run-id>/                  # 主音频运行
     run.json
     nodes/<node-id>/<filename>
   audios/<audio-id>/
     source/original.<ext>
-    workflow-runs-v3/<run-id>/
+    workflow-runs-v4/<run-id>/
       run.json
       nodes/<node-id>/<filename>
   job.json / config.json / primary-config.json
@@ -33,7 +33,7 @@ data/projects/<project-id>/
 
 ## 当前 REST API
 
-所有路径以 `/api/v1` 为前缀。图、运行和设置文档带自身版本；分页/批次摘要不重复附加schema字段，批次详情的workflow仍带3.0版本：
+所有路径以 `/api/v1` 为前缀。图、运行和设置文档带自身版本；分页/批次摘要不重复附加schema字段，批次详情的workflow仍带4.0版本：
 
 | 方法与路径 | 行为 |
 | --- | --- |
@@ -83,11 +83,11 @@ data/projects/<project-id>/
 
 ## 配置节点与冻结
 
-图、运行、批次及全局设置为schema 3.0；项目/音频/Transcript仍1.0，API路径不变，能力目录为1.17。工作流保存/校验请求及带版本的设置请求提交当前版本；各自嵌套快照严格校验。业务JSON内的schema_version不当文档版本解析。
+图、运行、批次及全局设置为schema 4.0；项目/音频/Transcript仍1.0，API路径不变，能力目录为1.18。工作流保存/校验请求及带版本的设置请求提交当前版本；各自嵌套快照严格校验。业务JSON内的schema_version不当文档版本解析。
 
-服务连接(service_connection)拥有协议、endpoint、可选region与credential_ref；模型(model_config)接连接，提供自由model_name及有界additional_parameters。typed端口只传公开描述和不透明引用，真实Key在调用边界解密，不能直接写入config。
+llm_service/asr_service 分别拥有 endpoint/credential_ref，ASR 另有识别 protocol，无 region；llm_model/asr_model 仅接对应族连接，提供自由 model_name 及有界 additional_parameters。typed端口只传公开描述和不透明引用，真实Key在调用边界解密，不能直接写入config。
 
-LLM/Qwen处理config为空，从模型、普通字符串context及执行参数端口取值。LLM上下文必需且非空白；Qwen可省略，非空时按官方消息格式发送、限制400字符。文本拼接items=[{id,value},...]保存1–32个稳定ID项，顺序决定输出、text_<id>决定连线；dynamic_inputs派生动态端口和字段。参数字段通过input_port/input_type_id声明，可空值通过nullable声明，前端不猜用途。总超时在独立执行参数，未连接时使用对应执行参数数据模型的声明默认值。
+Qwen config为空，仅接音频、ASR模型及执行参数，无上下文；LLM config.context 是多行字符串，context 参数口可选，执行使用覆盖后的非空白实际值。文本拼接items=[{id,value},...]保存1–32个稳定ID项，顺序决定输出、text_<id>决定连线；dynamic_inputs派生动态端口和字段。参数字段通过input_port/input_type_id声明，可空值通过nullable声明，前端不猜用途。总超时在独立执行参数，未连接时使用对应执行参数数据模型的声明默认值。
 
 凭据写入仍通过工作流PUT的credential_updates，set/clear/use_default配合稳定request_id，归属绑定project/连接owner/provider_type。多消费者显式连同一模型可复用Key；复制连接/导出剥离ref。默认Key只在新连接保存时按捕获版本物化，执行/批次重试不读最新全局设置。
 
@@ -95,11 +95,11 @@ LLM/Qwen处理config为空，从模型、普通字符串context及执行参数�
 
 文本以metadata.current_text声明当前字段及语言；翻译、预览和导出都消费直接上游，保留原文、时间轴和ID。重跑自动物化纯配置祖先，以新递归指纹验证处理缓存；必要处理上游失效才要求前移起点，不自动追加云调用。
 
-GET /capabilities的languages及suggestion_source只为搜索编辑，传输保存代码，未知代码不因此拒绝。连接缺失、归属错误、协议不兼容和上下文无效返回稳定安全错误，不回显原始Key或请求内容；Streaming内容校验在握手前完成。详见[文本上下文规格](../spec/plain-text-context.md)和[节点连接](node_connections.md)。
+GET /capabilities的languages及suggestion_source只为搜索编辑，传输保存代码，未知代码不因此拒绝。连接缺失、归属错误、协议不兼容和上下文无效返回稳定安全错误，不回显原始Key或请求内容；Streaming内容校验在握手前完成。详见[服务及字段输入规格](../spec/service-families-field-inputs.md)和[节点连接](node_connections.md)。
 
 ## 新旧存储边界
 
-新图存workflow-v3.json，修订、运行、批次使用各自v3目录，全局模板存settings-v3.json。旧图/运行/批次/模板不读取、不迁移、不转换，既有文件不删除；新列表只列新记录。项目和音频资源保持原格式及目录，没有新图的项目返回当前直通默认图。
+新图存workflow-v4.json，修订、运行、批次使用各自v4目录，全局模板存settings-v4.json。旧图/运行/批次/模板不读取、不迁移、不转换，既有文件不删除；新列表只列新记录。项目和音频资源保持原格式及目录，没有新图的项目返回当前直通默认图。
 
 旧固定阶段的资源级摘要仍不作为节点执行入口；本轮不改变项目和音频的资源API，不批量改写原数据。
 
@@ -107,7 +107,7 @@ GET /capabilities的languages及suggestion_source只为搜索编辑，传输保�
 
 同一音频最多一个运行/排队任务，其他音频独立排队并共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等执行资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
 
-节点重跑创建独立运行，保存 `rerun` 来源及执行/复用/未参与列表；节点新增可省略的 `execution_kind/reused_from/checkpoint`，源身份保存实际哈希及相关元数据。checkpoint 文件位于自身运行 `.checkpoints/{node_id}/`，完整输出不塞进运行 JSON，当前3.0记录的可省略字段不自动补写。多项输入清单允许目标音频属于清单的单项重跑；原批次的条目、计数、运行 ID 和 ZIP 不变，新运行 `batch_id=null` 且保留原 `batch_item_sequence`。请求 ID 相同且内容相同返回原运行，内容不同返回 `WORKFLOW_REQUEST_CONFLICT`；必要上游缺失、变化或损坏通过 `RERUN_*` issue 拒绝并指出前移节点，见[重跑规格](../spec/node-rerun-reuse.md)。
+节点重跑创建独立运行，保存 `rerun` 来源及执行/复用/未参与列表；节点新增可省略的 `execution_kind/reused_from/checkpoint`，源身份保存实际哈希及相关元数据。checkpoint 文件位于自身运行 `.checkpoints/{node_id}/`，完整输出不塞进运行 JSON，当前4.0记录的可省略字段不自动补写。多项输入清单允许目标音频属于清单的单项重跑；原批次的条目、计数、运行 ID 和 ZIP 不变，新运行 `batch_id=null` 且保留原 `batch_item_sequence`。请求 ID 相同且内容相同返回原运行，内容不同返回 `WORKFLOW_REQUEST_CONFLICT`；必要上游缺失、变化或损坏通过 `RERUN_*` issue 拒绝并指出前移节点，见[重跑规格](../spec/node-rerun-reuse.md)。
 
 服务关闭后拒绝新的调度，返回 `503 WORKFLOW_STOPPING`，原请求仍可返回已发布记录。关闭准备中的提交会回收读取/复制任务；已经发布的记录落为中断，不能留下无执行任务的排队记录。
 

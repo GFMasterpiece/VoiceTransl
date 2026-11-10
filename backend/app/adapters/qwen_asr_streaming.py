@@ -22,7 +22,6 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..domain.transcript import Segment, Transcript
-from .qwen_context import context_messages
 from .qwen_streaming_protocol import (
     CHUNK_SIZE,
     CLOSE_TIMEOUT,
@@ -318,9 +317,7 @@ class QwenStreamingASRAdapter:
         additional_parameters: dict,
         cancel_event: asyncio.Event,
         api_key: str,
-        context: str | None = None,
     ) -> Transcript:
-        messages = context_messages(context)
         try:
             parameters = dict(validate_additional_parameters(additional_parameters))
             if not isinstance(model, str) or not model.strip() or len(model) > 256:
@@ -349,7 +346,6 @@ class QwenStreamingASRAdapter:
                         model,
                         parameters,
                         api_key,
-                        messages,
                     )
             except TimeoutError:
                 raise _error("TIMEOUT", "流式识别已超时，本地连接与文件读取已回收") from None
@@ -387,9 +383,7 @@ class QwenStreamingASRAdapter:
             cancelled.cancel()
             await _join(cancelled)
 
-    async def _run(
-        self, path, project_id, language, endpoint, model, parameters, api_key, messages
-    ):
+    async def _run(self, path, project_id, language, endpoint, model, parameters, api_key):
         try:
             stream = path.open("rb")
         except OSError:
@@ -425,7 +419,7 @@ class QwenStreamingASRAdapter:
                                 "sample_rate": rate,
                                 "language_hints": [language],
                             },
-                            "input": {"context": messages} if messages else {},
+                            "input": {},
                         },
                     },
                     ensure_ascii=False,

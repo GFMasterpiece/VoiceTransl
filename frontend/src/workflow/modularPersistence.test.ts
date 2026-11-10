@@ -7,7 +7,7 @@ import { emptySettings } from './fixtures'
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response
 afterEach(() => { useWorkflowStore().stop(); vi.unstubAllGlobals() })
 describe('current workflow persistence', () => {
-  it.each(['1.0', '2.0', undefined])('rejects workflow schema %s without inventing or writing a replacement graph', async version => {
+  it.each(['1.0', '2.0', '3.0', undefined])('rejects workflow schema %s without inventing or writing a replacement graph', async version => {
     setActivePinia(createPinia())
     const document = { schema_version: version, project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '', ...structuredClone(catalog.workflow.default_graph) }
     const before = JSON.stringify(document)
@@ -22,7 +22,7 @@ describe('current workflow persistence', () => {
   })
   it.each(['1.0', undefined])('rejects a run or snapshot using schema %s without changing the editable graph', async version => {
     setActivePinia(createPinia())
-    const document = { schema_version: '3.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '', ...structuredClone(catalog.workflow.default_graph) }
+    const document = { schema_version: '4.0', project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '', ...structuredClone(catalog.workflow.default_graph) }
     const oldRun = { schema_version: version, id: 'old', project_id: 'p1', audio_id: 'a1', workflow_revision: 1, status: 'completed', created_at: '', finished_at: null, error: null, nodes: [], workflow: { ...document, schema_version: version } }
     vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
       const path = String(input)

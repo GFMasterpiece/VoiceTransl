@@ -16,7 +16,7 @@ from ..domain.context_values import (
     canonical_object,
     validate_text,
 )
-from ..domain.node_categories import PARAMETERS
+from ..domain.node_categories import PARAMETERS, SPEECH_RECOGNITION, TRANSLATION
 from ..domain.node_contracts import NodeDefinition, fields_from_model
 from ..domain.node_execution import NodeExecutionError, NodeResult
 
@@ -187,21 +187,27 @@ def builtin_definitions():
             _merge,
             {"left": "json_left", "right": "json_right"},
         ),
-        _definition(
-            "translation_options",
-            "翻译执行参数",
-            TranslationOptionsFields,
-            "translation_options",
-            lambda config: TranslationOptions(**config),
-            {key: key for key in TranslationOptionsFields.model_fields},
+        replace(
+            _definition(
+                "translation_options",
+                "翻译执行参数",
+                TranslationOptionsFields,
+                "translation_options",
+                lambda config: TranslationOptions(**config),
+                {key: key for key in TranslationOptionsFields.model_fields},
+            ),
+            category=TRANSLATION,
         ),
-        _definition(
-            "asr_options",
-            "识别执行参数",
-            ASROptionsFields,
-            "asr_options",
-            lambda config: ASROptions(**config),
-            {"timeout_seconds": "timeout_seconds"},
+        replace(
+            _definition(
+                "asr_options",
+                "识别执行参数",
+                ASROptionsFields,
+                "asr_options",
+                lambda config: ASROptions(**config),
+                {"timeout_seconds": "timeout_seconds"},
+            ),
+            category=SPEECH_RECOGNITION,
         ),
     )
 

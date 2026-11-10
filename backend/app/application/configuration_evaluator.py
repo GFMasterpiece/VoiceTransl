@@ -15,7 +15,14 @@ def configuration_ids(snapshot, required_ids=None):
 
 
 async def evaluate_configuration_graph(
-    store, run, project, cancel_event, required_ids=None, outputs=None
+    store,
+    run,
+    project,
+    cancel_event,
+    required_ids=None,
+    outputs=None,
+    *,
+    validate_processing_nodes=True,
 ):
     from ..domain.configuration import validate_model
     from .workflow_runner import _dependency_edges
@@ -41,7 +48,9 @@ async def evaluate_configuration_graph(
             for edge in incoming.get(node_id, [])
             if edge.source in values and edge.source_port in values[edge.source]
         }
-        context = NodeExecutionContext(store, run, node, inputs, project, cancel_event)
+        context = NodeExecutionContext(
+            store, run, node, inputs, project, cancel_event, available_outputs=values
+        )
         if definition.evaluation_kind == "configuration":
             if len(inputs) != len(incoming.get(node_id, [])):
                 continue
@@ -57,14 +66,17 @@ async def evaluate_configuration_graph(
                 inputs,
                 project,
                 cancel_event,
+                available_outputs=values,
             )
             result = await definition.evaluate_config(context)
             validate_node_result(definition, result)
             results[node_id] = result
             values[node_id] = result.outputs
+        elif not validate_processing_nodes:
+            continue
         for port, operation in definition.binding_inputs.items():
             if port in inputs:
-                validate_model(context, inputs[port].value, operation)
+                await validate_model(context, inputs[port].value, operation)
         required_validation = {
             edge.target_port
             for edge in incoming.get(node_id, [])

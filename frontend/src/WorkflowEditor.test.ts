@@ -21,7 +21,7 @@ import { parseWorkflowFile } from './workflow/editorTransfer'
 const testCapabilities: Record<string, any> = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: "1.17",
+    schema_version: "1.18",
     nodes: [
       nodeFixture({ type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 }),
       nodeFixture({ type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
@@ -81,7 +81,7 @@ const textArtifact = {
   media_type: 'application/x-subrip', download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/text-1/download',
 }
 const documentBody = (revision = 1, workflowRevision = 1): WorkflowDocument => ({
-  schema_version: "3.0", project_id: 'p1', revision, workflow_revision: workflowRevision,
+  schema_version: "4.0", project_id: 'p1', revision, workflow_revision: workflowRevision,
   updated_at: '2026-10-28T00:00:00Z', nodes: structuredClone([input, output]), edges: [structuredClone(edge)],
 })
 
@@ -653,7 +653,7 @@ describe('capability catalog and node registry', () => {
     const backendShape = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: "1.17",
+        schema_version: "1.18",
         nodes: [
           nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
           nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [fieldFixture({ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] })] } }),
@@ -675,7 +675,7 @@ describe('capability catalog and node registry', () => {
     const live = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: "1.17",
+        schema_version: "1.18",
         ports: ['audio', 'transcript', 'text'],
         nodes: [
           nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
@@ -698,7 +698,7 @@ describe('capability catalog and node registry', () => {
   })
 
   it('rejects a non-current capabilities schema version', () => {
-    expect(() => readCapabilities({ ...testCapabilities, schema_version: '3.0' })).toThrow('schema_version')
+    expect(() => readCapabilities({ ...testCapabilities, schema_version: '4.0' })).toThrow('schema_version')
   })
 
   it('rejects malformed or missing catalog data instead of falling back to local node defaults', () => {
@@ -858,7 +858,7 @@ describe('inline catalog field editing', () => {
 describe('catalog resources and preview workflows', () => {
   function catalog() {
     const value = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.17'
+    value.workflow.schema_version = '1.18'
     const source = value.workflow.nodes.find((entry: any) => entry.type === 'audio_input')
     source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id', collection_key: null } }
     source.config.fields = [fieldFixture({ key: 'audio_id', label: 'Audio ID', type: 'string', required: false, default: null })]
@@ -1149,7 +1149,7 @@ describe('workflow viewport coordinates and gestures', () => {
 describe('canvas context menus', () => {
   function categorizedCatalog(): any {
     const value: any = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.17'
+    value.workflow.schema_version = '1.18'
     const categories = [{ id: 'input', label: '输入' }, { id: 'plugin_tools', label: 'Plugin tools' }, { id: 'speech_recognition', label: '语音识别' }, { id: 'output', label: '输出' }]
     value.workflow.nodes.forEach((node: any, index: number) => {
       node.category = categories[Math.min(index, 3)]
@@ -2589,7 +2589,7 @@ describe('editor operations UI', () => {
 describe('catalog-driven parameter connections', () => {
   async function parameterNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.17'
+    catalog.workflow.schema_version = '1.18'
     catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({ id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities] })))
     for (const declaration of catalog.workflow.nodes) {
       declaration.required_input_ports = [...declaration.input_ports]
@@ -2647,13 +2647,14 @@ describe('catalog-driven parameter connections', () => {
         const field = definition.fields.find((entry) => entry.key === fieldKey)!
         const label = `${field.label} · ${t(`workflow.dataType_${typeId}`)} (${t('workflow.optionalPort')})`
         const circle = socket(id, port, 'input')
-        expect(circle.parentElement!.querySelector('.node-port-label-in')!.childNodes[1].textContent).toBe(label)
-        expect(circle.parentElement!.querySelector('.node-port-label-in title')!.textContent).toBe(label)
+        expect(circle.classList.contains('node-field-socket')).toBe(true)
+        expect(circle.parentElement!.querySelector('.node-config-label')!.textContent).toContain(field.label)
+        expect(circle.parentElement!.querySelector('.node-port-label-in')).toBeNull()
         expect(circle.getAttribute('aria-label')).toBe(t('workflow.inputPort', { port: `${label} · ${port}` }))
-        expect(circle.querySelector('title')!.textContent).toBe(circle.getAttribute('aria-label'))
+        expect(circle.getAttribute('title')).toBe(circle.getAttribute('aria-label'))
       }
-      expect(node('text_output').textContent).toContain(language === 'en' ? 'Format · String (optional)' : '格式 · 字符串 (可选)')
-      expect(node('audio_output').textContent).toContain(`Extension count · ${t('workflow.dataType_number')}`)
+      expect(node('text_output').textContent).toContain(language === 'en' ? 'Format' : '格式')
+      expect(socket('output', 'count_parameter', 'input').getAttribute('aria-label')).toContain(`Extension count · ${t('workflow.dataType_number')}`)
       expect(JSON.stringify(store.draft)).toBe(snapshot)
     }
   })
@@ -2667,28 +2668,83 @@ describe('catalog-driven parameter connections', () => {
     pointer(socket(source.id, 'string', 'output'), 'pointerdown')
     pointer(socket(target.id, 'language', 'input'), 'pointerup'); await settle()
     expect(control().disabled).toBe(true); expect(control().value).toBe('ja-JP')
-    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
+    expect(control().closest<HTMLElement>('.node-field-control')!.style.display).toBe('none')
     expect(node('asr').querySelectorAll('.node-config-row')).toHaveLength(2)
     expect((node('asr').querySelector('[data-field="provider"]')!.closest('.node-config-row') as HTMLElement).style.display).not.toBe('none')
     expect(target.config.language).toBe('ja-JP')
-    expect(node('asr').textContent).toContain(`${source.id} · string`)
+    expect(socket(target.id, 'language', 'input').getAttribute('aria-label')).toContain(`${source.id} · string`)
     const before = JSON.stringify(store.draft)
     for (const language of ['en', 'zh-CN']) {
       setLocale(language); store.selectNode('input'); await settle()
       expect(control().value).toBe('ja-JP'); expect(control().disabled).toBe(true)
-      expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
+      expect(control().closest<HTMLElement>('.node-field-control')!.style.display).toBe('none')
       expect(JSON.stringify(store.draft)).toBe(before)
     }
     pointer(socket(target.id, 'language', 'input'), 'pointerdown')
     pointer(root!.querySelector('.workflow-svg')!, 'pointerup'); await settle()
     expect(JSON.stringify(store.draft)).toBe(before)
     expect(store.connect(other.id, target.id, 'string', 'language')).toBe(true); await settle()
-    expect(node('asr').textContent).toContain(`${other.id} · string`)
+    expect(socket(target.id, 'language', 'input').getAttribute('aria-label')).toContain(`${other.id} · string`)
     store.disconnect(store.draft.edges.find((edge) => edge.target === target.id)!.id); await settle()
     expect(control().disabled).toBe(false); expect(control().value).toBe('ja-JP')
-    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
+    expect(control().closest<HTMLElement>('.node-field-control')!.style.display).not.toBe('none')
     expect(target.config.language).toBe('ja-JP')
     expect(store.draft.edges).toContainEqual(expect.objectContaining({ target: 'output', target_port: 'audio' }))
+  })
+
+  it('starts from an already connected field socket, cancels without detaching, and rewires from input to output', async () => {
+    const { store, source, other, target } = await parameterNodes()
+    expect(store.connect(source.id, target.id, 'string', 'language')).toBe(true); await settle()
+    const before = JSON.stringify(store.draft)
+    pointer(socket(target.id, 'language', 'input'), 'pointerdown')
+    expect(JSON.stringify(store.draft)).toBe(before)
+    socket(target.id, 'language', 'input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(JSON.stringify(store.draft)).toBe(before)
+    pointer(socket(target.id, 'language', 'input'), 'pointerdown')
+    pointer(socket(other.id, 'string', 'output'), 'pointerup'); await settle()
+    expect(store.draft.edges.find(edge => edge.target === target.id && edge.target_port === 'language')!.source).toBe(other.id)
+    expect((socket(target.id, 'language', 'input') as unknown as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('paints only the measured curve entry above the target card and below its field controls', async () => {
+    const { store, source, target } = await parameterNodes()
+    expect(store.connect(source.id, target.id, 'string', 'language')).toBe(true); await settle()
+    expect(root!.querySelector('.node-field-edge-entry')).toBeNull()
+    for (const group of root!.querySelectorAll<SVGGElement>('.workflow-node')) {
+      const model = store.draft.nodes.find(node => node.id === group.dataset.nodeId)!
+      Object.defineProperty(group, 'getScreenCTM', { configurable: true, value: () => ({ inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: -model.position.x, f: -model.position.y }) }) })
+    }
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+      const group = this.closest<SVGGElement>('.workflow-node')
+      const model = store.draft.nodes.find(node => node.id === group?.dataset.nodeId)
+      const isSocket = this.classList.contains('node-field-socket') && !!model
+      return { x: 0, y: 0, left: isSocket ? model!.position.x + 14 : 0, top: isSocket ? model!.position.y + 200 : 0, width: isSocket ? 20 : 0, height: isSocket ? 20 : 0, right: 0, bottom: 0, toJSON: () => ({}) }
+    })
+    setLocale('en'); await settle(); await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); await settle()
+    const group = root!.querySelector(`[data-node-id="${target.id}"]`)!
+    const overlay = group.querySelector('.node-field-edge-entries')!
+    const line = overlay.querySelector('.node-field-edge-entry')!
+    expect(line).not.toBeNull(); expect(overlay.getAttribute('pointer-events')).toBe('none')
+    const coordinates = line.getAttribute('d')!.match(/-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi)!.map(Number)
+    expect(coordinates[0]).toBeCloseTo(target.position.x, 6)
+    expect(coordinates.slice(-2)).toEqual([target.position.x + 24, target.position.y + 210])
+    expect(group.querySelector('.node-card')!.compareDocumentPosition(overlay) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(overlay.compareDocumentPosition(group.querySelector('foreignObject')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(overlay.compareDocumentPosition(group.querySelector('.node-outline')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(overlay.querySelector('.workflow-edge-hit')).toBeNull()
+    const edge = store.draft.edges.find(edge => edge.target === target.id && edge.target_port === 'language')!
+    const edgeIndex = store.draft.edges.indexOf(edge)
+    const hit = root!.querySelectorAll('.workflow-content > .workflow-edge-hit')[edgeIndex]!
+    const visible = root!.querySelectorAll('.workflow-content > .workflow-edge')[edgeIndex]!
+    expect(hit.getAttribute('d')).toBe(visible.getAttribute('d'))
+    expect(hit.getAttribute('d')).toContain(`${target.position.x} ${target.position.y + 210} L ${target.position.x + 24} ${target.position.y + 210}`)
+    pointer(socket(target.id, 'language', 'input'), 'pointerdown'); await settle()
+    const preview = root!.querySelector('.workflow-content > .workflow-edge-preview')!
+    const previewEntry = group.querySelector('.node-field-edge-entries > .workflow-edge-preview')!
+    expect(previewEntry.getAttribute('d')).toBe(`M ${target.position.x} ${target.position.y + 210} L ${target.position.x + 24} ${target.position.y + 210}`)
+    expect(preview.getAttribute('d')).toContain(`${target.position.x} ${target.position.y + 210} L ${target.position.x + 24} ${target.position.y + 210}`)
+    socket(target.id, 'language', 'input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
   })
 
   it('keeps incomplete wired fallback input dirty and invalid, and uses inherited types for extension mappings', async () => {
@@ -2698,7 +2754,7 @@ describe('catalog-driven parameter connections', () => {
     control().value = '-'; control().dispatchEvent(new Event('input', { bubbles: true })); await settle()
     expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(true); await settle()
     expect(control().value).toBe('-'); expect(control().disabled).toBe(true)
-    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).toBe('none')
+    expect(control().closest<HTMLElement>('.node-field-control')!.style.display).toBe('none')
     expect(control().getAttribute('aria-invalid')).toBe('true')
     expect(store.dirty).toBe(true)
     const calls = fetchMock.mock.calls.length
@@ -2729,12 +2785,12 @@ describe('catalog-driven parameter connections', () => {
     expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(true)
     await settle(); await frames()
     const collapsedHeight = workflowNodeHeight(output().type, store.registry!, 'output', store.draft.edges)
-    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(0)
+    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(64)
     expect(store.getNodeSize(output()).height).toBe(collapsedHeight)
     expect(collapsedHeight).toBeLessThan(originalHeight)
     expect(Number(node('audio_output').querySelector('.node-card')!.getAttribute('height'))).toBe(collapsedHeight)
-    expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).toBe('none')
-    expect(node('audio_output').querySelector<HTMLElement>('.node-body-fields')!.style.display).toBe('none')
+    expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).not.toBe('none')
+    expect(node('audio_output').querySelector<HTMLElement>('.node-body-fields')!.style.display).not.toBe('none')
     expect(node('audio_output').querySelector('.node-meta')).toBeNull()
     expect(control().value).toBe('1e2')
     expect(socket('output', 'count_parameter', 'input').getAttribute('aria-label')).toContain(`${integer.id} · integer`)
@@ -2748,22 +2804,22 @@ describe('catalog-driven parameter connections', () => {
     expect(store.getNodeSize(output())).toEqual({ width: 800, height: 600 })
     store.disconnect(store.draft.edges.find((edge) => edge.target_port === 'count_parameter')!.id)
     await settle(); await frames()
-    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
+    expect(control().closest<HTMLElement>('.node-field-control')!.style.display).not.toBe('none')
     expect(control().value).toBe('1e2'); expect(control().disabled).toBe(false)
-    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(WORKFLOW_NODE_FIELD_HEIGHT)
+    expect(workflowFieldsHeight(output().type, store.registry!, 'output', store.draft.edges)).toBe(WORKFLOW_NODE_FIELD_HEIGHT + 32)
     expect(node('audio_output').querySelector<SVGElement>('foreignObject')!.style.display).not.toBe('none')
     expect(output().size).toEqual({ width: 800, height: 600 }); expect(output().position).toEqual(position)
     store.run = runBody({ status: 'running' }); await settle()
     expect(control().disabled).toBe(true)
     expect(store.connect(integer.id, 'output', 'integer', 'count_parameter')).toBe(false)
-    expect(control().closest<HTMLElement>('.node-config-row')!.style.display).not.toBe('none')
+    expect(control().closest<HTMLElement>('.node-field-control')!.style.display).not.toBe('none')
   })
 })
 
 describe('catalog-driven multiple input and output ports', () => {
   async function multiNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.17'
+    catalog.workflow.schema_version = '1.18'
     catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({
       id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities],
     })))
@@ -2872,7 +2928,7 @@ describe('resource collection and shared execution', () => {
   const audio = (id: string) => ({ id, source: { original_name: `${id}.wav`, language: 'ja', size_bytes: 4 } })
   function collectionCatalog(collectionKey = 'audio_ids') {
     const catalog = structuredClone(testCapabilities)
-    catalog.workflow.schema_version = '1.17'
+    catalog.workflow.schema_version = '1.18'
     for (const node of catalog.workflow.nodes) {
       node.is_parameter_source = false
       node.required_input_ports = node.required_inbound ? [...node.input_ports] : []
@@ -3153,7 +3209,7 @@ describe('node rerun planning UI', () => {
   const validPlan = { valid: true, execute_node_ids: ['output'], reuse_node_ids: ['input'], skipped_node_ids: [], issues: [] }
   async function ready(override?: FetchOverride) {
     setup(override, createPinia(), { audios: ['a1', 'a2'].map(id => ({ id, source: { original_name: id === 'a1' ? 'chosen-audio.wav' : 'second.wav', language: 'ja', size_bytes: 5 } })) }); await settle()
-    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.17'; store.run = runBody({ status: 'completed' }); await settle(); return store
+    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.18'; store.run = runBody({ status: 'completed' }); await settle(); return store
   }
   async function openRerun() {
     node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 400, clientY: 220 })); await settle()
@@ -3247,7 +3303,7 @@ describe('declarative debug node visibility', () => {
   it('hides debug declarations in both add menus while preserving and duplicating existing debug nodes', async () => {
     setup(); await settle(); const store = useWorkflowStore()
     store.addNode('asr'); const existing = store.selectedNodeId!
-    store.capabilities!.schemaVersion = '1.17'
+    store.capabilities!.schemaVersion = '1.18'
     store.capabilities!.nodes.forEach(kind => { kind.debugOnly = kind.type === 'asr' || kind.type === 'preprocess' })
     const extension = JSON.parse(JSON.stringify(store.capabilities!.nodes.find(kind => kind.type === 'asr')!))
     extension.type = 'unusual_extension'; extension.debugOnly = true

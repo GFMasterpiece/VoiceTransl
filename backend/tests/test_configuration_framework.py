@@ -17,7 +17,7 @@ from test_inline_credentials import cloud as cloud
 
 def test_schema_checks_documents_without_scanning_business_json():
     validate_schema_payload(
-        {"schema_version": "3.0", "nodes": [{"config": {"schema_version": "business-v9"}}]},
+        {"schema_version": "4.0", "nodes": [{"config": {"schema_version": "business-v9"}}]},
         "workflow",
     )
     validate_schema_payload(
@@ -37,6 +37,10 @@ async def test_old_settings_graph_run_and_batch_namespaces_are_ignored_and_untou
         root / "workflow-revisions" / "1.json",
         root / "workflow-runs" / ("wfr_" + "1" * 32) / "run.json",
         root / "batches" / ("bat_" + "1" * 32 + ".json"),
+        tmp_path / "settings-v3.json",
+        root / "workflow-v3.json",
+        root / "workflow-runs-v3" / ("wfr_" + "4" * 32) / "run.json",
+        root / "batches-v3" / ("bat_" + "3" * 32 + ".json"),
         tmp_path / "settings-v2.json",
         root / "workflow-v2.json",
         root / "workflow-revisions-v2" / "1.json",
@@ -56,7 +60,7 @@ async def test_old_settings_graph_run_and_batch_namespaces_are_ignored_and_untou
     ) as client:
         assert (await client.get("/api/v1/settings")).json()["revision"] == 0
         document = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()
-        assert document["schema_version"] == "3.0" and document["revision"] == 0
+        assert document["schema_version"] == "4.0" and document["revision"] == 0
         assert [node["type"] for node in document["nodes"]] == ["audio_input", "audio_output"]
         assert (await client.get(f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs")).json()[
             "total"
@@ -92,9 +96,9 @@ async def test_explicit_shared_connection_and_key_rotation_rebuild_processing_de
                 {
                     "id": "m2",
                     "source": "cloud_model",
-                    "source_port": "model",
+                    "source_port": "asr_model",
                     "target": "second",
-                    "target_port": "model",
+                    "target_port": "asr_model",
                 },
                 {
                     "id": "o2",
@@ -151,14 +155,14 @@ async def test_binding_codecs_reject_forged_owner_connection_and_effective_model
         required_ids={"cloud_model"},
     )
     context = SimpleNamespace(store=app.state.store, run=completed, cancel_event=event)
-    connection = results["cloud_connection"].outputs["connection"].value.model_dump(mode="json")
+    connection = results["cloud_connection"].outputs["asr_connection"].value.model_dump(mode="json")
     connection["owner_node_id"] = "cloud"
     with pytest.raises(Exception):
-        await TYPE_DEFINITIONS["connection_binding"].checkpoint_codec.decode(connection, context)
-    model = results["cloud_model"].outputs["model"].value.model_dump(mode="json")
+        await TYPE_DEFINITIONS["asr_connection"].checkpoint_codec.decode(connection, context)
+    model = results["cloud_model"].outputs["asr_model"].value.model_dump(mode="json")
     model["model_name"] = "forged-model"
     with pytest.raises(Exception):
-        await TYPE_DEFINITIONS["model_binding"].checkpoint_codec.decode(model, context)
+        await TYPE_DEFINITIONS["asr_model"].checkpoint_codec.decode(model, context)
 
 
 @pytest.mark.parametrize(

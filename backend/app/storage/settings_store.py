@@ -36,7 +36,7 @@ class SettingsDocument(BaseModel):
 
 class SettingsStore:
     def __init__(self, data_dir, startup):
-        self.path = Path(data_dir) / "settings-v3.json"
+        self.path = Path(data_dir) / "settings-v4.json"
         self.secrets = SecretStore(data_dir)
         self.lock = asyncio.Lock()
         self.initial = GlobalSettings(

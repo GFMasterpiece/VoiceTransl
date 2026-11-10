@@ -52,7 +52,7 @@ def graph(
             {"id": "output", "type": "text_output", "config": {"format": "txt"}},
             {
                 "id": "cloud_connection",
-                "type": "service_connection",
+                "type": "asr_service",
                 "config": {
                     "protocol": protocol,
                     "endpoint": "https://maas.qianwenaiapi.com/api/v1",
@@ -61,7 +61,7 @@ def graph(
             },
             {
                 "id": "cloud_model",
-                "type": "model_config",
+                "type": "asr_model",
                 "config": {"model_name": "qwen-audio-3.1-asr", **(model_config or {})},
             },
         ],
@@ -83,16 +83,16 @@ def graph(
             {
                 "id": "connection_model",
                 "source": "cloud_connection",
-                "source_port": "connection",
+                "source_port": "asr_connection",
                 "target": "cloud_model",
-                "target_port": "connection",
+                "target_port": "asr_connection",
             },
             {
                 "id": "model_cloud",
                 "source": "cloud_model",
-                "source_port": "model",
+                "source_port": "asr_model",
                 "target": "cloud",
-                "target_port": "model",
+                "target_port": "asr_model",
             },
         ],
     }
@@ -140,7 +140,7 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         assert config["protocol"] == "qwen_filetrans"
         assert config_of(document, "cloud") == {}
         assert "timeout_seconds" not in config
-        assert config["region"] is config["credential_ref"] is None
+        assert "region" not in config and config["credential_ref"] is None
         validation = await client.post(
             f"/api/v1/projects/{pid}/workflow/validate",
             json={"nodes": document["nodes"], "edges": document["edges"]},
@@ -156,9 +156,7 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         saved = await save(client, pid, payload)
         ref = config_of(saved)["credential_ref"]
         assert ref.startswith("cred_")
-        assert (
-            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", ref) == KEY_A
-        )
+        assert SecretStore(tmp_path).read(pid, "cloud_connection", "asr_service", ref) == KEY_A
         repeated = await save(client, pid, payload)
         assert repeated == saved
         changed = {
@@ -184,9 +182,7 @@ async def test_minimal_inline_draft_key_save_replay_clear_and_no_plaintext(tmp_p
         }
         cleared = await save(client, pid, clear)
         assert config_of(cleared)["credential_ref"] is None
-        assert (
-            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", ref) == KEY_A
-        )
+        assert SecretStore(tmp_path).read(pid, "cloud_connection", "asr_service", ref) == KEY_A
         assert await save(client, pid, clear) == cleared
         for path in tmp_path.rglob("*"):
             if path.is_file():
@@ -261,16 +257,13 @@ async def test_save_failures_preserve_old_key_or_recover_committed_graph(
         else:
             assert response.status_code == 503
             assert app.state.store._workflow_path(pid).read_bytes() == old_bytes
-        assert (
-            SecretStore(tmp_path).read(pid, "cloud_connection", "service_connection", old_ref)
-            == KEY_A
-        )
+        assert SecretStore(tmp_path).read(pid, "cloud_connection", "asr_service", old_ref) == KEY_A
         recovered = await save(client, pid, payload)
         assert (
             SecretStore(tmp_path).read(
                 pid,
                 "cloud_connection",
-                "service_connection",
+                "asr_service",
                 config_of(recovered)["credential_ref"],
             )
             == KEY_B

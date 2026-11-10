@@ -184,7 +184,7 @@ async def test_actual_configuration_graph_materializes_json_and_text_ancestors()
     "protocol,target,error_code",
     [
         ("openai_chat", "", "LLM_CONTEXT_INVALID"),
-        ("qwen_filetrans", "en", "MODEL_PROTOCOL_INCOMPATIBLE"),
+        ("qwen_filetrans", "en", "CONNECTION_BINDING_INVALID"),
     ],
 )
 async def test_configuration_preflight_rejects_target_and_protocol_without_processing(
@@ -196,14 +196,14 @@ async def test_configuration_preflight_rejects_target_and_protocol_without_proce
     nodes = [
         WorkflowNode(
             id="service",
-            type="service_connection",
+            type="llm_service" if protocol == "openai_chat" else "asr_service",
             config={
-                "protocol": protocol,
+                **({"protocol": protocol} if protocol != "openai_chat" else {}),
                 "endpoint": "https://example.test/v1",
                 "credential_ref": "cred_" + "a" * 32,
             },
         ),
-        WorkflowNode(id="model", type="model_config", config={"model_name": "model"}),
+        WorkflowNode(id="model", type="llm_model", config={"model_name": "model"}),
         WorkflowNode(id="context", type="string_value", config={"value": target}),
         WorkflowNode(id="processor", type="llm_translate"),
     ]
@@ -211,12 +211,16 @@ async def test_configuration_preflight_rejects_target_and_protocol_without_proce
         WorkflowEdge(
             id="sm",
             source="service",
-            source_port="connection",
+            source_port="llm_connection" if protocol == "openai_chat" else "asr_connection",
             target="model",
-            target_port="connection",
+            target_port="llm_connection",
         ),
         WorkflowEdge(
-            id="mp", source="model", source_port="model", target="processor", target_port="model"
+            id="mp",
+            source="model",
+            source_port="llm_model",
+            target="processor",
+            target_port="llm_model",
         ),
         WorkflowEdge(
             id="cp",

@@ -18,11 +18,12 @@ function catalog() {
   const node_defaults = Object.fromEntries(capabilities.workflow.nodes.filter(node => node.evaluation_kind === 'configuration' && node.config.fields.length).map(kind => {
     const fields = kind.config.fields.filter(field => field.key !== kind.presentation?.inline_connection_input?.credential_ref_key)
     const config: Record<string, unknown> = Object.fromEntries(fields.map(field => [field.key, field.type === 'json' && field.default === null ? {} : field.default]))
-    if (kind.type === 'service_connection') config.endpoint = 'https://llm.test/v1'
-    if (kind.type === 'model_config') config.model_name = 'future-deployment/model-2028'
-    return [kind.type, { label: kind.label, fields, config, credential_configured: kind.type === 'service_connection', credential_version: kind.type === 'service_connection' ? 'frozen-global-key' : null }]
+    if (kind.type === 'llm_service') config.endpoint = 'https://llm.test/v1'
+    if (kind.type === 'asr_service') config.endpoint = 'https://asr.test/api'
+    if (kind.type === 'llm_model') config.model_name = 'future-deployment/model-2028'
+    return [kind.type, { label: kind.label, fields, config, credential_configured: ['llm_service', 'asr_service'].includes(kind.type), credential_version: kind.type === 'llm_service' ? 'frozen-global-key' : kind.type === 'asr_service' ? 'frozen-asr-key' : null }]
   }))
-  const settings = { schema_version: '3.0', revision: 1, global_fields: [], global: {}, node_defaults }
+  const settings = { schema_version: '4.0', revision: 1, global_fields: [], global: {}, node_defaults }
   return { capabilities, settings, graph: capabilities.workflow.default_graph }
 }
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response
@@ -31,7 +32,7 @@ async function settle() { for (let count = 0; count < 45; count++) await Promise
 function mount(component: any, props: Record<string, unknown>, pinia = createPinia()) { setActivePinia(pinia); root = document.createElement('div'); document.body.append(root); app = createApp(component, props).use(pinia); app.mount(root) }
 function edit(input: HTMLInputElement, value: string) { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }
 function setup() {
-  const fixture = catalog(); let document = { ...fixture.graph, schema_version: "3.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '' }; let runCount = 0
+  const fixture = catalog(); let document = { ...fixture.graph, schema_version: "4.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '' }; let runCount = 0
   const state = { failure: false }; const saves: any[] = []
   const artifact = (id: string) => ({ artifact_id: 'a', port: 'text', filename: 'translation.txt', media_type: 'text/plain', size_bytes: 12, sha256: 'abc', download_url: `/api/v1/projects/p1/audios/a1/workflow-runs/result/outputs/${id}/download` })
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -60,10 +61,12 @@ describe('catalog-driven API translation', () => {
   it('uses ordinary string context and keeps processors free of builder fields in both locales', async () => {
     const { store, fetcher } = setup(); await settle(); store.addNode('llm_translate'); await settle()
     const processor = root!.querySelector(`[data-node-id="${store.selectedNodeId}"]`)!
-    expect(store.selectedNode!.config).toEqual({})
-    expect(processor.querySelector('foreignObject, .node-meta, [data-credential-input]')).toBeNull()
-    expect(processor.querySelectorAll('.node-port-in')).toHaveLength(4)
-    store.addNode('model_config'); expect(store.selectedNode!.config.model_name).toBe('future-deployment/model-2028')
+    expect(store.selectedNode!.config).toEqual({ context: '' })
+    expect(processor.querySelector('.node-meta, [data-credential-input]')).toBeNull()
+    expect(processor.querySelector('textarea[data-field=context]')).not.toBeNull()
+    expect(processor.querySelectorAll('svg .node-port-in')).toHaveLength(3)
+    expect(processor.querySelectorAll('.node-field-socket')).toHaveLength(1)
+    store.addNode('llm_model'); expect(store.selectedNode!.config.model_name).toBe('future-deployment/model-2028')
     store.addNode('string_value'); await settle()
     const node = root!.querySelector(`[data-node-id="${store.selectedNodeId}"]`)!
     const value = node.querySelector<HTMLTextAreaElement>('[data-field=value]')!
@@ -74,11 +77,11 @@ describe('catalog-driven API translation', () => {
     expect(fetcher.mock.calls.every(([url]) => !String(url).startsWith('https://llm.test'))).toBe(true)
   })
   it('copies global key versions into independent connection nodes and strips credentials from copied connections', async () => {
-    const { store, saves } = setup(); await settle(); store.addNode('service_connection'); const first = store.selectedNodeId!; store.addNode('service_connection'); const second = store.selectedNodeId!; await settle()
+    const { store, saves } = setup(); await settle(); store.addNode('llm_service'); const first = store.selectedNodeId!; store.addNode('llm_service'); const second = store.selectedNodeId!; await settle()
     const credentials = workflowCredentials(store.credentialContext)
     expect(credentials.updates()).toEqual([first, second].map(node_id => ({ node_id, operation: 'use_default', default_credential_version: 'frozen-global-key' })))
     const firstView = root!.querySelector(`[data-node-id="${first}"]`)!
-    expect([...firstView.querySelectorAll('[data-field], [data-connection-field], [data-credential-input]')].map(input => input.getAttribute('data-field') || input.getAttribute('data-connection-field') || 'KEY')).toEqual(['protocol', 'endpoint', 'region', 'KEY'])
+    expect([...firstView.querySelectorAll('[data-field], [data-connection-field], [data-credential-input]')].map(input => input.getAttribute('data-field') || input.getAttribute('data-connection-field') || 'KEY')).toEqual(['endpoint', 'KEY'])
     expect(firstView.querySelector('[data-node-section=parameters]')).toBeNull()
     edit(firstView.querySelector<HTMLInputElement>('[data-credential-input]')!, 'first-node-key'); await store.save(); await settle()
     expect(saves[0].credential_updates).toEqual([{ node_id: first, operation: 'set', api_key: 'first-node-key' }, { node_id: second, operation: 'use_default', default_credential_version: 'frozen-global-key' }])
@@ -89,14 +92,46 @@ describe('catalog-driven API translation', () => {
     expect(credentials.updates()).toEqual([])
     expect(store.selectedNodeIds.every(id => !store.draft.nodes.find(node => node.id === id)!.config.credential_ref)).toBe(true)
   })
+  it('isolates LLM and ASR service/model families and keeps translation context inline until connected', async () => {
+    const { store } = setup(); await settle()
+    const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
+    const llmService = add('llm_service'), asrService = add('asr_service'), llmModel = add('llm_model'), asrModel = add('asr_model'), processor = add('llm_translate'), asr = add('qwen_asr'), text = add('string_value')
+    expect(workflowCredentials(store.credentialContext).updates()).toEqual([
+      { node_id: llmService, operation: 'use_default', default_credential_version: 'frozen-global-key' },
+      { node_id: asrService, operation: 'use_default', default_credential_version: 'frozen-asr-key' },
+    ])
+    expect(store.connect(llmService, asrModel, 'llm_connection', 'asr_connection')).toBe(false)
+    expect(store.connect(asrService, llmModel, 'asr_connection', 'llm_connection')).toBe(false)
+    expect(store.connect(llmService, llmModel, 'llm_connection', 'llm_connection')).toBe(true)
+    expect(store.connect(asrService, asrModel, 'asr_connection', 'asr_connection')).toBe(true)
+    expect(store.connect(llmModel, asr, 'llm_model', 'asr_model')).toBe(false)
+    expect(store.connect(asrModel, processor, 'asr_model', 'llm_model')).toBe(false)
+    expect(store.connect(llmModel, processor, 'llm_model', 'llm_model')).toBe(true)
+    expect(store.connect(asrModel, asr, 'asr_model', 'asr_model')).toBe(true)
+    await settle()
+    const processorView = root!.querySelector(`[data-node-id="${processor}"]`)!
+    const context = processorView.querySelector<HTMLTextAreaElement>('[data-field=context]')!
+    edit(context as unknown as HTMLInputElement, 'Translate into English.'); await settle()
+    expect(store.connect(text, processor, 'string', 'context')).toBe(true); await settle()
+    expect(context.closest<HTMLElement>('.node-field-control')!.style.display).toBe('none')
+    expect((processorView.querySelector('[data-field-port=context]') as HTMLButtonElement).disabled).toBe(false)
+    expect(processorView.querySelectorAll('circle[data-port-id=context]')).toHaveLength(0)
+    store.disconnect(store.draft.edges.find(edge => edge.target === processor && edge.target_port === 'context')!.id); await settle()
+    expect(context.closest<HTMLElement>('.node-field-control')!.style.display).not.toBe('none')
+    expect(context.value).toBe('Translate into English.')
+    expect(root!.querySelector(`[data-node-id="${asr}"] [data-port-id=context]`)).toBeNull()
+    for (const id of [llmService, asrService]) expect(root!.querySelector(`[data-node-id="${id}"] .node-field-socket`)).toBeNull()
+    expect(root!.querySelector(`[data-node-id="${llmService}"] [data-field=protocol]`)).toBeNull()
+    expect(root!.querySelector(`[data-node-id="${asrService}"] [data-field=protocol]`)).not.toBeNull()
+  })
   it('chains two translators through transcript ports and displays/downloads the backend current text without original-text controls', async () => {
     const { store, fetcher, state } = setup(); await settle(); store.removeNode('output')
     const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
     const asr = add('asr'), first = add('llm_translate'), second = add('llm_translate'), preview = add('text_preview'), output = add('text_output')
-    const connection = add('service_connection'), model = add('model_config'), context = add('string_value'), options = add('translation_options')
-    expect(store.connect(connection, model, 'connection', 'connection')).toBe(true)
+    const connection = add('llm_service'), model = add('llm_model'), context = add('string_value'), options = add('translation_options')
+    expect(store.connect(connection, model, 'llm_connection', 'llm_connection')).toBe(true)
     for (const target of [first, second]) {
-      expect(store.connect(model, target, 'model', 'model')).toBe(true)
+      expect(store.connect(model, target, 'llm_model', 'llm_model')).toBe(true)
       expect(store.connect(context, target, 'string', 'context')).toBe(true)
       expect(store.connect(options, target, 'translation_options', 'translation_options')).toBe(true)
     }
@@ -131,7 +166,7 @@ describe('catalog-driven API translation', () => {
   it('edits ordered dynamic inputs, preserves fallbacks, and restores deleted connections with undo', async () => {
     const { store } = setup(); await settle()
     const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
-    const first = add('string_value'), join = add('text_join'), object = add('json_value'), merge = add('json_merge'), model = add('model_config')
+    const first = add('string_value'), join = add('text_join'), object = add('json_value'), merge = add('json_merge'), model = add('llm_model')
     store.updateNodeConfig(join, { items: [{ id: 'a', value: 'first' }, { id: 'b', value: 'fallback' }, { id: 'c', value: 'last' }], separator: '\n' })
     expect(store.connect(first, join, 'string', 'text_b')).toBe(true)
     expect(store.connect(object, merge, 'json', 'json_left')).toBe(true)
@@ -140,7 +175,7 @@ describe('catalog-driven API translation', () => {
     await settle()
     const node = root!.querySelector(`[data-node-id="${join}"]`)!
     const bound = node.querySelector<HTMLTextAreaElement>('[data-field="items.b.value"]')!
-    expect(bound.disabled).toBe(true); expect(bound.closest('label')!.style.display).toBe('none')
+    expect(bound.disabled).toBe(true); expect(bound.closest('.node-field-control')!.getAttribute('style')).toContain('display: none')
     const buttons = node.querySelectorAll<HTMLButtonElement>('[data-slot=b] button')
     expect([...buttons].every(button => button.classList.contains('text-button'))).toBe(true)
     expect(node.querySelector('[data-add-input]')!.classList.contains('secondary-button')).toBe(true)
@@ -176,19 +211,19 @@ describe('catalog-driven API translation', () => {
   it('shows translation defaults from the same directory and preserves the private default key while changing interface language', async () => {
     const fixture = catalog(); const bodies: any[] = []
     vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => { if (init?.method === 'PUT') bodies.push(JSON.parse(String(init.body))); return response(fixture.settings) }))
-    mount(GlobalSettingsDialog, { open: true, capabilities: readCapabilities(fixture.capabilities), languages: readCapabilities(fixture.capabilities).languages, credentialTypes: ['service_connection'] }); await settle()
-    root!.querySelector<HTMLButtonElement>('[data-settings-category=parameters]')!.click(); await settle()
-    const type = root!.querySelector<HTMLSelectElement>('[data-settings-node-type]')!; type.value = 'service_connection'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
-    expect([...root!.querySelectorAll('[data-settings-section=connection] [data-field], [data-settings-key]')].map(input => input.getAttribute('data-field') || 'KEY')).toEqual(['protocol', 'endpoint', 'region', 'KEY'])
+    mount(GlobalSettingsDialog, { open: true, capabilities: readCapabilities(fixture.capabilities), languages: readCapabilities(fixture.capabilities).languages, credentialTypes: ['llm_service'] }); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-settings-category=llm]')!.click(); await settle()
+    const type = root!.querySelector<HTMLSelectElement>('[data-settings-node-type]')!; type.value = 'llm_service'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    expect([...root!.querySelectorAll('[data-settings-section=connection] [data-field], [data-settings-key]')].map(input => input.getAttribute('data-field') || 'KEY')).toEqual(['endpoint', 'KEY'])
     expect(root!.querySelector('[data-settings-section=parameters]')).toBeNull()
-    edit(root!.querySelector<HTMLInputElement>('[data-settings-key]')!, 'private-template-key'); type.value = 'string_value'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle(); edit(root!.querySelector<HTMLInputElement>('[data-field=value]')!, 'Keep names unchanged.'); type.value = 'service_connection'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    edit(root!.querySelector<HTMLInputElement>('[data-settings-key]')!, 'private-template-key'); root!.querySelector<HTMLButtonElement>('[data-settings-category=parameters]')!.click(); await settle(); type.value = 'string_value'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle(); edit(root!.querySelector<HTMLInputElement>('[data-field=value]')!, 'Keep names unchanged.'); root!.querySelector<HTMLButtonElement>('[data-settings-category=llm]')!.click(); await settle(); type.value = 'llm_service'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     setLocale('en'); await settle(); expect(root!.querySelector<HTMLInputElement>('[data-settings-key]')!.value).toBe('private-template-key')
     root!.querySelector<HTMLButtonElement>('[data-settings-actions] .primary-button')!.click(); await settle()
     expect(bodies[0].node_defaults.string_value.value).toBe('Keep names unchanged.')
-    expect(bodies[0].credential_updates).toEqual([{ node_type: 'service_connection', operation: 'set', api_key: 'private-template-key' }])
-    expect(bodies[0].node_defaults.service_connection).not.toHaveProperty('credential_ref')
+    expect(bodies[0].credential_updates).toEqual([{ node_type: 'llm_service', operation: 'set', api_key: 'private-template-key' }])
+    expect(bodies[0].node_defaults.llm_service).not.toHaveProperty('credential_ref')
   })
-  it.each(['CONNECTION_ENDPOINT_REQUIRED', 'MODEL_NAME_REQUIRED', 'MODEL_PROTOCOL_INCOMPATIBLE', 'CONNECTION_BINDING_INVALID', 'CONNECTION_BINDING_CHANGED', 'MODEL_BINDING_INVALID', 'CONFIGURATION_INVALID', 'CONFIGURATION_VALUE_INVALID', 'JSON_MERGE_CONFLICT', 'ASR_LANGUAGE_REQUIRED', 'LLM_CONTEXT_INVALID', 'QWEN_CONTEXT_INVALID', 'QWEN_CONTEXT_TOO_LONG', 'CURRENT_TEXT_INVALID', 'CURRENT_TEXT_MISSING', 'LLM_TRANSLATION_CREDENTIALS_MISSING', 'LLM_TRANSLATION_HTTP_ERROR', 'LLM_TRANSLATION_OUTPUT_INVALID', 'LLM_TRANSLATION_REFUSED', 'LLM_TRANSLATION_TIMEOUT'])('localizes safe translation error %s in both interfaces', code => {
+  it.each(['CONNECTION_ENDPOINT_REQUIRED', 'MODEL_NAME_REQUIRED', 'MODEL_PROTOCOL_INCOMPATIBLE', 'CONNECTION_BINDING_INVALID', 'CONNECTION_BINDING_CHANGED', 'MODEL_BINDING_INVALID', 'CONFIGURATION_INVALID', 'CONFIGURATION_VALUE_INVALID', 'JSON_MERGE_CONFLICT', 'ASR_LANGUAGE_REQUIRED', 'LLM_CONTEXT_INVALID', 'CURRENT_TEXT_INVALID', 'CURRENT_TEXT_MISSING', 'LLM_TRANSLATION_CREDENTIALS_MISSING', 'LLM_TRANSLATION_HTTP_ERROR', 'LLM_TRANSLATION_OUTPUT_INVALID', 'LLM_TRANSLATION_REFUSED', 'LLM_TRANSLATION_TIMEOUT'])('localizes safe translation error %s in both interfaces', code => {
     for (const locale of ['zh-CN', 'en']) { setLocale(locale); expect(workflowErrorLabel({ code, message: 'server fallback' })).toBe(t(`workflow.error_${code}`)); expect(workflowErrorLabel({ code, message: 'server fallback' })).not.toBe('server fallback') }
   })
 })
@@ -203,11 +238,9 @@ it('localizes a translation submission rejection without losing the stable API e
 
 it('explains current context and output-language errors in both interface languages', () => {
   setLocale('zh-CN')
-  expect(workflowErrorLabel({ code: 'QWEN_CONTEXT_TOO_LONG', message: 'fallback' })).toContain('400 个字符')
   expect(workflowErrorLabel({ code: 'LLM_CONTEXT_INVALID', message: 'fallback' })).toContain('非空')
   expect(workflowErrorLabel({ code: 'LLM_TRANSLATION_OUTPUT_INVALID', message: 'fallback' })).toContain('输出语言无效')
   setLocale('en')
-  expect(workflowErrorLabel({ code: 'QWEN_CONTEXT_TOO_LONG', message: 'fallback' })).toContain('400 characters')
   expect(workflowErrorLabel({ code: 'LLM_CONTEXT_INVALID', message: 'fallback' })).toContain('nonempty')
   expect(workflowErrorLabel({ code: 'LLM_TRANSLATION_OUTPUT_INVALID', message: 'fallback' })).toContain('output language is invalid')
 })

@@ -7,8 +7,8 @@ import NodeProviderConnection from './NodeProviderConnection.vue'
 import NodeConfigField from './NodeConfigField.vue'
 import { inlineConnectionKeys } from '../workflow/providerConnections'
 
-const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: boolean; edges?: readonly WorkflowEdge[] }>()
-const emit = defineEmits<{ update: [config: Record<string, unknown>] }>()
+const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: boolean; edges?: readonly WorkflowEdge[]; portDescription?: (port: string) => string }>()
+const emit = defineEmits<{ update: [config: Record<string, unknown>]; socketStart: [port: string, event: PointerEvent]; socketEnd: [event: PointerEvent]; socketCancel: [] }>()
 const inlineDescriptor = computed(() => props.registry.kind(props.node.type)?.inlineConnectionInput)
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
 const fields = computed(() => props.registry.fieldsForNode(props.node.type, props.node.config).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey
@@ -17,8 +17,14 @@ const visibleKeys = computed(() => new Set(workflowVisibleFields(props.node, pro
 const parameterFields = fields
 const hasConnection = computed(() => !!inlineDescriptor.value)
 
+function fieldKey(event: KeyboardEvent) {
+  if (event.target instanceof Element && event.target.closest('.node-field-socket') && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) return
+  if (event.key === 'Escape') emit('socketCancel')
+  event.stopPropagation()
+}
 type Field = (typeof fields.value)[number]
 function connection(field: Field) { return field.inputPort ? props.edges?.find((edge) => edge.target === props.node.id && edge.target_port === field.inputPort) : undefined }
+function socketStyle(field: Field) { const typeId = field.inputPort ? props.registry.port(field.inputPort, props.node)?.typeId : null; const color = props.registry.capabilities.dataTypes.find(type => type.id === typeId)?.presentation?.color; return color ? { '--port-color': color } : undefined }
 function disabled(field: Field) { return props.locked || !!connection(field) }
 const dynamic = computed(() => props.registry.kind(props.node.type)?.dynamicInputs)
 const slots = computed(() => dynamic.value && Array.isArray(props.node.config[dynamic.value.configKey]) ? props.node.config[dynamic.value.configKey] as { id: string; value: string }[] : [])
@@ -63,13 +69,13 @@ function error(field: Field) {
 </script>
 
 <template>
-  <div class="node-config-fields" @pointerdown.stop @click.stop @dblclick.stop @keydown.stop @keyup.stop @wheel.stop>
+  <div class="node-config-fields" @pointerdown.stop @click.stop @dblclick.stop @keydown="fieldKey" @keyup.stop @wheel.stop>
     <section v-if="hasConnection" class="node-config-section" data-node-section="connection">
       <h4 class="node-config-section-title">{{ t('connections.connectionSettings') }}</h4>
       <template v-for="field in parameterFields" :key="field.key">
-        <NodeConfigField :field="field" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
+        <NodeConfigField :field="field" connectable :socket-disabled="locked" :socket-label="field.inputPort ? portDescription?.(field.inputPort) : undefined" :socket-style="socketStyle(field)" @socket-start="(port, event) => emit('socketStart', port, event)" @socket-end="emit('socketEnd', $event)" @socket-cancel="emit('socketCancel')" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
         <div v-if="slotId(field)" class="node-slot-actions" role="group" :aria-label="field.label" :data-slot="slotId(field)">
-          <span v-if="!visibleKeys.has(field.key)" class="node-config-label">{{ field.label }}</span>
+
           <button class="text-button" type="button" :disabled="locked || slots[0]?.id === slotId(field)" @click="moveSlot(slotId(field)!, -1)">{{ t('workflow.moveInputUp') }}</button>
           <button class="text-button" type="button" :disabled="locked || slots[slots.length - 1]?.id === slotId(field)" @click="moveSlot(slotId(field)!, 1)">{{ t('workflow.moveInputDown') }}</button>
           <button class="text-button" type="button" :disabled="locked || slots.length <= dynamic!.minItems" @click="removeSlot(slotId(field)!)">{{ t('workflow.removeInput') }}</button>
@@ -80,9 +86,9 @@ function error(field: Field) {
     </section>
     <section v-if="!hasConnection && parameterFields.length" class="node-config-section node-parameter-fields" data-node-section="parameters">
       <template v-for="field in parameterFields" :key="field.key">
-        <NodeConfigField :field="field" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
+        <NodeConfigField :field="field" connectable :socket-disabled="locked" :socket-label="field.inputPort ? portDescription?.(field.inputPort) : undefined" :socket-style="socketStyle(field)" @socket-start="(port, event) => emit('socketStart', port, event)" @socket-end="emit('socketEnd', $event)" @socket-cancel="emit('socketCancel')" :languages="registry.capabilities.languages" :text="text(field)" :disabled="disabled(field)" :error="error(field)" :hidden="!visibleKeys.has(field.key)" @edit="edit(field, $event)" />
         <div v-if="slotId(field)" class="node-slot-actions" role="group" :aria-label="field.label" :data-slot="slotId(field)">
-          <span v-if="!visibleKeys.has(field.key)" class="node-config-label">{{ field.label }}</span>
+
           <button class="text-button" type="button" :disabled="locked || slots[0]?.id === slotId(field)" @click="moveSlot(slotId(field)!, -1)">{{ t('workflow.moveInputUp') }}</button>
           <button class="text-button" type="button" :disabled="locked || slots[slots.length - 1]?.id === slotId(field)" @click="moveSlot(slotId(field)!, 1)">{{ t('workflow.moveInputDown') }}</button>
           <button class="text-button" type="button" :disabled="locked || slots.length <= dynamic!.minItems" @click="removeSlot(slotId(field)!)">{{ t('workflow.removeInput') }}</button>

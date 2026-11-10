@@ -9,7 +9,7 @@ from app.domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from app.domain.node_registry import NODE_DEFINITIONS, node_catalog, validate_node_definition
 from app.domain.transcript import Segment, Transcript
 from app.main import create_app
-from app.nodes.model_configuration import normalize_service
+from app.nodes.model_configuration import normalize_asr_service
 from app.nodes.qwen_asr_streaming import normalize
 from app.storage.secret_store import SecretStore
 from httpx import ASGITransport, AsyncClient
@@ -110,7 +110,7 @@ async def test_fresh_stream_connection_does_not_inherit_other_connection_or_env(
         saved = await save(client, pid, update_body(draft, request_id="stream-key"))
         assert (
             SecretStore(tmp_path).read(
-                pid, "cloud_connection", "service_connection", config_of(saved)["credential_ref"]
+                pid, "cloud_connection", "asr_service", config_of(saved)["credential_ref"]
             )
             == KEY_A
         )
@@ -135,12 +135,12 @@ async def test_streaming_credentials_are_owned_by_each_node_instance(tmp_path, s
         second = {"id": "second", "type": "qwen_asr_streaming", "config": {}}
         second_connection = {
             "id": "second_connection",
-            "type": "service_connection",
+            "type": "asr_service",
             "config": dict(config_of(first)),
         }
         second_model = {
             "id": "second_model",
-            "type": "model_config",
+            "type": "asr_model",
             "config": {"model_name": "other-model"},
         }
         payload["nodes"].extend(
@@ -170,16 +170,16 @@ async def test_streaming_credentials_are_owned_by_each_node_instance(tmp_path, s
                 {
                     "id": "second_cm",
                     "source": "second_connection",
-                    "source_port": "connection",
+                    "source_port": "asr_connection",
                     "target": "second_model",
-                    "target_port": "connection",
+                    "target_port": "asr_connection",
                 },
                 {
                     "id": "second_mc",
                     "source": "second_model",
-                    "source_port": "model",
+                    "source_port": "asr_model",
                     "target": "second",
-                    "target_port": "model",
+                    "target_port": "asr_model",
                 },
             ]
         )
@@ -237,50 +237,19 @@ async def test_streaming_batch_freezes_connection_key_and_retry_sequence(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_streaming_language_parameter_and_timestamp_export(tmp_path, stream):
+async def test_streaming_audio_language_and_timestamp_export(tmp_path, stream):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aids, document = await setup(client, 1)
         payload = streaming_graph(document)
         config_of(payload, "cloud_model")["model_name"] = "future-stream-model"
         payload["nodes"][2]["config"]["format"] = "srt"
-        payload["nodes"].append({"id": "lang", "type": "string_value", "config": {"value": "en"}})
-        payload["nodes"].append(
-            {
-                "id": "context",
-                "type": "text_join",
-                "config": {"items": [{"id": "a1", "value": "背景"}], "separator": ""},
-            }
-        )
-        payload["edges"].append(
-            {
-                "id": "language",
-                "source": "lang",
-                "source_port": "string",
-                "target": "context",
-                "target_port": "text_a1",
-            }
-        )
-        payload["edges"].append(
-            {
-                "id": "context_cloud",
-                "source": "context",
-                "source_port": "string",
-                "target": "cloud",
-                "target_port": "context",
-            }
-        )
         saved = await save(client, pid, payload)
         saved = await save(client, pid, update_body(saved))
         completed = await run(client, app, pid, aids[0], saved)
         assert completed.status.value == "completed"
         assert stream["calls"][0]["language"] == "ja"
-        assert stream["calls"][0]["context"] == "en"
         assert stream["calls"][0]["model"] == "future-stream-model"
-        assert (
-            config_of(completed.workflow.model_dump(mode="json"), "context")["items"][0]["value"]
-            == "背景"
-        )
         output = next(record for record in completed.nodes if record.node_id == "output")
         downloaded = await client.get(output.artifact.download_url)
         assert downloaded.status_code == 200
@@ -316,7 +285,7 @@ async def test_streaming_cancel_uses_shared_cleanup_and_safe_history(tmp_path, s
 
 
 @pytest.mark.asyncio
-async def test_streaming_batch_inherits_each_audio_language_from_empty_context(tmp_path, stream):
+async def test_streaming_batch_inherits_each_audio_language_without_context(tmp_path, stream):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aids, document = await setup(client, 1)
@@ -328,16 +297,6 @@ async def test_streaming_batch_inherits_each_audio_language_from_empty_context(t
         assert response.status_code == 201, response.text
         aids.append(response.json()["audio"]["id"])
         payload = streaming_graph(document)
-        payload["nodes"].append({"id": "context", "type": "string_value", "config": {"value": ""}})
-        payload["edges"].append(
-            {
-                "id": "ctx_cloud",
-                "source": "context",
-                "source_port": "string",
-                "target": "cloud",
-                "target_port": "context",
-            }
-        )
         saved = await save(client, pid, payload)
         saved = await save(client, pid, update_body(saved))
         created = await submit(client, pid, aids, saved)
@@ -349,7 +308,6 @@ async def test_streaming_batch_inherits_each_audio_language_from_empty_context(t
         assert batch.status == "completed"
         assert {call["language"] for call in stream["calls"]} == {"ja", "fr"}
         assert {call["api_key"] for call in stream["calls"]} == {KEY_A}
-        assert config_of(saved, "context")["value"] == ""
     await app.state.batches.shutdown()
     await app.state.jobs.shutdown()
 
@@ -371,7 +329,7 @@ async def test_streaming_batch_inherits_each_audio_language_from_empty_context(t
 )
 def test_streaming_rejects_unsafe_or_non_websocket_endpoints(endpoint):
     with pytest.raises(ValueError):
-        normalize_service({"protocol": "qwen_streaming", "endpoint": endpoint})
+        normalize_asr_service({"protocol": "qwen_streaming", "endpoint": endpoint})
 
 
 @pytest.mark.parametrize(
@@ -385,7 +343,7 @@ def test_streaming_rejects_unsafe_or_non_websocket_endpoints(endpoint):
 )
 def test_streaming_supports_complete_endpoint_and_local_test_transport(endpoint):
     assert (
-        normalize_service({"protocol": "qwen_streaming", "endpoint": endpoint})["endpoint"]
+        normalize_asr_service({"protocol": "qwen_streaming", "endpoint": endpoint})["endpoint"]
         == endpoint
     )
 
@@ -394,8 +352,8 @@ def test_streaming_catalog_has_no_connection_fields_and_declares_typed_bindings(
     node = next(item for item in node_catalog() if item["type"] == "qwen_asr_streaming")
     assert node["config"]["fields"] == []
     assert not node["presentation"]
-    assert NODE_DEFINITIONS["qwen_asr_streaming"].binding_inputs == {"model": "asr_streaming"}
-    assert set(NODE_DEFINITIONS["qwen_asr_streaming"].required_ports) == {"audio", "model"}
+    assert NODE_DEFINITIONS["qwen_asr_streaming"].binding_inputs == {"asr_model": "asr_streaming"}
+    assert set(NODE_DEFINITIONS["qwen_asr_streaming"].required_ports) == {"audio", "asr_model"}
     with pytest.raises(ValueError):
         normalize({"endpoint": "wss://example.test/path"})
 
@@ -419,7 +377,7 @@ def test_streaming_catalog_has_no_connection_fields_and_declares_typed_bindings(
     ],
 )
 def test_inline_only_declarations_reject_invalid_roles_or_metadata(change):
-    original = NODE_DEFINITIONS["service_connection"]
+    original = NODE_DEFINITIONS["asr_service"]
     presentation = {
         "inline_connection_input": {
             **original.presentation["inline_connection_input"],
@@ -448,37 +406,3 @@ async def test_processing_extension_uses_streaming_protocol_without_scheduler_ch
         saved = await save(client, pid, update_body(saved))
         assert (await run(client, app, pid, aids[0], saved)).status.value == "completed"
         assert stream["calls"][-1]["connection"].provider_type == "qwen_streaming"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("node_type", ["qwen_asr", "qwen_asr_streaming"])
-async def test_submission_rejects_long_plain_context_before_adapter(tmp_path, stream, node_type):
-    app = create_app(tmp_path)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        pid, aids, document = await setup(client, 1)
-        payload = (
-            streaming_graph(document) if node_type == "qwen_asr_streaming" else graph(document)
-        )
-        payload["nodes"].append(
-            {"id": "context", "type": "string_value", "config": {"value": "x" * 401}}
-        )
-        payload["edges"].append(
-            {
-                "id": "ctx",
-                "source": "context",
-                "source_port": "string",
-                "target": "cloud",
-                "target_port": "context",
-            }
-        )
-        saved = await save(client, pid, payload)
-        saved = await save(client, pid, update_body(saved))
-        response = await client.post(
-            f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs",
-            json={"workflow_revision": saved["workflow_revision"]},
-        )
-        assert response.status_code == 422, response.text
-        assert response.json()["error"]["code"] == "QWEN_CONTEXT_TOO_LONG"
-        assert not stream["calls"]
-        assert not app.state.jobs.tasks
-    await app.state.jobs.shutdown()

@@ -135,7 +135,7 @@ async def test_provider_routes_and_storage_are_gone_and_corrupt_old_file_is_igno
             assert (await client.request(method, f"/api/v1{path}")).status_code == 404
         response = await client.get("/api/v1/capabilities")
         assert response.status_code == 200
-        assert response.json()["workflow"]["schema_version"] == "1.17"
+        assert response.json()["workflow"]["schema_version"] == "1.18"
         for node in response.json()["workflow"]["nodes"]:
             assert "provider_profile_input" not in (node["presentation"] or {})
             binding = (node["presentation"] or {}).get("inline_connection_input")
@@ -160,12 +160,12 @@ async def test_env_never_supplies_a_node_credential_even_when_populated(tmp_path
         assert rejected.status_code == 422
         assert rejected.json()["error"]["code"] == "CREDENTIAL_REQUIRED"
         assert not (tmp_path / ".credentials").exists()
-        assert set(config_of(saved)) == {"protocol", "endpoint", "region", "credential_ref"}
+        assert set(config_of(saved)) == {"protocol", "endpoint", "credential_ref"}
         assert config_of(saved, "cloud") == {}
 
 
 def test_removed_profile_registration_and_inline_roles_are_rejected():
-    original = NODE_DEFINITIONS["service_connection"]
+    original = NODE_DEFINITIONS["asr_service"]
     with pytest.raises(ValueError, match="no longer supported"):
         validate_node_definition(replace(original, presentation={"provider_profile_input": {}}))
     for key in ("mode_key", "mode_value", "api_key_env_key"):
@@ -207,7 +207,7 @@ async def test_old_workflow_and_run_namespaces_are_ignored_without_mutating_file
         old_run.write_text(json.dumps(payload), encoding="utf-8")
         graph_bytes, run_bytes = old_graph.read_bytes(), old_run.read_bytes()
         current = await client.get(f"/api/v1/projects/{pid}/workflow")
-        assert current.status_code == 200 and current.json()["schema_version"] == "3.0"
+        assert current.status_code == 200 and current.json()["schema_version"] == "4.0"
         assert all(node["type"] != "qwen_asr" for node in current.json()["nodes"])
         assert (
             await client.get(f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs/{old_id}")
@@ -225,7 +225,7 @@ def test_fresh_snapshots_do_not_add_passive_profile_metadata():
     snapshot = workflow_snapshot(default_workflow("fresh"))
     assert "provider_profiles_snapshot" not in snapshot.model_dump(mode="json")
     assert normalize({}) == {}
-    assert snapshot.schema_version == "3.0"
+    assert snapshot.schema_version == "4.0"
 
 
 @pytest.mark.asyncio

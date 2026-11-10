@@ -36,52 +36,54 @@ def register_builtin_types(register_type, register_port):
     from ..domain.configuration import ConnectionBinding, ModelBinding
     from .configuration_values import register_configuration_types
 
-    async def encode_binding(value, context):
-        return value.model_dump(mode="json")
+    def binding_codec(family, kind):
+        async def encode(value, context):
+            if (
+                value.connection.service_family != family
+                if kind == "model"
+                else value.service_family != family
+            ):
+                raise ValueError("Binding family does not match codec")
+            return value.model_dump(mode="json")
 
-    async def decode_connection(payload, context):
-        from ..domain.configuration import validate_connection
+        async def decode(payload, context):
+            from ..domain.configuration import validate_connection
 
-        value = ConnectionBinding.model_validate(payload)
-        validate_connection(context, value)
-        return value
+            if kind == "connection":
+                value = ConnectionBinding.model_validate(payload)
+                validate_connection(context, value, family)
+            else:
+                from ..domain.configuration import SERVICE_PROTOCOLS, validate_model
 
-    async def decode_model(payload, context):
-        from ..application.configuration_evaluator import evaluate_configuration_graph
+                value = ModelBinding.model_validate(payload)
+                operation = next(iter(SERVICE_PROTOCOLS[value.connection.protocol].operations))
+                validate_connection(context, value.connection, family)
+                await validate_model(context, value, operation)
+            return value
 
-        value = ModelBinding.model_validate(payload)
-        results = await evaluate_configuration_graph(
-            context.store,
-            context.run,
-            context.store.load_project(context.run.project_id),
-            context.cancel_event,
-            required_ids={value.owner_node_id},
+        return CheckpointCodec(f"{family}_{kind}", "1", encode, decode)
+
+    for family in ("llm", "asr"):
+        register_type(
+            f"{family}_connection",
+            label=f"{family} connection",
+            validator=lambda value, family=family: (
+                isinstance(value, ConnectionBinding) and value.service_family == family
+            ),
+            checkpoint_codec=binding_codec(family, "connection"),
+            presentation={"color": "#A78BFA"},
         )
-        expected = results[value.owner_node_id].outputs["model"].value
-        if value != expected:
-            from ..domain.checkpoint import CheckpointUnavailable
-
-            raise CheckpointUnavailable()
-        return value
-
-    register_type(
-        "connection_binding",
-        label="服务连接",
-        data_type=ConnectionBinding,
-        checkpoint_codec=CheckpointCodec(
-            "connection_binding", "1", encode_binding, decode_connection
-        ),
-        presentation={"color": "#A78BFA"},
-    )
-    register_type(
-        "model_binding",
-        label="模型",
-        data_type=ModelBinding,
-        checkpoint_codec=CheckpointCodec("model_binding", "1", encode_binding, decode_model),
-        presentation={"color": "#C084FC"},
-    )
-    register_port("connection", type_id="connection_binding", label="服务连接")
-    register_port("model", type_id="model_binding", label="模型")
+        register_type(
+            f"{family}_model",
+            label=f"{family} model",
+            validator=lambda value, family=family: (
+                isinstance(value, ModelBinding) and value.connection.service_family == family
+            ),
+            checkpoint_codec=binding_codec(family, "model"),
+            presentation={"color": "#C084FC"},
+        )
+        register_port(f"{family}_connection", type_id=f"{family}_connection")
+        register_port(f"{family}_model", type_id=f"{family}_model")
     register_type(AUDIO_PORT, label="音频", validator=_is_audio_data, checkpoint_codec=AUDIO_CODEC)
     register_type(
         TRANSCRIPT_PORT,

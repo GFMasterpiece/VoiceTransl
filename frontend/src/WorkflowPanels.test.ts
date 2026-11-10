@@ -15,11 +15,11 @@ const graph = {
   ],
   edges: [{ id: 'edge', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
 }
-const documentBody: WorkflowDocument = { ...graph, schema_version: "3.0", project_id: 'p1', revision: 1, workflow_revision: 2, updated_at: '2026-10-28T00:00:00Z' }
+const documentBody: WorkflowDocument = { ...graph, schema_version: "4.0", project_id: 'p1', revision: 1, workflow_revision: 2, updated_at: '2026-10-28T00:00:00Z' }
 const catalog = readCapabilities(catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: "1.17",
+    schema_version: "1.18",
     data_types: [typeFixture({ id: 'audio', label: 'Audio', parent_type_id: null, capabilities: [] })],
     ports: [{ id: 'audio', label: 'Audio', type_id: 'audio', capability_requirements: [] }],
     nodes: [

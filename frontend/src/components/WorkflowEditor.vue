@@ -3,7 +3,7 @@ import { t, locale, message, hasMessage } from '../i18n'
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, useId, watch } from 'vue'
 import {
   workflowIssueLabel,
-  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, WORKFLOW_NODE_BODY_BOTTOM, workflowNodeFieldsY, workflowPortY, workflowNodeHeight, workflowNodeSize,
+  WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, WORKFLOW_NODE_BODY_BOTTOM, workflowNodeFieldsY, workflowHeaderInputPorts, workflowPortY, workflowNodeHeight, workflowNodeSize,
   WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight, workflowVisibleFields,
   executionSignature,
   nodeLabel as registeredNodeLabel,
@@ -21,7 +21,8 @@ import NodeAudioCollection from './NodeAudioCollection.vue'
 import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
-import { measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
+import { connectionPath, connectionEntryPath } from '../workflow/connectionGeometry'
+import { measureFieldAnchors, type PortAnchor, measureNodeContent, type NodeContentMinimum } from '../workflow/measureNode'
 import { useNodeRerun } from '../composables/useNodeRerun'
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
@@ -138,7 +139,7 @@ const nodeKinds = computed(() => (registry.value?.kinds || []).filter(kind => is
 const connectPointer = ref<{ x: number; y: number } | null>(null)
 const connectPointerId = ref<number | null>(null)
 function outputPortsForNode(type: string) { return registry.value?.outputPortsForNode(type) || [] }
-function inputPortsForNode(node: WorkflowNode) { return registry.value?.inputPortsForNode(node.type, node.config) || [] }
+function inputPortsForNode(node: WorkflowNode) { return registry.value ? workflowHeaderInputPorts(node.type, registry.value, node.config) : [] }
 function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value, node.config) : null }
 function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value, node.config) : WORKFLOW_NODE_FIELDS_Y }
 function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node).length, outputPortsForNode(node.type).length, 1) }
@@ -317,23 +318,44 @@ function nodeTransform(node: WorkflowNode) {
   return `translate(${node.position.x} ${node.position.y})`
 }
 
+const fieldAnchors = ref<Record<string, Record<string, PortAnchor>>>({})
+function portAnchor(node: WorkflowNode, port: string, direction: PortDirection): PortAnchor | null {
+  if (direction === 'input' && registry.value?.fieldsForNode(node.type, node.config).some(field => field.inputPort === port)) return fieldAnchors.value[node.id]?.[port] || null
+  const y = portY(node, port, direction)
+  return y === null ? null : { x: direction === 'output' ? nodeWidth(node) : 0, y }
+}
 function edgePath(edge: WorkflowEdge) {
   const source = store.draft.nodes.find((node) => node.id === edge.source)
   const target = store.draft.nodes.find((node) => node.id === edge.target)
   if (!source || !target) return ''
-  const sx = source.position.x + nodeWidth(source)
-  const sourceY = portY(source, edge.source_port, 'output')
-  const targetY = portY(target, edge.target_port, 'input')
-  if (sourceY === null || targetY === null) return ''
-  const sy = source.position.y + sourceY
-  const tx = target.position.x
-  const ty = target.position.y + targetY
-  return connectionPath(sx, sy, tx, ty)
+  const sourceAnchor = portAnchor(source, edge.source_port, 'output')
+  const targetAnchor = portAnchor(target, edge.target_port, 'input')
+  if (!sourceAnchor || !targetAnchor) return ''
+  const sx = source.position.x + sourceAnchor.x
+  const sy = source.position.y + sourceAnchor.y
+  const tx = target.position.x + targetAnchor.x
+  const ty = target.position.y + targetAnchor.y
+  return connectionPath(sx, sy, tx, ty, fieldAnchors.value[target.id]?.[edge.target_port] ? target.position.x : undefined)
 }
 
-function connectionPath(sx: number, sy: number, tx: number, ty: number) {
-  const bend = Math.max(48, Math.abs(tx - sx) * .45)
-  return `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`
+function fieldEntryEdges(node: WorkflowNode) {
+  return store.draft.edges.filter(edge => edge.target === node.id && !!fieldAnchors.value[node.id]?.[edge.target_port])
+}
+function fieldEntryPath(edge: WorkflowEdge, target: WorkflowNode) {
+  const source = store.draft.nodes.find(node => node.id === edge.source)
+  const from = source && portAnchor(source, edge.source_port, 'output')
+  const to = fieldAnchors.value[target.id]?.[edge.target_port]
+  if (!source || !from || !to) return ''
+  return connectionEntryPath(source.position.x + from.x, source.position.y + from.y, target.position.x + to.x, target.position.y + to.y, target.position.x)
+}
+function fieldEntryPreview(node: WorkflowNode) {
+  const start = connectionStart.value, pointer = connectPointer.value
+  const to = start && fieldAnchors.value[node.id]?.[start.port]
+  if (!start || start.direction !== 'input' || start.nodeId !== node.id || !pointer || !to) return ''
+  return connectionEntryPath(pointer.x, pointer.y, node.position.x + to.x, node.position.y + to.y, node.position.x)
+}
+function fieldEntryWidth(node: WorkflowNode) {
+  return Math.max(0, ...Object.values(fieldAnchors.value[node.id] || {}).map(anchor => anchor.x + 2))
 }
 
 const previewPath = computed(() => {
@@ -342,11 +364,11 @@ const previewPath = computed(() => {
   if (!start || !pointer) return null
   const node = store.draft.nodes.find((item) => item.id === start.nodeId)
   if (!node) return null
-  const y = portY(node, start.port, start.direction)
-  if (y === null) return null
+  const anchor = portAnchor(node, start.port, start.direction)
+  if (!anchor) return null
   return start.direction === 'output'
-    ? connectionPath(node.position.x + nodeWidth(node), node.position.y + y, pointer.x, pointer.y)
-    : connectionPath(pointer.x, pointer.y, node.position.x, node.position.y + y)
+    ? connectionPath(node.position.x + anchor.x, node.position.y + anchor.y, pointer.x, pointer.y)
+    : connectionPath(pointer.x, pointer.y, node.position.x + anchor.x, node.position.y + anchor.y, fieldAnchors.value[node.id]?.[start.port] ? node.position.x : undefined)
 })
 
 // Thin out world-grid lines at low zoom while keeping the same world origin.
@@ -417,6 +439,7 @@ function measureContent() {
   for (const id of Object.keys(contentMinimums.value)) if (!ids.has(id)) {
     delete contentMinimums.value[id]
     delete store.nodeMinimums[id]
+    delete fieldAnchors.value[id]
     measuredNodes.delete(id)
   }
   for (const body of observedBodies) if (!stage.value.contains(body)) {
@@ -432,6 +455,8 @@ function measureContent() {
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
+    const anchors = measureFieldAnchors(group)
+    if (JSON.stringify(fieldAnchors.value[node.id]) !== JSON.stringify(anchors)) fieldAnchors.value = { ...fieldAnchors.value, [node.id]: anchors }
     const firstMeasurement = !measuredNodes.has(node.id)
     measuredNodes.add(node.id)
     if (JSON.stringify(contentMinimums.value[node.id]) !== JSON.stringify(minimum)) contentMinimums.value = { ...contentMinimums.value, [node.id]: minimum }
@@ -454,8 +479,7 @@ function measureContent() {
       if (Math.abs(y) > 1_000_000) store.setError(message('workflow.nodePlacementFailed'))
       else if (y !== node.position.y) store.adjustInsertedNodeUi(node.id, { position: { ...node.position, y } })
     }
-    const body = group.querySelector('.node-body')
-    if (body && resizeObserver && !observedBodies.has(body)) { resizeObserver.observe(body); observedBodies.add(body) }
+    for (const body of group.querySelectorAll('.node-body, .node-config-row')) if (resizeObserver && !observedBodies.has(body)) { resizeObserver.observe(body); observedBodies.add(body) }
   }
 }
 function scheduleMeasurement() {
@@ -636,6 +660,7 @@ function startConnection(node: WorkflowNode, direction: PortDirection, port: str
   connectionStart.value = { nodeId: node.id, port, direction }
   connectPointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   connectPointer.value = canvasPoint(event)
+  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus({ preventScroll: true })
   store.setError('')
 }
 
@@ -871,11 +896,16 @@ onUnmounted(() => {
               <path v-if="previewPath" class="workflow-edge-preview" :d="previewPath" aria-hidden="true" />
               <g v-for="node in store.draft.nodes" :key="node.id" class="workflow-node" :data-node-id="node.id" :class="[`is-${node.type}`, `is-state-${nodeStatus(node)}`, { 'is-selected': store.selectedNodeIds.includes(node.id), 'is-invalid': !!nodeIssue(node) }]" :transform="nodeTransform(node)" role="group" tabindex="0" :aria-label="t('workflow.nodeAria', { name: nodeLabel(node), kind: nodeKindLabel(node), status: nodeStatusLabel(nodeStatus(node)) })" @pointerdown.stop="onNodePointerDown($event, node)" @dblclick.stop="focusNode(node)" @click.stop="onNodeClick($event, node)" @keydown="keyboardSelect($event, node)">
                 <defs>
+                  <clipPath :id="`${clipId}-${node.id}-field-entry`"><rect x="0" y="0" :width="fieldEntryWidth(node)" :height="nodeHeight(node)" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-title`"><rect x="22" y="0" :width="nodeWidth(node) - (isReused(node) ? 114 : 64)" height="30" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-port-in`"><rect x="10" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
                   <clipPath :id="`${clipId}-${node.id}-port-out`"><rect :x="nodeWidth(node) - 10 - portClipWidth(node)" y="32" :width="portClipWidth(node)" :height="26 + (portRows(node) - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT" /></clipPath>
                 </defs>
                 <rect class="node-card" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
+                <g class="node-field-edge-entries" :clip-path="`url(#${clipId}-${node.id}-field-entry)`" pointer-events="none" aria-hidden="true">
+                  <path v-for="edge in fieldEntryEdges(node)" :key="edge.id" class="workflow-edge node-field-edge-entry" :class="{ 'is-run': store.runMatchesDraft && store.run?.status === 'completed' }" :data-edge-id="edge.id" :d="fieldEntryPath(edge, node)" :transform="`translate(${-node.position.x} ${-node.position.y})`" />
+                  <path v-if="fieldEntryPreview(node)" class="workflow-edge-preview node-field-edge-entry" :d="fieldEntryPreview(node)" :transform="`translate(${-node.position.x} ${-node.position.y})`" />
+                </g>
                 <path class="node-header" :d="headerPath(node)" />
                 <circle class="node-type-dot" cx="12" cy="15" r="3" />
                 <text class="node-name" :clip-path="`url(#${clipId}-${node.id}-title)`" x="22" y="19"><title>{{ nodeLabel(node) }}</title>{{ nodeLabel(node) }}</text>
@@ -883,7 +913,7 @@ onUnmounted(() => {
                 <circle class="node-status-dot" :class="`is-${nodeStatus(node)}`" :cx="nodeWidth(node) - 12" cy="15" r="3"><title>{{ nodeStatusLabel(nodeStatus(node)) }}</title></circle>
                 <foreignObject v-if="registry && (hasConfigFields(node) || kind(node)?.resourceInput || kind(node)?.preview)" v-show="fieldsHeight(node) || kind(node)?.resourceInput || kind(node)?.preview" @focusin="store.selectNode(node.id)" x="8" :y="fieldsY(node)" :width="nodeWidth(node) - 16" :height="nodeHeight(node) - fieldsY(node) - WORKFLOW_NODE_BODY_BOTTOM">
                   <div class="node-body" :style="bodyStyle(node)">
-                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :locked="editingBlocked" @update="editNode(node, $event)" /></div>
+                    <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :port-description="port => inputPortDescription(node, port)" :locked="editingBlocked" @update="editNode(node, $event)" @socket-start="(port, event) => startConnection(node, 'input', port, event)" @socket-end="finishConnection" @socket-cancel="cancelConnection" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
                       <NodeAudioCollection v-if="kind(node)!.resourceInput!.collectionKey && kind(node)!.resourceInput!.resourceType === 'audio'" :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" :manifest="batch.manifest" :mode="batch.collection.mode.value" @mode="batch.collection.setMode($event)" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                       <NodeResourceInput v-else :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
@@ -929,7 +959,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
-      <button v-if="contextMenu.nodeId && ['1.17'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <button v-if="contextMenu.nodeId && ['1.18'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>

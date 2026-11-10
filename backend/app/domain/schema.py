@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 SCHEMA_VERSION = "1.0"
-CONFIGURATION_SCHEMA_VERSION = "3.0"
+CONFIGURATION_SCHEMA_VERSION = "4.0"
 
 
 def document_version(document):

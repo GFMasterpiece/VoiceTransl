@@ -97,15 +97,20 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
     from ..domain.configuration import validate_model
 
     for port, operation in definition.binding_inputs.items():
-        validate_model(context, context.input(port).value, operation)
+        await validate_model(context, context.input(port).value, operation)
     if definition.validate_inputs:
         definition.validate_inputs(context)
     if definition.evaluation_kind == "configuration":
         from .configuration_evaluator import evaluate_configuration_graph
 
-        seed = {
-            edge.source: {} for edge in context.run.workflow.edges if edge.target == context.node.id
-        }
+        seed = {key: dict(value) for key, value in (context.available_outputs or {}).items()}
+        seed.update(
+            {
+                edge.source: {}
+                for edge in context.run.workflow.edges
+                if edge.target == context.node.id
+            }
+        )
         for edge in context.run.workflow.edges:
             if edge.target == context.node.id:
                 source = context.inputs[edge.target_port]
@@ -233,7 +238,7 @@ async def execute_workflow_run(
         if run.rerun:
             from ..domain.checkpoint import CheckpointDescriptor
 
-            for node_id in run.rerun.reuse_node_ids:
+            for node_id in (node_id for node_id in order if node_id in run.rerun.reuse_node_ids):
                 record = records[node_id]
                 try:
                     result = await load_checkpoint(
@@ -242,6 +247,7 @@ async def execute_workflow_run(
                         node_by_id[node_id],
                         CheckpointDescriptor.model_validate(record.checkpoint),
                         cancel_event,
+                        available_outputs=outputs_by_node,
                     )
                 except (OSError, ValueError, TypeError):
                     raise NodeExecutionError(
@@ -301,6 +307,7 @@ async def execute_workflow_run(
                         project=project,
                         cancel_event=cancel_event,
                         mock_delay_ms=mock_delay_ms,
+                        available_outputs=outputs_by_node,
                     )
                 )
                 fingerprint = node_fingerprint(

@@ -166,29 +166,21 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
         if processor["type"] != "llm_translate":
             continue
         saved = processor.pop("config", {})
-        processor["config"] = {}
+        processor["config"] = {"context": saved.get("target_language", "")}
         ident = processor["id"]
         nodes.extend(
             [
                 {
                     "id": ident + "_connection",
-                    "type": "service_connection",
-                    "config": {"protocol": "openai_chat", "endpoint": saved.get("base_url", "")},
+                    "type": "llm_service",
+                    "config": {"endpoint": saved.get("base_url", "")},
                 },
                 {
                     "id": ident + "_model",
-                    "type": "model_config",
+                    "type": "llm_model",
                     "config": {
                         "model_name": saved.get("model", ""),
                         "additional_parameters": saved.get("additional_parameters", {}),
-                    },
-                },
-                {
-                    "id": ident + "_context",
-                    "type": "text_join",
-                    "config": {
-                        "items": [{"id": "a1", "value": saved.get("target_language", "")}],
-                        "separator": "",
                     },
                 },
                 {
@@ -209,15 +201,11 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
             ]
         )
         for item in edges:
-            if item["target"] == ident and item["target_port"] != "transcript":
-                if item["target_port"] == "model":
-                    item.update(target=ident + "_model", target_port="model_name")
-                else:
-                    item.update(target=ident + "_context", target_port="text_a1")
+            if item["target"] == ident and item["target_port"] in {"model", "llm_model"}:
+                item.update(target=ident + "_model", target_port="model_name")
         for source, source_port, target, target_port in (
-            (ident + "_connection", "connection", ident + "_model", "connection"),
-            (ident + "_model", "model", ident, "model"),
-            (ident + "_context", "string", ident, "context"),
+            (ident + "_connection", "llm_connection", ident + "_model", "llm_connection"),
+            (ident + "_model", "llm_model", ident, "llm_model"),
             (ident + "_options", "translation_options", ident, "translation_options"),
         ):
             edges.append(
@@ -240,7 +228,7 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
                     "api_key": "KEY-" + node["id"].removesuffix("_connection"),
                 }
                 for node in nodes
-                if node["type"] == "service_connection"
+                if node["type"] == "llm_service"
             ],
         )
     response = await client.put(f"/api/v1/projects/{pid}/workflow", json=body)
@@ -347,7 +335,7 @@ async def test_empty_drafts_defaults_save_but_single_and_batch_submit_reject(
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         settings = (await client.get("/api/v1/settings")).json()
-        assert settings["node_defaults"]["service_connection"]["config"]["endpoint"] == ""
+        assert settings["node_defaults"]["llm_service"]["config"]["endpoint"] == ""
         assert (await client.put("/api/v1/settings", json=save_body(settings))).status_code == 200
         pid, aid, document = await setup(client, translation_config=draft, keys=True)
         single = await client.post(
@@ -426,13 +414,13 @@ async def test_node_directory_and_no_environment_credential_fallback(
         )
         assert node["category"] == {"id": "translation", "label": "翻译"}
         assert node["debug_only"] is False
-        assert node["config"]["fields"] == []
+        assert [field["key"] for field in node["config"]["fields"]] == ["context"]
         connection = next(
-            value for value in catalog["workflow"]["nodes"] if value["type"] == "service_connection"
+            value for value in catalog["workflow"]["nodes"] if value["type"] == "llm_service"
         )
         binding = connection["presentation"]["inline_connection_input"]
-        assert binding["timeout_key"] is None and binding["provider_type"] == "service_connection"
-        assert "context" in node["required_input_ports"]
+        assert binding["timeout_key"] is None and binding["provider_type"] == "llm_service"
+        assert "context" not in node["required_input_ports"]
         assert not any(
             value["type"] == "translation_context" for value in catalog["workflow"]["nodes"]
         )

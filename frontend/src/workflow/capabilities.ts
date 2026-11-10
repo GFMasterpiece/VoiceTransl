@@ -68,6 +68,7 @@ export interface CapabilityNode {
 }
 export interface InlineConnectionInput {
   baseUrlKey: string; timeoutKey: string | null; regionKey: string | null; credentialRefKey: string
+  serviceFamily?: 'llm' | 'asr' | null; fixedProtocol?: string | null; protocolKey?: string | null
   providerType: string; label: string; dataHandling?: ProviderDataHandling | null
 }
 export interface ProviderDataHandling { temporaryUploadRetentionHours?: number | null; remoteCancelPendingOnly?: boolean | null; cancelBehavior?: 'close_stream' | null }
@@ -237,14 +238,17 @@ function node(value: unknown): CapabilityNode {
   if (presentation.inline_connection_input != null) {
     const inline = object(presentation.inline_connection_input, 'connections.invalidCapability')
     const keys = ['provider_type', 'label', 'base_url_key', 'timeout_key', 'region_key', 'credential_ref_key']
-    if (keys.some((key) => !Object.prototype.hasOwnProperty.call(inline, key)) || Object.keys(inline).some((key) => ![...keys, 'data_handling'].includes(key))
+    if (keys.some((key) => !Object.prototype.hasOwnProperty.call(inline, key)) || Object.keys(inline).some((key) => ![...keys, 'data_handling', 'service_family', 'fixed_protocol', 'protocol_key'].includes(key))
       || keys.filter((key) => key !== 'label').some((key) => !(['region_key', 'timeout_key'].includes(key) && inline[key] === null) && !safeIdentifier(inline[key]))
       || typeof inline.label !== 'string' || !inline.label.trim()) fail('connections.invalidCapability')
     const bound = ['base_url_key', 'timeout_key', 'region_key', 'credential_ref_key'].map((key) => inline[key]).filter((key) => key !== null)
     if (new Set(bound).size !== bound.length || bound.some((key) => !parsedFields.some((field) => field.key === key && field.inputPort === null))
       || (inline.timeout_key !== null && parsedFields.find((field) => field.key === inline.timeout_key)?.type !== 'integer')
       || ['base_url_key', 'region_key', 'credential_ref_key'].some((key) => inline[key] !== null && parsedFields.find((field) => field.key === inline[key])?.type !== 'string')) fail('connections.invalidCapability')
-    inlineConnectionInput = { baseUrlKey: String(inline.base_url_key), timeoutKey: inline.timeout_key as string | null, regionKey: inline.region_key as string | null,
+    if (inline.service_family != null && !['llm', 'asr'].includes(String(inline.service_family))) fail('connections.invalidCapability')
+    if (inline.fixed_protocol != null && !safeIdentifier(inline.fixed_protocol)) fail('connections.invalidCapability')
+    if (inline.protocol_key != null && (!safeIdentifier(inline.protocol_key) || !parsedFields.some(field => field.key === inline.protocol_key && field.type === 'select' && field.inputPort === null))) fail('connections.invalidCapability')
+    inlineConnectionInput = { serviceFamily: inline.service_family as 'llm' | 'asr' | null, fixedProtocol: inline.fixed_protocol as string | null, protocolKey: inline.protocol_key as string | null, baseUrlKey: String(inline.base_url_key), timeoutKey: inline.timeout_key as string | null, regionKey: inline.region_key as string | null,
       credentialRefKey: String(inline.credential_ref_key), providerType: String(inline.provider_type), label: inline.label, dataHandling: handling(inline.data_handling, true) }
   }
   if (resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key'].includes(key))
@@ -320,7 +324,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.17') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.18') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map((entry) => node(entry))
   const categoryLabels = new Map<string, string>()

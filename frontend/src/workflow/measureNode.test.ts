@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { measureNodeContent } from './measureNode'
+import { measureFieldAnchors, measureNodeContent } from './measureNode'
 
 let group: SVGGElement
 const fallback = { width: 188, height: 116, fields: 44, resource: 0, preview: 0 }
@@ -29,12 +29,13 @@ describe('node intrinsic content measurement', () => {
     fixture()
     const password = document.createElement('input'); password.type = 'password'; password.value = 'secret-measure-key'; password.setAttribute('value', 'secret-measure-key')
     group.querySelector('.node-config-fields')!.append(password)
+    const socket = document.createElement('button'); socket.className = 'node-field-socket'; socket.dataset.fieldPort = 'context'; socket.dataset.portId = 'context'; socket.dataset.portDirection = 'input'; group.querySelector('.node-config-fields')!.append(socket)
     const append = document.body.append.bind(document.body)
     vi.spyOn(document.body, 'append').mockImplementation((...elements) => {
       const host = elements[0] as HTMLElement
       expect(host.getAttribute('aria-hidden')).toBe('true')
       expect(host.inert).toBe(true)
-      expect(host.querySelector('[src], [id], [for], [aria-describedby]')).toBeNull()
+      expect(host.querySelector('[src], [id], [for], [aria-describedby], [data-field-port], [data-port-id], [data-port-direction]')).toBeNull()
       expect(host.querySelector('pre')?.textContent).toBe('')
       expect(host.querySelector<HTMLInputElement>('input[type=password]')!.value).toBe('')
       expect(host.innerHTML).not.toContain('secret-measure-key')
@@ -87,5 +88,22 @@ describe('node intrinsic content measurement', () => {
     expect(measureNodeContent(group, fallback)).toEqual(narrow)
     expect(foreignObject.getAttribute('width')).toBe('224')
     expect(group.querySelector<HTMLElement>('.node-body')!.style.width).toBe('900px')
+  })
+})
+
+describe('live field socket anchors', () => {
+  it.each([.5, 1, 1.5])('converts viewport socket centers to node-local coordinates at zoom %s', scale => {
+    fixture()
+    const socket = document.createElement('button'); socket.className = 'node-field-socket'; socket.dataset.fieldPort = 'parameter'; group.querySelector('.node-body')!.append(socket)
+    Object.defineProperty(group, 'getScreenCTM', { value: () => ({ inverse: () => ({ a: 1 / scale, b: 0, c: 0, d: 1 / scale, e: -100 / scale, f: -200 / scale }) }) })
+    vi.spyOn(socket, 'getBoundingClientRect').mockReturnValue({ left: 100 + 20 * scale, top: 200 + 110 * scale, width: 20 * scale, height: 20 * scale } as DOMRect)
+    const clone = socket.cloneNode(true) as HTMLElement; document.body.append(clone)
+    expect(measureFieldAnchors(group)).toEqual({ parameter: { x: 30, y: 120 } })
+    clone.remove()
+  })
+  it('does not invent an anchor before live layout or an invertible SVG transform exists', () => {
+    fixture(); expect(measureFieldAnchors(group)).toEqual({})
+    Object.defineProperty(group, 'getScreenCTM', { value: () => ({ inverse: () => { throw new Error('singular') } }) })
+    expect(measureFieldAnchors(group)).toEqual({})
   })
 })

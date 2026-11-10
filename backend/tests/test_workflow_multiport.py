@@ -148,7 +148,7 @@ async def test_named_ports_fan_out_join_export_and_keep_history_readable(
             .read_bytes()
         )
         assert (await client.get(output["artifact"]["download_url"])).content == source
-        assert run["schema_version"] == run["workflow"]["schema_version"] == "3.0"
+        assert run["schema_version"] == run["workflow"]["schema_version"] == "4.0"
         old_run = (await client.get(root + "/" + run["id"])).content
         body = graph()
         body["nodes"][1]["position"] = {"x": 100, "y": -120}

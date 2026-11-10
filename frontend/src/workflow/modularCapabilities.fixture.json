@@ -350,18 +350,30 @@
     }
   ],
   "workflow": {
-    "schema_version": "1.17",
+    "schema_version": "1.18",
     "ports": [
       {
-        "id": "connection",
-        "type_id": "connection_binding",
-        "label": "服务连接",
+        "id": "llm_connection",
+        "type_id": "llm_connection",
+        "label": "llm connection",
         "capability_requirements": []
       },
       {
-        "id": "model",
-        "type_id": "model_binding",
-        "label": "模型",
+        "id": "llm_model",
+        "type_id": "llm_model",
+        "label": "llm model",
+        "capability_requirements": []
+      },
+      {
+        "id": "asr_connection",
+        "type_id": "asr_connection",
+        "label": "asr connection",
+        "capability_requirements": []
+      },
+      {
+        "id": "asr_model",
+        "type_id": "asr_model",
+        "label": "asr model",
         "capability_requirements": []
       },
       {
@@ -535,8 +547,8 @@
     ],
     "data_types": [
       {
-        "id": "connection_binding",
-        "label": "服务连接",
+        "id": "llm_connection",
+        "label": "llm connection",
         "parent_type_id": null,
         "capabilities": [],
         "presentation": {
@@ -544,8 +556,26 @@
         }
       },
       {
-        "id": "model_binding",
-        "label": "模型",
+        "id": "llm_model",
+        "label": "llm model",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#C084FC"
+        }
+      },
+      {
+        "id": "asr_connection",
+        "label": "asr connection",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#A78BFA"
+        }
+      },
+      {
+        "id": "asr_model",
+        "label": "asr model",
         "parent_type_id": null,
         "capabilities": [],
         "presentation": {
@@ -948,8 +978,8 @@
         "can_start_without_inputs": true,
         "dynamic_inputs": null,
         "category": {
-          "id": "parameters",
-          "label": "参数"
+          "id": "translation",
+          "label": "翻译"
         },
         "input_ports": [
           "timeout_seconds",
@@ -1083,8 +1113,8 @@
         "can_start_without_inputs": true,
         "dynamic_inputs": null,
         "category": {
-          "id": "parameters",
-          "label": "参数"
+          "id": "speech_recognition",
+          "label": "语音识别"
         },
         "input_ports": [
           "timeout_seconds"
@@ -1127,19 +1157,19 @@
         }
       },
       {
-        "type": "service_connection",
-        "label": "服务连接",
+        "type": "llm_service",
+        "label": "LLM服务",
         "debug_only": false,
         "evaluation_kind": "configuration",
         "can_start_without_inputs": true,
         "dynamic_inputs": null,
         "category": {
-          "id": "parameters",
-          "label": "参数"
+          "id": "llm",
+          "label": "语言模型"
         },
         "input_ports": [],
         "output_ports": [
-          "connection"
+          "llm_connection"
         ],
         "terminal": false,
         "is_source": false,
@@ -1150,50 +1180,20 @@
         "removable": true,
         "presentation": {
           "inline_connection_input": {
-            "provider_type": "service_connection",
-            "label": "服务连接",
+            "provider_type": "llm_service",
+            "label": "LLM服务",
             "base_url_key": "endpoint",
             "timeout_key": null,
-            "region_key": "region",
-            "credential_ref_key": "credential_ref"
+            "region_key": null,
+            "credential_ref_key": "credential_ref",
+            "service_family": "llm",
+            "fixed_protocol": "openai_chat",
+            "protocol_key": null
           }
         },
         "config": {
           "kind": "object",
           "fields": [
-            {
-              "key": "protocol",
-              "type": "select",
-              "required": false,
-              "nullable": false,
-              "default": "openai_chat",
-              "creation_default": null,
-              "minimum": null,
-              "maximum": null,
-              "min_length": null,
-              "max_length": null,
-              "pattern": null,
-              "description": null,
-              "validator": null,
-              "suggestion_source": null,
-              "input_port": null,
-              "input_type_id": null,
-              "widget": null,
-              "options": [
-                {
-                  "value": "openai_chat",
-                  "label": "Chat Completions"
-                },
-                {
-                  "value": "qwen_filetrans",
-                  "label": "Qwen Filetrans"
-                },
-                {
-                  "value": "qwen_streaming",
-                  "label": "Qwen Streaming"
-                }
-              ]
-            },
             {
               "key": "endpoint",
               "type": "string",
@@ -1205,26 +1205,6 @@
               "maximum": null,
               "min_length": null,
               "max_length": 2048,
-              "pattern": null,
-              "description": null,
-              "validator": null,
-              "suggestion_source": null,
-              "input_port": null,
-              "input_type_id": null,
-              "widget": null,
-              "options": []
-            },
-            {
-              "key": "region",
-              "type": "string",
-              "required": false,
-              "nullable": true,
-              "default": null,
-              "creation_default": null,
-              "minimum": null,
-              "maximum": null,
-              "min_length": null,
-              "max_length": 64,
               "pattern": null,
               "description": null,
               "validator": null,
@@ -1258,23 +1238,23 @@
         }
       },
       {
-        "type": "model_config",
-        "label": "模型配置",
+        "type": "llm_model",
+        "label": "LLM模型",
         "debug_only": false,
         "evaluation_kind": "configuration",
         "can_start_without_inputs": false,
         "dynamic_inputs": null,
         "category": {
-          "id": "parameters",
-          "label": "参数"
+          "id": "llm",
+          "label": "语言模型"
         },
         "input_ports": [
-          "connection",
+          "llm_connection",
           "model_name",
           "additional_parameters"
         ],
         "output_ports": [
-          "model"
+          "llm_model"
         ],
         "terminal": false,
         "is_source": false,
@@ -1282,7 +1262,192 @@
         "max_instances": null,
         "required_inbound": 1,
         "required_input_ports": [
-          "connection"
+          "llm_connection"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "model_name",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "model_name",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "additional_parameters",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "additional_parameters",
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr_service",
+        "label": "ASR服务",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "asr_connection"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": {
+          "inline_connection_input": {
+            "provider_type": "asr_service",
+            "label": "ASR服务",
+            "base_url_key": "endpoint",
+            "timeout_key": null,
+            "region_key": null,
+            "credential_ref_key": "credential_ref",
+            "service_family": "asr",
+            "fixed_protocol": null,
+            "protocol_key": "protocol"
+          }
+        },
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "endpoint",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 2048,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "credential_ref",
+              "type": "string",
+              "required": false,
+              "nullable": true,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "protocol",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "qwen_filetrans",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "qwen_filetrans",
+                  "label": "Qwen Filetrans"
+                },
+                {
+                  "value": "qwen_streaming",
+                  "label": "Qwen Streaming"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr_model",
+        "label": "ASR模型",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "asr_connection",
+          "model_name",
+          "additional_parameters"
+        ],
+        "output_ports": [
+          "asr_model"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "asr_connection"
         ],
         "removable": true,
         "presentation": null,
@@ -1435,8 +1600,7 @@
         },
         "input_ports": [
           "audio",
-          "model",
-          "context",
+          "asr_model",
           "asr_options"
         ],
         "output_ports": [
@@ -1449,7 +1613,7 @@
         "required_inbound": 2,
         "required_input_ports": [
           "audio",
-          "model"
+          "asr_model"
         ],
         "removable": true,
         "presentation": null,
@@ -1471,8 +1635,7 @@
         },
         "input_ports": [
           "audio",
-          "model",
-          "context",
+          "asr_model",
           "asr_options"
         ],
         "output_ports": [
@@ -1485,7 +1648,7 @@
         "required_inbound": 2,
         "required_input_ports": [
           "audio",
-          "model"
+          "asr_model"
         ],
         "removable": true,
         "presentation": null,
@@ -1507,7 +1670,7 @@
         },
         "input_ports": [
           "transcript",
-          "model",
+          "llm_model",
           "context",
           "translation_options"
         ],
@@ -1518,17 +1681,37 @@
         "is_source": false,
         "is_parameter_source": false,
         "max_instances": null,
-        "required_inbound": 3,
+        "required_inbound": 2,
         "required_input_ports": [
           "transcript",
-          "model",
-          "context"
+          "llm_model"
         ],
         "removable": true,
         "presentation": null,
         "config": {
-          "kind": "none",
-          "fields": []
+          "kind": "object",
+          "fields": [
+            {
+              "key": "context",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "context",
+              "input_type_id": null,
+              "widget": "multiline",
+              "options": []
+            }
+          ]
         }
       },
       {

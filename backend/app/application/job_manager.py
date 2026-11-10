@@ -260,6 +260,7 @@ class JobManager:
                                     nodes[record.node_id],
                                     CheckpointDescriptor.model_validate(original.checkpoint),
                                     event,
+                                    available_outputs=reuse.available_outputs,
                                 )
                                 record.checkpoint = descriptor.model_dump(mode="json")
                                 record.status = WorkflowNodeStatus.COMPLETED

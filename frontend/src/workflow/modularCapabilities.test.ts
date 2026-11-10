@@ -1,3 +1,4 @@
+import { setLocale } from '../i18n'
 import { describe, expect, it } from 'vitest'
 import catalog from './modularCapabilities.fixture.json'
 import { readCapabilities } from './capabilities'
@@ -12,26 +13,26 @@ describe('modular capability declarations', () => {
     const capabilities = readCapabilities(fixture())
     const registry = createNodeRegistry(capabilities)
     expect(registry.kind('text_join')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: true, isParameterSource: false, requiredInputPorts: [] })
-    expect(registry.kind('model_config')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: false, requiredInputPorts: ['connection'] })
-    expect(registry.kind('service_connection')!.inlineConnectionInput!.timeoutKey).toBeNull()
+    expect(registry.kind('llm_model')).toMatchObject({ evaluationKind: 'configuration', canStartWithoutInputs: false, requiredInputPorts: ['llm_connection'] })
+    expect(registry.kind('llm_service')!.inlineConnectionInput!.timeoutKey).toBeNull()
     expect(registry.portsCompatible('string', 'context')).toBe(true)
     expect(registry.portsCompatible('json', 'additional_parameters')).toBe(true)
-    expect(registry.portsCompatible('connection', 'model')).toBe(false)
-    expect(registry.portsCompatible('model', 'model')).toBe(true)
-    expect(registry.kind('llm_translate')).toMatchObject({ evaluationKind: 'processing', fields: [] })
+    expect(registry.portsCompatible('asr_connection', 'llm_model')).toBe(false)
+    expect(registry.portsCompatible('llm_model', 'llm_model')).toBe(true)
+    expect(registry.kind('llm_translate')).toMatchObject({ evaluationKind: 'processing', fields: [expect.objectContaining({ key: 'context', inputPort: 'context', widget: 'multiline' })] })
     expect(registry.kind('qwen_asr')!.fields).toEqual([])
     expect(registry.kind('qwen_asr_streaming')!.fields).toEqual([])
     const field = registry.kind('string_value')!.fields[0]!
     expect(field.widget).toBe('multiline')
-    expect(workflowFieldHeight(field)).toBe(152)
+    expect(workflowFieldHeight(field)).toBe(124)
     expect(registry.kind('text_join')!.dynamicInputs!.field.widget).toBe('multiline')
   })
-  it.each(['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15', '1.16'])('rejects old catalog %s instead of inferring a new configuration graph', version => {
+  it.each(['1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '1.13', '1.14', '1.15', '1.16', '1.17'])('rejects old catalog %s instead of inferring a new configuration graph', version => {
     const value = fixture(); value.workflow.schema_version = version
     expect(() => readCapabilities(value)).toThrow('workflow.schema_version')
   })
   it.each(['missing evaluation', 'unknown evaluation', 'missing start', 'invalid start', 'processing root', 'missing widget', 'unknown widget', 'numeric multiline', 'language multiline', 'missing binding type', 'json binding missing', 'json binding wrong', 'bad color', 'missing color'])('rejects inconsistent modular metadata: %s', mutation => {
-    const value = fixture(); const processor = owner(value, 'llm_translate'); const context = owner(value, 'model_config'); const string = owner(value, 'string_value').config.fields[0]; const glossary = context.config.fields.find((field: any) => field.key === 'additional_parameters')
+    const value = fixture(); const processor = owner(value, 'llm_translate'); const context = owner(value, 'llm_model'); const string = owner(value, 'string_value').config.fields[0]; const glossary = context.config.fields.find((field: any) => field.key === 'additional_parameters')
     if (mutation === 'missing evaluation') delete processor.evaluation_kind
     if (mutation === 'unknown evaluation') processor.evaluation_kind = 'agent'
     if (mutation === 'missing start') delete processor.can_start_without_inputs
@@ -49,8 +50,8 @@ describe('modular capability declarations', () => {
     expect(() => readCapabilities(value)).toThrow()
   })
   it('preserves presentation colors declared by an extension type without interpreting its ID', () => {
-    const value = fixture(); value.workflow.data_types.find((type: any) => type.id === 'model_binding').presentation = { color: '#Ab34Ef' }
-    expect(readCapabilities(value).dataTypes.find(type => type.id === 'model_binding')!.presentation).toEqual({ color: '#Ab34Ef' })
+    const value = fixture(); value.workflow.data_types.find((type: any) => type.id === 'llm_model').presentation = { color: '#Ab34Ef' }
+    expect(readCapabilities(value).dataTypes.find(type => type.id === 'llm_model')!.presentation).toEqual({ color: '#Ab34Ef' })
   })
   it('rejects old settings documents instead of applying their node defaults to the new catalog', () => {
     expect(() => readSettings({ schema_version: '1.0', revision: 0, global_fields: [], global: {}, node_defaults: {} })).toThrow()
@@ -86,10 +87,10 @@ it.each(['missing defaults', 'duplicate id', 'invalid id', 'too many', 'bad valu
   expect(() => readCapabilities(value)).toThrow()
 })
 it('validates nullable fields independently from connection presentation', () => {
-  const value = fixture(); const service = owner(value, 'service_connection'); service.presentation = {}
+  const value = fixture(); const service = owner(value, 'llm_service'); service.presentation = {}; service.config.fields.push({ ...service.config.fields.find((field: any) => field.key === 'endpoint'), key: 'region', default: null, nullable: true })
   const registry = createNodeRegistry(readCapabilities(value))
-  expect(registry.validateConfig('service_connection', { protocol: 'openai_chat', endpoint: 'www.qq.com', region: null })).toEqual([])
-  expect(registry.validateConfig('service_connection', { protocol: null, endpoint: '' })).not.toEqual([])
+  expect(registry.validateConfig('llm_service', { endpoint: 'www.qq.com', region: null })).toEqual([])
+  expect(registry.validateConfig('llm_service', { endpoint: null })).not.toEqual([])
 })
 
 it('accepts 32 ordered string inputs and rejects invalid slot identity, shape and count', () => {
@@ -103,13 +104,25 @@ it('accepts 32 ordered string inputs and rejects invalid slot identity, shape an
 })
 
 it('counts nullable string bounds in Unicode code points consistently with the backend', () => {
-  const value = fixture(); const service = owner(value, 'service_connection')
-  const region = service.config.fields.find((field: any) => field.key === 'region')
+  const value = fixture(); const service = owner(value, 'llm_service')
+  const region = { ...service.config.fields.find((field: any) => field.key === 'endpoint'), key: 'region', nullable: true, default: null }; service.config.fields.push(region)
   region.min_length = 1; region.max_length = 1
   const registry = createNodeRegistry(readCapabilities(value))
-  const config = { protocol: 'openai_chat', endpoint: '', region: '𠮷' }
-  expect(registry.validateConfig('service_connection', config)).toEqual([])
-  expect(registry.validateConfig('service_connection', { ...config, region: '𠮷𠮷' })).toMatchObject([{ field: 'region', code: 'INVALID_NODE_CONFIG' }])
-  expect(registry.validateConfig('service_connection', { ...config, region: '' })).toMatchObject([{ field: 'region', code: 'INVALID_NODE_CONFIG' }])
-  expect(registry.validateConfig('service_connection', { ...config, region: null })).toEqual([])
+  const config = { endpoint: '', region: '𠮷' }
+  expect(registry.validateConfig('llm_service', config)).toEqual([])
+  expect(registry.validateConfig('llm_service', { ...config, region: '𠮷𠮷' })).toMatchObject([{ field: 'region', code: 'INVALID_NODE_CONFIG' }])
+  expect(registry.validateConfig('llm_service', { ...config, region: '' })).toMatchObject([{ field: 'region', code: 'INVALID_NODE_CONFIG' }])
+  expect(registry.validateConfig('llm_service', { ...config, region: null })).toEqual([])
+})
+
+it('localizes default family port labels while retaining explicitly named extension ports', () => {
+  const registry = createNodeRegistry(readCapabilities(fixture()))
+  try {
+    setLocale('zh-CN')
+    expect(['llm_model', 'asr_model', 'llm_connection', 'asr_connection'].map(id => registry.port(id)!.label)).toEqual(['LLM 模型', 'ASR 模型', 'LLM 服务', 'ASR 服务'])
+    setLocale('en')
+    expect(['llm_model', 'asr_model', 'llm_connection', 'asr_connection'].map(id => registry.port(id)!.label)).toEqual(['LLM model', 'ASR model', 'LLM service', 'ASR service'])
+    const value = fixture(); value.workflow.ports.find((port: any) => port.id === 'llm_model').label = 'Custom deployment model'
+    expect(createNodeRegistry(readCapabilities(value)).port('llm_model')!.label).toBe('Custom deployment model')
+  } finally { setLocale('zh-CN') }
 })

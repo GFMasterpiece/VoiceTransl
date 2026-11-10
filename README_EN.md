@@ -8,7 +8,7 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 
 ## Current Features
 
-- LLM translation uses a Chat Completions compatible API. Separate connection, model, and execution-option nodes provide reusable settings. Context is a plain string: join multiple editable or wired inputs for languages, instructions, background, and terminology. Preview, export, and chained translation consume immediate upstream current text while preserving originals and timing. See [translation behavior](docs/translation_providers.md).
+- LLM translation uses a Chat Completions compatible API. LLM service, LLM model, and execution-option nodes provide reusable settings. Enter context directly in the translation node, or connect a string/join to the socket beside its editor; connected editors hide and retain their manual fallback. Preview, export, and chained translation consume immediate upstream current text while preserving originals and timing. See [translation behavior](docs/translation_providers.md).
 
 - Simplified Chinese / English interface switching, browser language detection, and saved preferences. Switching preserves form values, node upload state, and workflow drafts.
 - Paginated projects and name-only empty project creation. Select or upload audio and provide its source language in the audio input node; failed uploads can be retried and do not start a run.
@@ -18,7 +18,7 @@ VoiceTransl is building a visual audio workflow with ComfyUI-style node connecti
 - An Edit menu and node context menu with undo/redo, multi-selection and group dragging, copy/cut/paste, and workflow JSON import/export. Cuts can be undone in one step; audio files and run history remain separate.
 - A default `audio_input -> audio_output` graph that copies the original bytes into a separate output without transcoding. Processing nodes are optional.
 - Debug mode exposes Mock preprocessing and Mock ASR, which produces fixed examples. Text outputs support TXT/SRT/VTT/LRC exports.
-- Qwen Filetrans uploads and transcribes audio with real timestamps. Explicit model, connection, optional string-context, and option inputs can be shared across consumers. Keys belong to connection owners, are encrypted separately, and are frozen by version. No Profile or environment fallback. See [node connections](docs/node_connections.md).
+- Qwen Filetrans uploads and transcribes audio with real timestamps. Explicit ASR service, ASR model, and option inputs can be shared across ASR consumers. ASR has no context input; LLM and ASR ports cannot be mixed. Keys belong to connection owners, are encrypted separately, and are frozen by version. No Profile or environment fallback. See [node connections](docs/node_connections.md).
 - Qwen Streaming sends existing PCM16 mono WAV files over WebSocket at their real sample rate. It consumes separate reusable model/connection inputs and publishes final text for preview/export. Copying a connection clears its key. No transcoding, microphone capture, or live-caption UI.
 - Multiline text, integer, number, boolean, and JSON values; ordered text joining and explicit top-level JSON merging. Backend-declared typed fields preserve manual fallbacks and record effective values. String joins support adding, removing, and reordering inputs with stable port IDs. Models and execution options remain reusable nodes.
 - Per-audio runs, cancellation, history, and safe artifact downloads. Runs always use their submitted graph snapshots.
@@ -28,7 +28,7 @@ Select a finished historical run, then right-click a node to rerun it and its de
 
 Other cloud protocols, local models, video processing, whole-batch node reruns, automatic cache scheduling, and history cleanup are not implemented. [Product goals](docs/product_requirements.md) and [planned work](docs/roadmap.md) are not available features.
 
-Graphs, runs, batches, and default settings now use schema 3.0 with capability catalog 1.17. Old graphs, runs, and templates are not loaded or migrated; existing project audio remains usable. See the [plain-text context contract](spec/plain-text-context.md).
+Graphs, runs, batches, and default settings now use schema 4.0 with capability catalog 1.18. Old graphs, runs, and templates are not loaded or migrated; existing project audio remains usable. See the [service families and field inputs contract](spec/service-families-field-inputs.md).
 
 ## Development Requirements
 
@@ -121,4 +121,4 @@ Web CI is configured for backend tests and Ruff on Linux/Windows, plus frontend 
 
 This project historically derives from [shinnpuru/VoiceTransl](https://github.com/shinnpuru/VoiceTransl) and [GalTransl](https://github.com/xd2333/GalTransl). Thanks to [shinnpuru](https://github.com/shinnpuru), [MurthiNext](https://github.com/MurthiNext), and other original contributors. Earlier implementations remain traceable through Git history; the current Web version does not promise the upstream desktop features.
 
-The project retains the [GNU GPLv3](LICENSE). Respect the license, media copyright, and applicable laws. The license text is unchanged.
+The project retains the [GNU GPLv4](LICENSE). Respect the license, media copyright, and applicable laws. The license text is unchanged.

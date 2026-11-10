@@ -38,7 +38,7 @@ from .node_registry import (
 )
 from .schema import require_schema_version
 
-WORKFLOW_SCHEMA_VERSION = "3.0"
+WORKFLOW_SCHEMA_VERSION = "4.0"
 MAX_WORKFLOW_NODES = 64
 MAX_WORKFLOW_EDGES = 64
 # Graph-level limits are shared with the capabilities API so clients can render

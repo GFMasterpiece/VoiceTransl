@@ -31,7 +31,7 @@ class WebSocketHarness:
         path = f"/api/v1/projects/{self.project_id}{resource}/events"
         scope = {
             "type": "websocket",
-            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "asgi": {"version": "4.0", "spec_version": "2.3"},
             "http_version": "1.1",
             "scheme": "ws",
             "path": path,

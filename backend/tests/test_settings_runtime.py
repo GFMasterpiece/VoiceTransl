@@ -64,13 +64,13 @@ def test_default_materialization_is_explicit_new_and_uses_registry(monkeypatch):
     def operation(store, method, *args, **kwargs):
         calls.append((method, args, kwargs))
         if method == "read_default":
-            assert args == ("service_connection", "service_connection", "opaque-token")
+            assert args == ("asr_service", "asr_service", "opaque-token")
             return "secret-key"
         if method == "create":
             return "ref-" + args[1]
 
     monkeypatch.setattr(module, "credential_operation", operation)
-    nodes = [WorkflowNode(id=name, type="service_connection", config={}) for name in ["a", "b"]]
+    nodes = [WorkflowNode(id=name, type="asr_service", config={}) for name in ["a", "b"]]
     updates = [
         SimpleNamespace(
             node_id=n.id, operation="use_default", default_credential_version="opaque-token"
@@ -106,10 +106,8 @@ async def test_default_api_replay_rotation_type_ownership_and_existing_node(tmp_
 
     app = create_app(tmp_path)
     secrets = SecretStore(tmp_path)
-    token = secrets.create_default(
-        "service_connection", "service_connection", "old-key", request_id="old"
-    )
-    secrets.create_default("service_connection", "service_connection", "new-key", request_id="new")
+    token = secrets.create_default("asr_service", "asr_service", "old-key", request_id="old")
+    secrets.create_default("asr_service", "asr_service", "new-key", request_id="new")
     wrong = secrets.create_default(
         "other_connection", "other_connection", "wrong-key", request_id="other"
     )
@@ -135,7 +133,7 @@ async def test_default_api_replay_rotation_type_ownership_and_existing_node(tmp_
         ref = next(n for n in saved["nodes"] if n["id"] == "cloud_connection")["config"][
             "credential_ref"
         ]
-        assert secrets.read(pid, "cloud_connection", "service_connection", ref) == "old-key"
+        assert secrets.read(pid, "cloud_connection", "asr_service", ref) == "old-key"
         replay = await client.put(url, json=body)
         assert replay.status_code == 200, replay.text
         assert replay.json() == saved

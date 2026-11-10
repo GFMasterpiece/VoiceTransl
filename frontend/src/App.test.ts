@@ -20,14 +20,14 @@ const response = (payload: unknown, status = 200) => ({ ok: status >= 200 && sta
 async function settle() { for (let phase = 0; phase < 3; phase++) { for (let i = 0; i < 8; i++) await Promise.resolve(); await nextTick() } }
 
 async function mount(openCreate = true) {
-  const capabilities = catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.17", nodes: [
+  const capabilities = catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.18", nodes: [
     nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
     nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [fieldFixture({ key: 'filename_stem', type: 'string', default: 'audio-copy' })] } }),
   ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {
     nodes: [{ id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } }, { id: 'output', type: 'audio_output', config: { filename_stem: 'audio-copy' }, position: { x: 420, y: 120 } }],
     edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
   } }, asr: { providers: [{ id: 'mock', label: 'Mock' }], status: 'available' } })
-  const workflowDocument = { schema_version: "3.0", project_id: project.id, revision: 1, workflow_revision: 1, updated_at: '2026-01-01', ...capabilities.workflow.default_graph }
+  const workflowDocument = { schema_version: "4.0", project_id: project.id, revision: 1, workflow_revision: 1, updated_at: '2026-01-01', ...capabilities.workflow.default_graph }
   const fetcher = vi.fn((request: RequestInfo | URL, init?: RequestInit) => {
     const path = String(request)
     if (path.endsWith('/projects/empty') && init?.method === 'POST') return Promise.resolve(response({ project: emptyProject, job: null }, 201))
@@ -274,7 +274,7 @@ describe('workflow navigation guards', () => {
   async function mountWorkflow() {
     const firstAudio = { id: 'aud_primary', source: project.source }
     const secondAudio = { id: 'aud_second', source: { ...project.source, original_name: 'second.wav' } }
-    const capabilities = catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.17", nodes: [
+    const capabilities = catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.18", nodes: [
       nodeFixture({ type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 }),
       nodeFixture({ type: 'audio_output', label: '音频输出', id_prefix: 'output', input_ports: ['audio'], output_ports: [], terminal: true, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [fieldFixture({ key: 'filename_stem', type: 'string', default: 'audio-copy' })] }, position_x: 420 }),
     ], ports: ['audio'], constraints: { max_nodes: 64, max_edges: 64, min_sources: 1, max_sources: 1, min_terminals: 1 }, default_graph: {
@@ -282,7 +282,7 @@ describe('workflow navigation guards', () => {
       edges: [{ id: 'input-output', source: 'input', source_port: 'audio', target: 'output', target_port: 'audio' }],
     } }, asr: { providers: [{ id: 'mock', label: 'Mock' }] }, export: { formats: [], naming_modes: [] } })
     const workflowDocument = {
-      schema_version: "3.0", project_id: project.id, revision: 1, workflow_revision: 1,
+      schema_version: "4.0", project_id: project.id, revision: 1, workflow_revision: 1,
       updated_at: '2026-01-01T00:00:00Z',
       nodes: [
         { id: 'input', type: 'audio_input', config: {}, position: { x: 80, y: 120 } },
@@ -776,8 +776,8 @@ describe('batch dialog navigation', () => {
 })
 
 
-it.each(['1.17'])('retries failed home capabilities and opens settings without reloading projects or graphs (%s)', async (version) => {
-  const capabilities = readCapabilities(catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.17", nodes: [nodeFixture({ type: 'extension', label: 'Extension', input_ports: [], output_ports: [], config: { kind: 'none', fields: [] } })], ports: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } }))
+it.each(['1.18'])('retries failed home capabilities and opens settings without reloading projects or graphs (%s)', async (version) => {
+  const capabilities = readCapabilities(catalogFixture({ schema_version: '1.0', workflow: { schema_version: "1.18", nodes: [nodeFixture({ type: 'extension', label: 'Extension', input_ports: [], output_ports: [], config: { kind: 'none', fields: [] } })], ports: [], constraints: { max_nodes: 64, max_edges: 64, min_sources: 0, max_sources: 1, min_terminals: 0 }, default_graph: { nodes: [], edges: [] } }, asr: { providers: [] }, export: { formats: [], naming_modes: [] } }))
   capabilities.schemaVersion = version
   const capabilitiesRequest = vi.spyOn(capabilitiesApi, 'fetchCapabilities').mockRejectedValueOnce(new TypeError('offline')).mockResolvedValue(capabilities)
   const { fetcher } = await mount(false)
@@ -788,7 +788,7 @@ it.each(['1.17'])('retries failed home capabilities and opens settings without r
   expect(capabilitiesRequest).toHaveBeenCalledTimes(2)
   expect(root!.querySelector('[data-settings-retry]')).toBeNull()
   expect(root!.querySelector('.locale-picker')).toBeNull()
-  fetcher.mockImplementation((path) => Promise.resolve(response(String(path).endsWith('/settings') ? { schema_version: "3.0", revision: 1, global_fields: [], global: {}, node_defaults: {} } : { items: [] })))
+  fetcher.mockImplementation((path) => Promise.resolve(response(String(path).endsWith('/settings') ? { schema_version: "4.0", revision: 1, global_fields: [], global: {}, node_defaults: {} } : { items: [] })))
   root!.querySelector<HTMLButtonElement>('[data-global-settings]')!.click()
   await settle()
   expect(root!.querySelector('.global-settings-dialog [role="dialog"]')).not.toBeNull()

@@ -334,7 +334,8 @@ def _inline_connection_binding(definition):
     if (
         not isinstance(binding, dict)
         or not required <= set(binding)
-        or set(binding) - (required | {"data_handling"})
+        or set(binding)
+        - (required | {"data_handling", "service_family", "fixed_protocol", "protocol_key"})
     ):
         raise ValueError("invalid inline connection declaration")
     if any(
@@ -364,6 +365,24 @@ def _inline_connection_binding(definition):
         if item is None or item.type != expected or item.input_port is not None:
             raise ValueError("inline connection fields cannot be connected parameters")
     result = dict(binding)
+    if "service_family" in binding:
+        from .configuration import SERVICE_PROTOCOLS, protocol_family
+
+        family = binding["service_family"]
+        fixed = binding.get("fixed_protocol")
+        protocol_key = binding.get("protocol_key")
+        if family not in {"llm", "asr"} or (fixed is None) == (protocol_key is None):
+            raise ValueError("invalid service family declaration")
+        if fixed is not None and (
+            fixed not in SERVICE_PROTOCOLS or protocol_family(fixed) != family
+        ):
+            raise ValueError("invalid fixed service protocol")
+        if protocol_key is not None and (
+            protocol_key not in fields
+            or fields[protocol_key].type != "select"
+            or fields[protocol_key].input_port is not None
+        ):
+            raise ValueError("invalid service protocol field")
     if "data_handling" in binding:
         handling = binding["data_handling"]
         if (

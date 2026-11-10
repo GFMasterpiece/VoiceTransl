@@ -7,12 +7,12 @@ import { settingsCache, readSettings, loadSettings, saveSettings } from './compo
 import { readCapabilities } from './workflow/capabilities'
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response
 function setup() {
-  const caps = readCapabilities(catalogFixture({ schema_version:'1.0', workflow:{ schema_version:"1.17", nodes:[nodeFixture({type:'extension',label:'Extension',input_ports:[],output_ports:[],config:{kind:'extension',fields:[fieldFixture({key:'model',type:'string',default:'original'}),fieldFixture({key:'credential_ref',type:'string',default:null})]}})],ports:[],constraints:{max_nodes:64,max_edges:64,min_sources:0,max_sources:1,min_terminals:0},default_graph:{nodes:[],edges:[]}}, asr:{providers:[]},export:{formats:[],naming_modes:[]} }))
-  caps.schemaVersion='1.17'
+  const caps = readCapabilities(catalogFixture({ schema_version:'1.0', workflow:{ schema_version:"1.18", nodes:[nodeFixture({type:'extension',label:'Extension',input_ports:[],output_ports:[],config:{kind:'extension',fields:[fieldFixture({key:'model',type:'string',default:'original'}),fieldFixture({key:'credential_ref',type:'string',default:null})]}})],ports:[],constraints:{max_nodes:64,max_edges:64,min_sources:0,max_sources:1,min_terminals:0},default_graph:{nodes:[],edges:[]}}, asr:{providers:[]},export:{formats:[],naming_modes:[]} }))
+  caps.schemaVersion='1.18'
   caps.nodes[0]!.inlineConnectionInput={baseUrlKey:'endpoint',timeoutKey:'timeout',regionKey:null,credentialRefKey:'credential_ref',providerType:'extension',label:'Extension'}
   const store=useWorkflowStore();store.capabilities=caps;store.beginDraftEditing();store.projectId='p1'
-  store.document={schema_version:"3.0",project_id:'p1',revision:1,workflow_revision:1,updated_at:'',nodes:[],edges:[]};store.setCleanBaseline(store.document)
-  settingsCache.value={schema_version:"3.0",revision:1,global_fields:[],global:{upload_concurrency:3,max_concurrent:1},node_defaults:{extension:{label:'Extension',fields:[],config:{model:'future-model'},credential_configured:true,credential_version:'frozen-token'}}}
+  store.document={schema_version:"4.0",project_id:'p1',revision:1,workflow_revision:1,updated_at:'',nodes:[],edges:[]};store.setCleanBaseline(store.document)
+  settingsCache.value={schema_version:"4.0",revision:1,global_fields:[],global:{upload_concurrency:3,max_concurrent:1},node_defaults:{extension:{label:'Extension',fields:[],config:{model:'future-model'},credential_configured:true,credential_version:'frozen-token'}}}
   return {store,credentials:workflowCredentials(store.credentialContext)}
 }
 beforeEach(()=>setActivePinia(createPinia()))
@@ -50,7 +50,7 @@ describe('global node creation defaults',()=>{
     credentials.clear(id);store.redo();expect(credentials.updates()).toEqual([{node_id:id,operation:'clear'}]);store.undo();store.undo();store.redo();expect(credentials.updates()).toEqual([])
   })
   it('rejects malformed settings metadata without replacing the cache',async()=>{
-    setup();vi.stubGlobal('fetch',vi.fn(async()=>response({schema_version:"3.0",revision:2,global_fields:[fieldFixture({key:'upload_concurrency',type:'integer',input_port:null})],global:{},node_defaults:{}})))
+    setup();vi.stubGlobal('fetch',vi.fn(async()=>response({schema_version:"4.0",revision:2,global_fields:[fieldFixture({key:'upload_concurrency',type:'integer',input_port:null})],global:{},node_defaults:{}})))
     await expect(loadSettings()).rejects.toThrow();expect(settingsCache.value).toBeNull()
     expect(()=>readSettings({schema_version:'2.0'})).toThrow()
   })
@@ -60,7 +60,7 @@ describe('global node creation defaults',()=>{
 it('ignores an old GET after a newer GET and settings save when creating nodes', async () => {
   const { store, credentials } = setup()
   const raw = (model: string, token: string, revision: number) => ({
-    schema_version: "3.0", revision, global_fields: [], global: {},
+    schema_version: "4.0", revision, global_fields: [], global: {},
     node_defaults: { extension: { label: 'Extension', fields: [fieldFixture({ key: 'model', type: 'string', default: '', input_port: null, suggestion_source: null })], config: { model }, credential_configured: true, credential_version: token } },
   })
   let resolveOld!: (response: Response) => void
@@ -82,7 +82,7 @@ it('ignores an old GET after a newer GET and settings save when creating nodes',
 })
 
 
-it.each(['1.17'])('keeps global creation defaults active for the rerun-capable catalog %s', version => {
+it.each(['1.18'])('keeps global creation defaults active for the rerun-capable catalog %s', version => {
   const { store, credentials } = setup(); store.capabilities!.schemaVersion = version
   store.addNode('extension')
   expect(store.selectedNode!.config.model).toBe('future-model')

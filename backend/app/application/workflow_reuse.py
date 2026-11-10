@@ -176,6 +176,7 @@ class PreparedReuse:
     plan: ReusePlan
     source: object
     source_identity: dict
+    available_outputs: object = None
 
     def metadata(self, request):
         return WorkflowRerun(
@@ -315,7 +316,12 @@ async def prepare_reuse(store, project_id, audio_id, snapshot, request):
                     node_id,
                 )
             result = await load_checkpoint(
-                store, source, node, CheckpointDescriptor.model_validate(record.checkpoint), event
+                store,
+                source,
+                node,
+                CheckpointDescriptor.model_validate(record.checkpoint),
+                event,
+                available_outputs=outputs,
             )
             outputs[node_id] = result.outputs
             checkpoints[node_id] = record.checkpoint
@@ -323,4 +329,6 @@ async def prepare_reuse(store, project_id, audio_id, snapshot, request):
             raise
         except Exception:
             reject(plan, "RERUN_CHECKPOINT_INVALID", "上游结果缺失、损坏或不支持复用", node_id)
-    return PreparedReuse(plan, source, identity)
+    from ..domain.node_execution import readonly_outputs
+
+    return PreparedReuse(plan, source, identity, readonly_outputs(outputs))

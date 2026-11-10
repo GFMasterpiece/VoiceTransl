@@ -36,22 +36,23 @@ async def test_qwen_default_fields_follow_declared_order_and_connection_roles(tm
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         settings = (await client.get("/api/v1/settings")).json()
         catalog = (await client.get("/api/v1/capabilities")).json()
-    assert catalog["workflow"]["schema_version"] == "1.17"
-    assert settings["schema_version"] == "3.0"
+    assert catalog["workflow"]["schema_version"] == "1.18"
+    assert settings["schema_version"] == "4.0"
     nodes = {node["type"]: node for node in catalog["workflow"]["nodes"]}
-    ordered = ["protocol", "endpoint", "region"]
-    fields = settings["node_defaults"]["service_connection"]["fields"]
+    ordered = ["endpoint", "protocol"]
+    fields = settings["node_defaults"]["asr_service"]["fields"]
     assert [field["key"] for field in fields] == ordered
-    binding = nodes["service_connection"]["presentation"]["inline_connection_input"]
+    binding = nodes["asr_service"]["presentation"]["inline_connection_input"]
     assert binding["timeout_key"] is None
     assert binding["credential_ref_key"] not in ordered
-    assert [field["key"] for field in settings["node_defaults"]["model_config"]["fields"]] == [
+    assert [field["key"] for field in settings["node_defaults"]["asr_model"]["fields"]] == [
         "model_name",
         "additional_parameters",
     ]
-    for node_type in ("qwen_asr", "qwen_asr_streaming", "llm_translate"):
+    for node_type in ("qwen_asr", "qwen_asr_streaming"):
         assert nodes[node_type]["config"]["fields"] == []
         assert node_type not in settings["node_defaults"]
+    assert settings["node_defaults"]["llm_translate"]["config"] == {"context": ""}
 
 
 @pytest.mark.asyncio
@@ -113,22 +114,22 @@ async def test_display_metadata_changes_preserve_saved_data_and_checkpoint_seman
             for path in tmp_path.rglob("*")
             if path.is_file()
         }
-        qwen = NODE_DEFINITIONS["model_config"]
+        qwen = NODE_DEFINITIONS["asr_model"]
         monkeypatch.setitem(
             NODE_DEFINITIONS,
-            "model_config",
+            "asr_model",
             replace(qwen, settings_default_fields=tuple(reversed(qwen.settings_default_fields))),
         )
         monkeypatch.setitem(
             NODE_DEFINITIONS, "asr", replace(NODE_DEFINITIONS["asr"], debug_only=False)
         )
         metadata = (await client.get("/api/v1/settings")).json()
-        assert [
-            field["key"] for field in metadata["node_defaults"]["model_config"]["fields"]
-        ] == list(reversed(qwen.settings_default_fields))
+        assert [field["key"] for field in metadata["node_defaults"]["asr_model"]["fields"]] == list(
+            reversed(qwen.settings_default_fields)
+        )
         assert (
-            metadata["node_defaults"]["model_config"]["config"]
-            == saved.json()["node_defaults"]["model_config"]["config"]
+            metadata["node_defaults"]["asr_model"]["config"]
+            == saved.json()["node_defaults"]["asr_model"]["config"]
         )
         assert (await client.get("/api/v1/capabilities")).status_code == 200
         plan = await client.post(

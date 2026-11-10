@@ -7,7 +7,7 @@ import { setLocale } from '../i18n'
 const livePayload = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: "1.17",
+    schema_version: "1.18",
     ports: [
       { id: 'audio', type_id: 'audio', label: '音频', capability_requirements: [] },
       { id: 'transcript', type_id: 'transcript', label: '转写结果', capability_requirements: [] },
@@ -42,7 +42,7 @@ const livePayload = catalogFixture({
 describe('capabilities parser', () => {
   function parameterCatalog(): any {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.17'
+    payload.workflow.schema_version = '1.18'
     for (const node of payload.workflow.nodes) {
       node.required_input_ports = [...node.input_ports]
       node.is_parameter_source = false
@@ -65,7 +65,7 @@ describe('capabilities parser', () => {
   it('reads extension categories without changing the graph and rejects old catalogs', () => {
     const value = parameterCatalog()
     const graph = JSON.stringify(value.workflow.default_graph)
-    value.workflow.schema_version = '1.17'
+    value.workflow.schema_version = '1.18'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[1].category = { id: 'plugin_tools', label: 'Plugin tools' }
     expect(readCapabilities(value).nodes[1]!.category).toEqual({ id: 'plugin_tools', label: 'Plugin tools' })
@@ -80,14 +80,14 @@ describe('capabilities parser', () => {
 
   it.each([undefined, false, [], {}, { id: 'Bad ID', label: 'Tools' }, { id: 'tools', label: '' }, { id: 'tools', label: ' padded ' },
     { id: 'tools', label: 'line\nbreak' }, { id: 'tools', label: 'x'.repeat(129) }, { id: 'tools', label: 'Tools', extra: true }])('rejects malformed 1.8 category %j', (category) => {
-    const value = parameterCatalog(); value.workflow.schema_version = '1.17'
+    const value = parameterCatalog(); value.workflow.schema_version = '1.18'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[0].category = category
     expect(() => readCapabilities(value)).toThrow()
   })
 
   it('rejects conflicting labels for one 1.8 category', () => {
-    const value = parameterCatalog(); value.workflow.schema_version = '1.17'
+    const value = parameterCatalog(); value.workflow.schema_version = '1.18'
     value.workflow.nodes.forEach((node: any) => { node.category = null })
     value.workflow.nodes[0].category = { id: 'tools', label: 'Tools' }
     value.workflow.nodes[1].category = { id: 'tools', label: 'Other tools' }
@@ -150,7 +150,7 @@ describe('capabilities parser', () => {
 
   it('reads named required inputs from a multi-port 1.4 catalog and rejects inconsistent declarations', () => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.17'
+    payload.workflow.schema_version = '1.18'
     for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
     for (const id of ['voice', 'background', 'reference', 'dry_audio', 'wet_audio']) {
       payload.workflow.ports.push({ id, type_id: 'audio', label: id, capability_requirements: [] })
@@ -186,7 +186,7 @@ describe('capabilities parser', () => {
 
   it.each([0, 1])('requires an explicit required-input array in a 1.4 catalog for node %s', (nodeIndex) => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.17'
+    payload.workflow.schema_version = '1.18'
     for (const node of payload.workflow.nodes) node.required_input_ports = [...node.input_ports]
     for (const invalid of [undefined, null, 'audio', {}, false]) {
       const broken = structuredClone(payload)
@@ -206,14 +206,14 @@ describe('capabilities parser', () => {
 
   it('reads resource and preview presentation metadata from the 1.3 catalog without node type branches', () => {
     const payload = structuredClone(livePayload) as any
-    payload.workflow.schema_version = '1.17'
+    payload.workflow.schema_version = '1.18'
     payload.workflow.nodes[0].config.fields = [fieldFixture({ key: 'resource_id', type: 'string', required: false, default: null })]
     payload.workflow.nodes[0].presentation = { resource_input: { resource_type: 'audio', config_key: 'resource_id', collection_key: null } }
     payload.workflow.nodes[2].presentation = { preview: { renderer: 'future_renderer' } }
     const registry = createNodeRegistry(readCapabilities(payload))
     expect(registry.kind('audio_input')?.resourceInput).toEqual({ resourceType: 'audio', configKey: 'resource_id', collectionKey: null })
     expect(registry.kind('audio_output')?.preview).toEqual({ renderer: 'future_renderer' })
-    expect(registry.capabilities.schemaVersion).toBe('1.17')
+    expect(registry.capabilities.schemaVersion).toBe('1.18')
     payload.workflow.nodes[0].presentation.resource_input.config_key = 'missing_field'
     expect(() => readCapabilities(payload)).toThrow()
   })
@@ -221,7 +221,7 @@ describe('capabilities parser', () => {
   it('accepts the live response shape and derives an editable registry', () => {
     const caps = readCapabilities(livePayload)
     const registry = createNodeRegistry(caps)
-    expect(caps.schemaVersion).toBe('1.17')
+    expect(caps.schemaVersion).toBe('1.18')
     expect(caps.nodeTypes).toEqual(['audio_input', 'asr', 'audio_output'])
     expect(caps.asr.providers.map((provider) => provider.value)).toEqual(['mock'])
     expect(registry.createDefaultConfig('asr')).toEqual({ provider: 'mock', language: 'ja' })
@@ -242,7 +242,7 @@ describe('capabilities parser', () => {
     const missing = structuredClone(livePayload) as Record<string, unknown>
     delete missing.schema_version
     expect(() => readCapabilities(missing)).toThrow('schema_version')
-    expect(() => readCapabilities({ ...livePayload, schema_version: '3.0' })).toThrow('schema_version')
+    expect(() => readCapabilities({ ...livePayload, schema_version: '4.0' })).toThrow('schema_version')
   })
 
   it('requires the current workflow capability schema and rejects legacy versions', () => {
@@ -361,7 +361,7 @@ describe('capabilities parser', () => {
 describe('resource collection capability schema 1.6', () => {
   function payload(): any {
     const value: any = structuredClone(livePayload)
-    value.workflow.schema_version = '1.17'
+    value.workflow.schema_version = '1.18'
     for (const node of value.workflow.nodes) {
       node.is_parameter_source = false
       node.required_input_ports = node.required_inbound ? node.input_ports : []

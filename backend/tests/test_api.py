@@ -34,7 +34,7 @@ async def test_upload_creates_new_default_audio_passthrough_workflow():
                 }
             ]
             assert project["audios"][0]["id"] == "aud_primary"
-            assert not (app.state.store.project_dir(project["id"]) / "workflow-v3.json").exists()
+            assert not (app.state.store.project_dir(project["id"]) / "workflow-v4.json").exists()
 
 
 @pytest.mark.asyncio

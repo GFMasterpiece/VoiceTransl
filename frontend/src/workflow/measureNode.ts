@@ -37,7 +37,7 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       const clone = body.cloneNode(true) as HTMLElement
       // Strip media URLs and accessibility identities BEFORE connecting the clone.
       for (const element of [clone, ...clone.querySelectorAll<HTMLElement>('*')]) {
-        for (const attr of ['src', 'srcset', 'poster', 'id', 'for', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-activedescendant']) element.removeAttribute(attr)
+        for (const attr of ['src', 'srcset', 'poster', 'id', 'for', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-activedescendant', 'data-field-port', 'data-port-id', 'data-port-direction']) element.removeAttribute(attr)
       }
       // Document/JSON bodies scroll inside bounded controls and do not define UI minima.
       clone.querySelectorAll('pre').forEach((element) => { element.textContent = '' })
@@ -56,4 +56,23 @@ export function measureNodeContent(group: SVGGElement, fallback: NodeContentMini
       fields, resource, preview, ...(fallback.bodyY === undefined ? {} : { bodyY: fallback.bodyY }),
     }
   } finally { host.remove() }
+}
+
+export interface PortAnchor { x: number; y: number }
+/** Measure only live sockets inside this SVG node; coordinates stay independent of pan and zoom. */
+export function measureFieldAnchors(group: SVGGElement): Record<string, PortAnchor> {
+  const anchors: Record<string, PortAnchor> = {}
+  if (typeof group.getScreenCTM !== 'function') return anchors
+  let inverse: DOMMatrix
+  try { const matrix = group.getScreenCTM(); if (!matrix) return anchors; inverse = matrix.inverse() } catch { return anchors }
+  for (const socket of group.querySelectorAll<HTMLElement>('.node-field-socket[data-field-port]')) {
+    const port = socket.dataset.fieldPort
+    const rect = socket.getBoundingClientRect()
+    if (!port || !rect.width || !rect.height) continue
+    const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
+    const localX = inverse.a * x + inverse.c * y + inverse.e
+    const localY = inverse.b * x + inverse.d * y + inverse.f
+    if (Number.isFinite(localX) && Number.isFinite(localY)) anchors[port] = { x: Math.round(localX * 1000) / 1000, y: Math.round(localY * 1000) / 1000 }
+  }
+  return anchors
 }

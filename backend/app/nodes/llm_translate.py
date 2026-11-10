@@ -2,30 +2,56 @@
 
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from ..domain.context_values import (
     TranslationOptions,
-    normalize_processor_config,
     optional_packet,
     validate_text,
 )
 from ..domain.node_categories import TRANSLATION
-from ..domain.node_contracts import NodeDefinition
+from ..domain.node_contracts import NodeDefinition, fields_from_model
 from ..domain.node_execution import NodeExecutionContext, NodeExecutionError, NodeResult
 
-normalize = normalize_processor_config
+
+class LLMTranslateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    context: str = Field(default="", json_schema_extra={"widget": "multiline"})
+
+    @field_validator("context")
+    @classmethod
+    def valid_context(cls, value):
+        return validate_text(value)
+
+
+def normalize(config):
+    return LLMTranslateConfig.model_validate(config).model_dump(mode="json")
+
+
+def validate_execution(config, connected_fields):
+    preferences = normalize(config)["context"]
+    if "context" not in connected_fields and not preferences.strip():
+        raise NodeExecutionError("LLM_CONTEXT_INVALID", "翻译上下文必须是非空字符串")
 
 
 def validate_inputs(context):
-    normalize(context.node.config)
+    optional_packet(context, "translation_options", TranslationOptions)
     if "context" in context.inputs:
-        value = context.input("context").value
+        preferences = context.input("context").value
         try:
-            validate_text(value)
-            if not value.strip():
+            validate_text(preferences)
+            if not preferences.strip():
                 raise ValueError
         except ValueError:
             raise NodeExecutionError("LLM_CONTEXT_INVALID", "翻译上下文必须是非空字符串") from None
-    optional_packet(context, "translation_options", TranslationOptions)
+    else:
+        edges = getattr(getattr(context.run, "workflow", None), "edges", ())
+        connected = any(
+            edge.target == context.node.id and edge.target_port == "context" for edge in edges
+        )
+        validate_execution(
+            context.node.config, frozenset({"context"}) if connected else frozenset()
+        )
 
 
 async def execute(context: NodeExecutionContext) -> NodeResult:
@@ -36,7 +62,11 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..domain.workflow import WorkflowArtifact
 
     validate_inputs(context)
-    preferences = context.input("context").value
+    preferences = (
+        context.input("context").value
+        if "context" in context.inputs
+        else normalize(context.node.config)["context"]
+    )
     options = optional_packet(context, "translation_options", TranslationOptions)
     upstream = context.input("transcript").value.transcript
     if not upstream.segments:
@@ -45,8 +75,8 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
         items, language = read_current_text(upstream)
     except ValueError:
         raise NodeExecutionError("LLM_TRANSLATION_INPUT_INVALID", "输入转写片段无效") from None
-    connection, model, parameters, api_key = resolve_model(
-        context, context.input("model").value, "translation", options.timeout_seconds
+    connection, model, parameters, api_key = await resolve_model(
+        context, context.input("llm_model").value, "translation", options.timeout_seconds
     )
     translated = await translate(
         items=items,
@@ -100,16 +130,19 @@ def definition():
         type="llm_translate",
         label="LLM翻译",
         category=TRANSLATION,
-        input_ports=("transcript", "model", "context", "translation_options"),
-        required_input_ports=("transcript", "model", "context"),
+        input_ports=("transcript", "llm_model", "context", "translation_options"),
+        required_input_ports=("transcript", "llm_model"),
         output_ports=("transcript",),
         terminal=False,
-        config_kind="none",
+        config_kind="object",
+        fields=fields_from_model(LLMTranslateConfig, input_ports={"context": "context"}),
+        settings_default_fields=("context",),
+        validate_execution_config=validate_execution,
         normalize_config=normalize,
         validate_config=normalize,
         execute=execute,
         validate_inputs=validate_inputs,
-        validation_input_ports=("model", "context", "translation_options"),
-        binding_inputs={"model": "translation"},
-        execution_version="3",
+        validation_input_ports=("llm_model", "context", "translation_options"),
+        binding_inputs={"llm_model": "translation"},
+        execution_version="4",
     )

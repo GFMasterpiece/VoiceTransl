@@ -25,18 +25,22 @@ export const WORKFLOW_NODE_PORT_Y = 45
 export const WORKFLOW_NODE_FIELDS_Y = 62
 export const WORKFLOW_NODE_PORT_ROW_HEIGHT = 24
 export const WORKFLOW_NODE_BODY_BOTTOM = 12
+export function workflowHeaderInputPorts(type: NodeType, registry: NodeRegistry, config: Record<string, unknown> = {}) {
+  const parameterPorts = new Set(registry.fieldsForNode(type, config).map(field => field.inputPort).filter(Boolean))
+  return registry.inputPortsForNode(type, config).filter(port => !parameterPorts.has(port))
+}
 export function workflowNodeFieldsY(type: NodeType, registry: NodeRegistry, config: Record<string, unknown> = {}): number {
-  const count = Math.max(registry.inputPortsForNode(type, config).length, registry.outputPortsForNode(type).length, 1)
+  const count = Math.max(workflowHeaderInputPorts(type, registry, config).length, registry.outputPortsForNode(type).length, 1)
   return WORKFLOW_NODE_FIELDS_Y + (count - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
 export function workflowPortY(type: NodeType, port: PortName, direction: 'input' | 'output', registry: NodeRegistry, config: Record<string, unknown> = {}): number | null {
-  const ports = direction === 'input' ? registry.inputPortsForNode(type, config) : registry.outputPortsForNode(type)
+  const ports = direction === 'input' ? workflowHeaderInputPorts(type, registry, config) : registry.outputPortsForNode(type)
   const index = ports.indexOf(port)
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
-export const WORKFLOW_NODE_FIELD_HEIGHT = 72
+export const WORKFLOW_NODE_FIELD_HEIGHT = 44
 export function workflowFieldHeight(field: { type: string; widget?: string | null }): number {
-  return field.type === 'json' || field.widget === 'multiline' ? 152 : WORKFLOW_NODE_FIELD_HEIGHT
+  return field.type === 'json' || field.widget === 'multiline' ? 124 : WORKFLOW_NODE_FIELD_HEIGHT
 }
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
@@ -48,7 +52,9 @@ export function workflowVisibleFields(node: { type: NodeType; id?: string; confi
     && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
 export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
-  return workflowVisibleFields({ type, id: nodeId, config }, registry, edges).reduce((height, field) => height + workflowFieldHeight(field), 0)
+  const kind = registry.kind(type)
+  return registry.fieldsForNode(type, config).filter(field => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey && !inlineConnectionKeys(kind).includes(field.key))
+    .reduce((height, field) => height + (field.inputPort && edges.some(edge => edge.target === nodeId && edge.target_port === field.inputPort) ? 32 : workflowFieldHeight(field)), 0)
 }
 export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
   const kind = registry.kind(type)
@@ -295,7 +301,7 @@ export function resolveArtifactUrl(
 
 function readWorkflow(value: unknown): WorkflowDocument {
   const document = value as WorkflowDocument
-  if (!document || typeof document !== 'object' || document.schema_version !== '3.0'
+  if (!document || typeof document !== 'object' || document.schema_version !== '4.0'
     || typeof document.project_id !== 'string' || !Number.isInteger(document.revision)
     || !Number.isInteger(document.workflow_revision) || !Array.isArray(document.nodes)
     || !Array.isArray(document.edges)) {
@@ -320,7 +326,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
 
 function readRun(value: unknown): WorkflowRun {
   const run = value as WorkflowRun
-  if (!run || run.schema_version !== '3.0' || run.workflow?.schema_version !== '3.0' || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
+  if (!run || run.schema_version !== '4.0' || run.workflow?.schema_version !== '4.0' || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
     || (run.batch_item_sequence != null && (!Number.isInteger(run.batch_item_sequence) || run.batch_item_sequence < 1))
     || (run.batch_id != null && (typeof run.batch_id !== 'string' || !run.batch_id))
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
@@ -800,7 +806,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (['1.17'].includes(capabilities.value.schemaVersion)) await loadSettings()
+      if (['1.18'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
@@ -1165,7 +1171,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (['1.17'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.18'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1183,14 +1189,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.17'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.18'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = ['1.17'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.18'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }

@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..domain.checkpoint import CheckpointDescriptor, CheckpointUnavailable
-from ..domain.node_execution import NodeData, NodeResult
+from ..domain.node_execution import NodeData, NodeResult, readonly_outputs
 from ..domain.node_registry import (
     NODE_DEFINITIONS,
     PORT_DEFINITIONS,
@@ -337,9 +337,10 @@ async def _decode(context, document):
     return result
 
 
-async def load_checkpoint(store, run, node, descriptor, cancel_event):
+async def load_checkpoint(store, run, node, descriptor, cancel_event, *, available_outputs=None):
     try:
         context, document = await _read_document(store, run, node, descriptor, cancel_event)
+        context.available_outputs = readonly_outputs(available_outputs or {})
         return await _decode(context, document)
     except (OSError, ValueError, KeyError, TypeError) as error:
         if isinstance(error, CheckpointUnavailable):
@@ -347,12 +348,16 @@ async def load_checkpoint(store, run, node, descriptor, cancel_event):
         raise CheckpointUnavailable() from None
 
 
-async def copy_checkpoint(store, source_run, target_run, node, descriptor, cancel_event):
+async def copy_checkpoint(
+    store, source_run, target_run, node, descriptor, cancel_event, *, available_outputs=None
+):
     if (source_run.project_id, source_run.audio_id) != (target_run.project_id, target_run.audio_id):
         raise CheckpointUnavailable()
     source, document = await _read_document(store, source_run, node, descriptor, cancel_event)
+    source.available_outputs = readonly_outputs(available_outputs or {})
     await _decode(source, document)
     target = _Context(store, target_run, node, cancel_event)
+    target.available_outputs = source.available_outputs
     for key, metadata in source.files.items():
         destination = _safe_path(target.directory / key, target.directory.parent.parent)
         size, digest = await _copy_file(

@@ -57,7 +57,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     positionX: entry.positionX ?? 96 + index * 190,
   }))
   const byType = new Map(nodes.map((entry) => [entry.type, entry]))
-  const byPort = new Map(capabilities.ports.map((entry) => [entry.id, { ...entry, get label() { const key = `workflow.port_${entry.id}`; return hasMessage(key) && [entry.id, entry.typeId, i18n.global.t(key, {}, { locale: 'zh-CN' }), i18n.global.t(key, {}, { locale: 'en' })].includes(entry.label) ? t(key) : entry.label } }]))
+  const byPort = new Map(capabilities.ports.map((entry) => [entry.id, { ...entry, get label() { const key = `workflow.port_${entry.id}`; return hasMessage(key) && [entry.id, entry.typeId, entry.id.replace(/_/g, ' '), entry.typeId.replace(/_/g, ' '), i18n.global.t(key, {}, { locale: 'zh-CN' }), i18n.global.t(key, {}, { locale: 'en' })].includes(entry.label) ? t(key) : entry.label } }]))
   const byDataType = new Map(capabilities.dataTypes.map((entry) => [entry.id, entry]))
   const typeCompatible = (sourceTypeId: string, targetTypeId: string): boolean => {
     if (sourceTypeId === targetTypeId) return true

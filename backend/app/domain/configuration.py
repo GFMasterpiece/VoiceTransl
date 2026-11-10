@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -46,7 +46,8 @@ class ConnectionBinding(BaseModel):
     owner_node_id: str
     protocol: str
     endpoint: str
-    region: str | None = None
+    service_family: Literal["llm", "asr"]
+    provider_type: str
     credential_ref: str
 
     @field_validator("protocol")
@@ -69,36 +70,76 @@ class ModelBinding(BaseModel):
         return json.loads(self.parameters_json)
 
 
-def validate_connection(context, value):
+def protocol_family(protocol):
+    declaration = SERVICE_PROTOCOLS.get(protocol)
+    if declaration is None:
+        raise ValueError("Service protocol is not registered")
+    families = {
+        family
+        for family, operations in SERVICE_FAMILY_OPERATIONS.items()
+        if declaration.operations <= operations
+    }
+    if len(families) != 1:
+        raise ValueError("Service protocol has no unambiguous family")
+    return next(iter(families))
+
+
+SERVICE_FAMILY_OPERATIONS = {
+    "llm": frozenset({"translation"}),
+    "asr": frozenset({"asr_file", "asr_streaming"}),
+}
+
+
+def validate_connection(context, value, family=None):
     from .node_registry import NODE_DEFINITIONS
 
     if not isinstance(value, ConnectionBinding) or value.project_id != context.run.project_id:
-        raise NodeExecutionError("CONNECTION_BINDING_INVALID", "服务连接不属于当前项目")
+        raise NodeExecutionError(
+            "CONNECTION_BINDING_INVALID", "Service connection does not belong to this project"
+        )
     owner = next(
         (node for node in context.run.workflow.nodes if node.id == value.owner_node_id), None
     )
     definition = NODE_DEFINITIONS.get(owner.type) if owner else None
     binding = (definition.presentation or {}).get("inline_connection_input") if definition else None
-    if not binding or binding["provider_type"] != "service_connection":
-        raise NodeExecutionError("CONNECTION_BINDING_INVALID", "服务连接归属无效")
+    if (
+        not binding
+        or binding.get("service_family") != value.service_family
+        or (family and family != value.service_family)
+    ):
+        raise NodeExecutionError(
+            "CONNECTION_BINDING_INVALID", "Service connection family is invalid"
+        )
     config = definition.normalize_config(owner.config)
+    protocol = binding["fixed_protocol"] or config[binding["protocol_key"]]
     expected = {
         "project_id": context.run.project_id,
         "owner_node_id": owner.id,
-        "protocol": config["protocol"],
+        "service_family": binding["service_family"],
+        "provider_type": binding["provider_type"],
+        "protocol": protocol,
         "endpoint": config[binding["base_url_key"]],
-        "region": config.get(binding["region_key"]) if binding["region_key"] else None,
         "credential_ref": config[binding["credential_ref_key"]],
     }
-    if value.model_dump() != expected:
-        raise NodeExecutionError("CONNECTION_BINDING_CHANGED", "服务连接与当前冻结工作流不一致")
+    if value.model_dump() != expected or protocol_family(protocol) != value.service_family:
+        raise NodeExecutionError(
+            "CONNECTION_BINDING_CHANGED", "Service connection differs from the frozen graph"
+        )
     return value
 
 
-def validate_model(context, value, operation):
+async def validate_model(context, value, operation):
     if not isinstance(value, ModelBinding):
         raise NodeExecutionError("MODEL_BINDING_INVALID", "模型输入无效")
-    connection = validate_connection(context, value.connection)
+    family = next(
+        (
+            family
+            for family, operations in SERVICE_FAMILY_OPERATIONS.items()
+            if operation in operations
+        ),
+        None,
+    )
+    connection = validate_connection(context, value.connection, family)
     from .node_registry import NODE_DEFINITIONS, PORT_DEFINITIONS
 
     owner = next(
@@ -106,7 +147,8 @@ def validate_model(context, value, operation):
     )
     definition = NODE_DEFINITIONS.get(owner.type) if owner else None
     if definition is None or not any(
-        PORT_DEFINITIONS[port].type_id == "model_binding" for port in definition.output_ports
+        PORT_DEFINITIONS[port].type_id == f"{connection.service_family}_model"
+        for port in definition.output_ports
     ):
         raise NodeExecutionError("MODEL_BINDING_INVALID", "模型配置归属无效")
     protocol = SERVICE_PROTOCOLS[connection.protocol]
@@ -120,14 +162,38 @@ def validate_model(context, value, operation):
         raise NodeExecutionError("MODEL_NAME_REQUIRED", "请填写模型名称")
     protocol.validate_endpoint(connection.endpoint)
     protocol.validate_parameters(value.additional_parameters)
+    port = f"{connection.service_family}_model"
+    available = getattr(context, "available_outputs", None) or {}
+    trusted = available.get(owner.id, {}).get(port)
+    if trusted is None:
+        from ..application.configuration_evaluator import evaluate_configuration_graph
+
+        project = getattr(context, "project", None)
+        if project is None and context.store is not None:
+            project = context.store.load_project(context.run.project_id)
+        results = await evaluate_configuration_graph(
+            context.store,
+            context.run,
+            project,
+            context.cancel_event,
+            required_ids={owner.id},
+            outputs=available,
+            validate_processing_nodes=False,
+        )
+        trusted = results.get(owner.id)
+        trusted = trusted.outputs.get(port) if trusted else None
+    if trusted is None or trusted.value != value:
+        raise NodeExecutionError(
+            "MODEL_BINDING_CHANGED", "Model differs from its frozen effective configuration"
+        )
     return value
 
 
-def resolve_model(context, value, operation, timeout_seconds):
+async def resolve_model(context, value, operation, timeout_seconds):
     from ..application.workflow_connections import ConnectionSnapshotError, credential_operation
     from .inline_connection import InlineConnection
 
-    value = validate_model(context, value, operation)
+    value = await validate_model(context, value, operation)
     owner = value.connection
     try:
         key = credential_operation(
@@ -135,7 +201,7 @@ def resolve_model(context, value, operation, timeout_seconds):
             "read",
             owner.project_id,
             owner.owner_node_id,
-            "service_connection",
+            owner.provider_type,
             owner.credential_ref,
         )
     except ConnectionSnapshotError as error:
@@ -144,6 +210,5 @@ def resolve_model(context, value, operation, timeout_seconds):
         provider_type=owner.protocol,
         base_url=owner.endpoint,
         default_timeout=timeout_seconds,
-        region=owner.region,
     )
     return connection, value.model_name, value.additional_parameters, key

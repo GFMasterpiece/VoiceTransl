@@ -27,8 +27,8 @@ def graph(document):
             "id": "context",
             "source": "cloud_context",
             "source_port": "string",
-            "target": "cloud",
-            "target_port": "context",
+            "target": "cloud_model",
+            "target_port": "model_name",
         }
     )
     return body
@@ -84,10 +84,10 @@ async def test_output_rerun_uses_new_saved_config_and_copies_results_without_clo
                 {"id": "other_cloud", "type": "qwen_asr", "config": {}},
                 {
                     "id": "other_connection",
-                    "type": "service_connection",
+                    "type": "asr_service",
                     "config": {"protocol": "qwen_filetrans", "endpoint": "https://example.com/api"},
                 },
-                {"id": "other_model", "type": "model_config", "config": {"model_name": "other"}},
+                {"id": "other_model", "type": "asr_model", "config": {"model_name": "other"}},
                 {"id": "other_out", "type": "text_output", "config": {"format": "txt"}},
             ]
         )
@@ -114,16 +114,16 @@ async def test_output_rerun_uses_new_saved_config_and_copies_results_without_clo
                 {
                     "id": "oc",
                     "source": "other_connection",
-                    "source_port": "connection",
+                    "source_port": "asr_connection",
                     "target": "other_model",
-                    "target_port": "connection",
+                    "target_port": "asr_connection",
                 },
                 {
                     "id": "om",
                     "source": "other_model",
-                    "source_port": "model",
+                    "source_port": "asr_model",
                     "target": "other_cloud",
-                    "target_port": "model",
+                    "target_port": "asr_model",
                 },
             ]
         )

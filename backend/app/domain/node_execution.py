@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -61,12 +63,23 @@ class NodeExecutionContext:
     project: object
     cancel_event: object
     mock_delay_ms: int = 0
+    available_outputs: Mapping[str, Mapping[str, NodeData]] | None = None
+
+    def __post_init__(self):
+        if self.available_outputs is not None:
+            object.__setattr__(self, "available_outputs", readonly_outputs(self.available_outputs))
 
     def input(self, port: str) -> NodeData:
         try:
             return self.inputs[port]
         except KeyError as exc:
             raise ValueError(f"missing input port: {port}") from exc
+
+
+def readonly_outputs(outputs):
+    return MappingProxyType(
+        {node_id: MappingProxyType(dict(value)) for node_id, value in outputs.items()}
+    )
 
 
 __all__ = [

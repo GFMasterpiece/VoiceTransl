@@ -240,7 +240,7 @@ async def test_raw_json_nonfinite_configuration_returns_stable_422(tmp_path, tok
         )
         assert response.status_code == 422, response.text
         assert response.json()["error"]["code"] == "INVALID_WORKFLOW"
-        assert not (app.state.store.project_dir(pid) / "workflow-v3.json").exists()
+        assert not (app.state.store.project_dir(pid) / "workflow-v4.json").exists()
 
 
 @pytest.mark.asyncio
@@ -501,7 +501,7 @@ async def test_current_run_optional_parameter_metadata_reads_without_rewrite(tmp
             f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{run['id']}"
         )
         assert response.status_code == 200, response.text
-        assert response.json()["schema_version"] == "3.0"
+        assert response.json()["schema_version"] == "4.0"
         assert all(
             item["parameter_sources"] is None and item["effective_config"] is None
             for item in response.json()["nodes"]

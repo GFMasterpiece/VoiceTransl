@@ -25,7 +25,7 @@ function catalog(): any {
   const output = { ...node('output_extension'), input_ports: ['audio'], required_input_ports: ['audio'], required_inbound: 1, terminal: true }
   const parameter = { ...node('parameter_extension', [field('value','string','ja')]), output_ports: ['language_signal'], is_parameter_source: true }
   return catalogFixture({ schema_version: '1.0', languages: languages.map(({nativeName,...entry}) => ({ ...entry, names: {...entry.names}, aliases: [...entry.aliases], native_name: nativeName })), asr: { providers: [] }, workflow: {
-    schema_version: "1.17", nodes: [source,processor,output,parameter], ports: [{ id:'audio',type_id:'audio',label:'Audio' },{id:'language_signal',type_id:'string',label:'Language'}],
+    schema_version: "1.18", nodes: [source,processor,output,parameter], ports: [{ id:'audio',type_id:'audio',label:'Audio' },{id:'language_signal',type_id:'string',label:'Language'}],
     data_types: ['audio','string'].map(id => (typeFixture({ id,label:id,parent_type_id:null,capabilities:[] }))), constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},
     default_graph: { nodes:[{id:'input',type:source.type,config:{},position:{x:0,y:0}},{id:'processor',type:processor.type,config:{spoken_code:'custom-old',manual_language:'en'},position:{x:450,y:0}},{id:'output',type:output.type,config:{},position:{x:900,y:0}}],
       edges:[{id:'first',source:'input',source_port:'audio',target:'processor',target_port:'audio'},{id:'second',source:'processor',source_port:'audio',target:'output',target_port:'audio'}] }
@@ -68,7 +68,7 @@ function mountEditor() {
       return response({audio:{id:'a2',source:{original_name:(body.get('file') as File).name,language:body.get('source_language'),size_bytes:2}}})
     }
     if(path.endsWith('/workflow/validate')) return response({valid:true,issues:[]})
-    if(path.endsWith('/workflow')) return response({schema_version:"3.0",project_id:'p1',revision:1,workflow_revision:1,created_at:'2026-11-09T00:00:00Z',updated_at:'2026-11-09T00:00:00Z',...value.workflow.default_graph,...(init?.method==='PUT'?JSON.parse(String(init.body)):{})})
+    if(path.endsWith('/workflow')) return response({schema_version:"4.0",project_id:'p1',revision:1,workflow_revision:1,created_at:'2026-11-09T00:00:00Z',updated_at:'2026-11-09T00:00:00Z',...value.workflow.default_graph,...(init?.method==='PUT'?JSON.parse(String(init.body)):{})})
     const url=new URL(path,'http://localhost')
     if(url.searchParams.has('limit')) return response({items:[],total:0,limit:Number(url.searchParams.get('limit')),offset:Number(url.searchParams.get('offset'))||0})
     return response({items:[]})
@@ -248,7 +248,7 @@ describe('shared language controls in the editor',()=>{
 })
 
 
-it.each(['1.17'])('preserves language metadata and strict shape in catalog %s', version => {
+it.each(['1.18'])('preserves language metadata and strict shape in catalog %s', version => {
   const value = catalog(); value.workflow.schema_version = version
   expect(readCapabilities(value).languages).toEqual(languages)
   value.languages[0].names.extra = 'invalid'
@@ -257,7 +257,7 @@ it.each(['1.17'])('preserves language metadata and strict shape in catalog %s', 
 
 
 it('parses required debug flags only in catalog 1.15 and preserves old catalog behavior', () => {
-  const value = catalog(); value.workflow.schema_version = '1.17'
+  const value = catalog(); value.workflow.schema_version = '1.18'
   value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
   value.workflow.nodes[1].debug_only = true
   const parsed = readCapabilities(value)
@@ -267,7 +267,7 @@ it('parses required debug flags only in catalog 1.15 and preserves old catalog b
   expect(() => readCapabilities(value)).toThrow('workflow.schema_version')
 })
 it.each([undefined, null, 'true', 1, {}, []])('rejects an invalid required debug flag in catalog 1.15: %s', flag => {
-  const value = catalog(); value.workflow.schema_version = '1.17'
+  const value = catalog(); value.workflow.schema_version = '1.18'
   value.workflow.nodes.forEach((node: any) => { node.debug_only = false })
   value.workflow.nodes[0].debug_only = flag
   expect(() => readCapabilities(value)).toThrow()

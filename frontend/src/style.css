@@ -481,3 +481,29 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 .node-slot-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin: 0 0 8px; }
 .node-slot-actions .text-button { min-height: 28px; padding: 3px 7px; font: 11px/1.5 var(--sans); }
 .node-add-input { align-self: flex-start; max-width: 100%; min-height: 32px; white-space: normal; overflow-wrap: anywhere; }
+
+/* Parameter sockets follow actual field rows; global settings retain their ordinary form layout. */
+.node-field-control { display: flex; flex-direction: column; min-width: 0; }
+.node-config-row.in-node-field { display: grid; grid-template-columns: minmax(64px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 6px 8px; }
+.node-config-row.in-node-field.has-parameter-socket { grid-template-columns: 20px minmax(56px, .8fr) minmax(0, 1.2fr); }
+.in-node-field .node-config-label { grid-column: 1; }
+.in-node-field .node-field-control { grid-column: 2; }
+.in-node-field.has-parameter-socket .node-config-label { grid-column: 2; }
+.in-node-field.has-parameter-socket .node-field-control { grid-column: 3; }
+.node-config-row.in-node-field input, .node-config-row.in-node-field select { min-height: 30px; padding: 4px 10px; border-radius: 999px; font-size: 11px; }
+.node-config-row.in-node-field.is-json { flex: 0 0 auto; }
+.in-node-field.is-json .node-config-label { grid-column: 1 / -1; }
+.in-node-field.is-json.has-parameter-socket .node-config-label { grid-column: 2 / -1; }
+.in-node-field.is-json .node-field-control { grid-column: 1 / -1; grid-row: 2; }
+.in-node-field.is-json.has-parameter-socket .node-field-control { grid-column: 2 / -1; }
+.node-config-row.in-node-field textarea { min-height: 88px; resize: vertical; border-radius: 10px; }
+.node-config-row.in-node-field.is-connected { min-height: 28px; grid-template-columns: 20px minmax(0, 1fr); }
+.in-node-field.is-connected .node-config-label { grid-column: 2 / -1; grid-row: 1; }
+.node-field-socket { display: flex; grid-column: 1; grid-row: 1; align-items: center; justify-content: center; width: 20px; height: 20px; min-width: 20px; min-height: 20px; margin: 0; padding: 0; border: 0; background: transparent; border-radius: 50%; cursor: crosshair; touch-action: none; }
+.node-field-socket span { display: block; width: 8px; height: 8px; box-sizing: border-box; border: 2px solid var(--port-color, var(--teal)); border-radius: 50%; background: var(--paper); }
+.node-field-socket:hover span { background: var(--teal-soft); }
+.node-field-socket:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+.in-node-field.is-json:not(.is-connected) .node-field-socket { grid-row: 2; align-self: start; margin-top: 6px; }
+.in-node-field .node-field-error { grid-column: 1 / -1; }
+
+.node-measure-host .node-config-row.in-node-field textarea { height: 88px; }
