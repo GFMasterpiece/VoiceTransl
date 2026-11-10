@@ -16,6 +16,7 @@
 
 | 规格 | 状态 | 主题 |
 | --- | --- | --- |
+| [节点库面板](node-library-panel.md) | Implemented | 分类搜索、输入输出类型筛选、节点预览及添加入口统一 |
 | [服务分类与字段旁连线](service-families-field-inputs.md) | Implemented | LLM/ASR 服务分开、移除 ASR 上下文及控件左侧参数插口 |
 | [普通文本上下文与多输入拼接](plain-text-context.md) | Implemented | 普通字符串上下文、动态输入拼接、可选地域及可空字段声明 |
 | [可组合的节点配置与上下文](composable-node-configuration.md) | Implemented | 首版职责拆分；现用普通文本上下文与动态拼接见上项 |

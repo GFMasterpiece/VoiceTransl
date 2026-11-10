@@ -103,6 +103,16 @@ describe('canvas dialog interaction lifecycle', () => {
     expect(ui.close).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Escape native during IME composition and closes normally after composition ends', async () => {
+    const ui = mount(); await settle()
+    ui.input().dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(key('Escape').defaultPrevented).toBe(false); expect(ui.close).not.toHaveBeenCalled()
+    ui.input().dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    ui.input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true }))
+    expect(ui.close).not.toHaveBeenCalled()
+    key('Escape'); await settle(); expect(ui.close).toHaveBeenCalledOnce()
+  })
+
   it('closes only when pointerdown lands on the backdrop itself', async () => {
     const ui = mount(); await settle()
     ui.input().dispatchEvent(new Event('pointerdown', { bubbles: true }))

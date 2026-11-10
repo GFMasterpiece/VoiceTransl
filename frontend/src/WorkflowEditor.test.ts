@@ -1161,64 +1161,53 @@ describe('canvas context menus', () => {
     value.workflow.nodes.push({ ...value.workflow.nodes[1], type: 'extension_named_uncategorized', label: 'Explicit extension category', category: { id: 'uncategorized', label: 'Extension tools' } })
     return value
   }
-  it('groups both entry points in catalog order, retains unknown categories, and never changes the draft', async () => {
-    const capabilities = categorizedCatalog()
-    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(capabilities)) : undefined); await settle()
-    const draft = JSON.stringify(useWorkflowStore().draft)
+  it('shares the library between both entry points with real categories and no draft mutation', async () => {
+    setup(path => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
+    const store = useWorkflowStore(), before = JSON.stringify(store.draft)
     root!.querySelector<HTMLButtonElement>('[data-add-node]')!.click(); await settle()
-    expect([...root!.querySelectorAll('[data-node-category]')].map((group) => group.getAttribute('data-node-category'))).toEqual(['input', 'plugin_tools', 'speech_recognition', 'output', '', 'uncategorized'])
-    expect(root!.querySelector('[data-node-category=plugin_tools] h3')!.textContent).toBe('Plugin tools')
-    expect(root!.querySelector('[data-node-category=""] h3')!.textContent).toBe('未分类')
-    expect(root!.querySelector('[data-node-category=uncategorized] h3')!.textContent).toBe('Extension tools')
-    expect([...root!.querySelectorAll('[data-node-category=speech_recognition] [data-add-kind]')].map((item) => item.getAttribute('data-add-kind'))).toEqual(['asr', 'qwen_asr'])
-    expect(root!.querySelector('[data-add-kind=asr]')!.textContent).toContain('语音识别（Mock）')
-    expect(root!.querySelector('[data-node-category=output] [data-add-kind=audio_output]')!.textContent).toContain('音频输出')
+    expect(app!._instance!.exposed!.hasOpenDialog()).toBe(true)
+    expect([...root!.querySelectorAll('[data-library-category]')].map(item => item.getAttribute('data-library-category'))).toEqual(['input', 'plugin_tools', 'speech_recognition', 'output', '', 'uncategorized'])
+    expect(root!.querySelector('[data-library-category=plugin_tools]')!.textContent).toBe('Plugin tools')
+    root!.querySelector<HTMLElement>('[data-library-category=speech_recognition]')!.click(); await settle()
+    expect([...root!.querySelectorAll('[data-add-kind]')].map(item => item.getAttribute('data-add-kind'))).toEqual(['asr', 'qwen_asr'])
     setLocale('en'); await settle()
-    expect(root!.querySelector('[data-node-category=output] [data-add-kind=audio_output]')!.textContent).toContain('Audio output')
-    setLocale('zh-CN'); await settle()
-    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('[data-library-category=speech_recognition]')!.textContent).toBe('Speech recognition')
+    root!.querySelector('.node-library')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     menu(root!.querySelector('.workflow-svg')!); await settle()
-    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(6)
-    expect(JSON.stringify(useWorkflowStore().draft)).toBe(draft)
+    expect(root!.querySelectorAll('[data-library-category]')).toHaveLength(6)
+    expect(JSON.stringify(store.draft)).toBe(before)
   })
-
-  it('searches category IDs and both friendly languages, hides empty groups, and preserves the query across locale changes', async () => {
-    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
+  it('searches category IDs and both languages while preserving query across locale changes', async () => {
+    setup(path => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
     menu(root!.querySelector('.workflow-svg')!); await settle()
     const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!
     for (const query of ['speech recognition', '语音识别', 'speech_recognition']) {
       search.value = query; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
-      expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(1)
       expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(2)
     }
-    setLocale('en'); await settle()
-    expect(search.value).toBe('speech_recognition')
-    expect(root!.querySelector('[data-node-category=speech_recognition] h3')!.textContent).toBe('Speech recognition')
+    setLocale('en'); await settle(); expect(search.value).toBe('speech_recognition')
     search.value = 'Plugin tools'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
     expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(1)
     search.value = 'no matching category'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
-    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(0)
-    expect(root!.querySelector('.canvas-context-menu [role=status]')!.textContent).toBe('No matching nodes')
+    expect(root!.querySelector('.node-library [role=status]')!.textContent).toBe('No matching nodes')
   })
-
-  it('skips headings and disabled nodes with arrow, Home and End keys in grouped menus', async () => {
-    setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
+  it('navigates all candidates including unavailable ones without adding until Enter', async () => {
+    setup(path => path.endsWith('/capabilities') ? Promise.resolve(response(categorizedCatalog())) : undefined); await settle()
     menu(root!.querySelector('.workflow-svg')!); await settle()
-    const menuElement = root!.querySelector('.canvas-context-menu')!
-    const items = [...menuElement.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
-    for (const [key, expected] of [['ArrowUp', items[items.length - 1]], ['Home', items[0]], ['End', items[items.length - 1]], ['ArrowDown', items[0]], ['ArrowDown', items[1]], ['ArrowUp', items[0]]] as const) {
-      menuElement.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle()
-      expect(document.activeElement).toBe(expected)
-      expect(document.activeElement!.getAttribute('role')).toBe('menuitem')
+    const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!, items = [...root!.querySelectorAll<HTMLElement>('[data-add-kind]')]
+    for (const [key, expected] of [['ArrowDown', items[1]], ['ArrowUp', items[0]], ['ArrowUp', items[items.length - 1]], ['ArrowDown', items[0]]] as const) {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle()
+      expect(root!.querySelector('[role=option][aria-selected=true]')).toBe(expected)
+      expect(document.activeElement).toBe(search)
     }
-    menuElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    expect(useWorkflowStore().draft.nodes).toHaveLength(2)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('.node-library')).toBeNull()
   })
-
-  it('shows legacy nodes together as unclassified instead of inferring categories', async () => {
+  it('keeps unclassified declarations together without inferring categories', async () => {
     setup(); await settle(); menu(root!.querySelector('.workflow-svg')!); await settle()
-    expect(root!.querySelectorAll('[data-node-category]')).toHaveLength(1)
-    expect(root!.querySelector('[data-node-category=""] h3')!.textContent).toBe('未分类')
+    expect(root!.querySelectorAll('[data-library-category]')).toHaveLength(1)
+    expect(root!.querySelector('[data-library-category=""]')!.textContent).toBe('未分类')
     expect(root!.querySelectorAll('[data-add-kind]')).toHaveLength(testCapabilities.workflow.nodes.length)
   })
 
@@ -1274,40 +1263,46 @@ describe('canvas context menus', () => {
     setup((path) => path.endsWith('/capabilities') ? Promise.resolve(response(capabilities)) : undefined)
     await settle()
     menu(root!.querySelector('.workflow-svg')!); await settle()
-    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=audio_input]')!.disabled).toBe(true)
-    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=another_input]')!.disabled).toBe(true)
+    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=audio_input]')!.getAttribute('aria-disabled')).toBe('true')
+    expect(root!.querySelector<HTMLButtonElement>('[data-add-kind=another_input]')!.getAttribute('aria-disabled')).toBe('true')
     const before = useWorkflowStore().draft.nodes.length
     root!.querySelector<HTMLButtonElement>('[data-add-kind=another_input]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(useWorkflowStore().draft.nodes).toHaveLength(before)
   })
 
-  it('preserves native editable/media menus and supports keyboard entry, escape, outside clicks and view/lock dismissal', async () => {
-    setup(); await settle()
-    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+  it('keeps native menus, restores focus, and blocks adding when a live lock appears', async () => {
+    setup(); await settle(); const store = useWorkflowStore(), svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
     const input = node('audio_output').querySelector('input')!
-    expect(menu(input).defaultPrevented).toBe(false)
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
-    for (const tag of ['textarea', 'select', 'audio', 'video']) {
-      const native = document.createElement(tag); root!.querySelector('.workflow-canvas')!.append(native)
-      expect(menu(native).defaultPrevented).toBe(false); native.remove()
-    }
-    svg.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })); await settle()
-    expect(document.activeElement).toBe(root!.querySelector('.canvas-node-search input'))
-    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); await settle()
-    expect((document.activeElement as HTMLElement).dataset.addKind).toBeTruthy()
-    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
-    menu(svg); await settle()
-    window.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })); await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
-    menu(svg); await settle()
-    useWorkflowStore().zoom = .5; await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
-    menu(svg); await settle()
-    useWorkflowStore().saving = true; await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
-    menu(svg); await settle()
-    expect(root!.querySelector('.canvas-context-menu')).toBeNull()
+    expect(menu(input).defaultPrevented).toBe(false); expect(root!.querySelector('.node-library')).toBeNull()
+    svg.focus(); svg.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true, cancelable: true })); await settle()
+    const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!
+    expect(document.activeElement).toBe(search)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); await settle()
+    expect(document.activeElement).toBe(search)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    expect(root!.querySelector('.node-library')).toBeNull(); expect(document.activeElement).toBe(svg)
+    menu(svg); await settle(); const before = JSON.stringify(store.draft)
+    store.saving = true; await settle()
+    expect(root!.querySelector('[data-add-kind=preprocess]')!.getAttribute('aria-disabled')).toBe('true')
+    root!.querySelector<HTMLElement>('[data-add-kind=preprocess]')!.click(); await settle()
+    expect(JSON.stringify(store.draft)).toBe(before); expect(root!.querySelector('.node-library')).not.toBeNull()
+    root!.querySelector('.node-library')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    menu(svg); await settle(); expect(root!.querySelector('.node-library')).toBeNull()
+  })
+
+  it('blocks library entry during uploads and gestures and never adds through another active dialog', async () => {
+    setup(); await settle(); const store = useWorkflowStore(), before = JSON.stringify(store.draft)
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    store.resourceUploading = true; await settle()
+    menu(svg); await settle(); expect(root!.querySelector('.node-library')).toBeNull()
+    store.resourceUploading = false; await settle()
+    const source = node('audio_input').querySelector('[data-port-direction=output]')!
+    source.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 100 }))
+    menu(svg); await settle(); expect(root!.querySelector('.node-library')).toBeNull()
+    svg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await settle()
+    root!.querySelector<HTMLButtonElement>('[data-open-panel=run]')!.click(); await settle()
+    menu(svg); await settle(); expect(root!.querySelector('.node-library')).toBeNull()
+    expect(JSON.stringify(store.draft)).toBe(before)
   })
 
   it('rejects nonfinite or exhausted placement coordinates without inserting illegal graph positions', async () => {
@@ -2446,7 +2441,7 @@ describe('editor operations UI', () => {
     setup(); await settle(); const store = useWorkflowStore(); store.selectNode('output')
     vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')), readText: vi.fn().mockRejectedValue(new Error('denied')) } })
     const menu = async (target: Element, x = 300, y = 220) => { target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })); await settle() }
-    const close = async () => { root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle() }
+    const close = async () => { (root!.querySelector('.canvas-context-menu') || root!.querySelector('.node-library'))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle() }
     await menu(node('audio_output'))
     expect([...root!.querySelectorAll('[data-context-command]')].map(item => item.getAttribute('data-context-command'))).toEqual(['copy', 'cut', 'paste', 'duplicate'])
     root!.querySelector<HTMLButtonElement>('[data-context-command=copy]')!.click(); await settle()
@@ -3346,7 +3341,7 @@ describe('declarative debug node visibility', () => {
     setDebugMode(true); await settle()
     expect(root!.querySelector('[data-add-kind=asr]')).not.toBeNull(); expect(root!.querySelector('[data-add-kind=unusual_extension]')).not.toBeNull()
     expect(window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY)).toBe('true')
-    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    ;(root!.querySelector('.canvas-context-menu') || root!.querySelector('.node-library'))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     setDebugMode(false); await settle()
     expect(store.draft.nodes.some(node => node.id === existing)).toBe(true)
     expect(root!.querySelector(`[data-node-id="${existing}"]`)).not.toBeNull()
@@ -3356,7 +3351,7 @@ describe('declarative debug node visibility', () => {
     root!.querySelector('.workflow-svg')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 250 })); await settle()
     const search = root!.querySelector<HTMLInputElement>('.canvas-node-search input')!; search.value = 'asr'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
     expect(root!.querySelector('[data-add-kind=asr]')).toBeNull()
-    root!.querySelector('.canvas-context-menu')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    ;(root!.querySelector('.canvas-context-menu') || root!.querySelector('.node-library'))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
     node('asr').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await settle()
     expect(root!.querySelector('[data-rerun-node]')).not.toBeNull()
   })

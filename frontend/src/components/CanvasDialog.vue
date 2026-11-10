@@ -6,16 +6,17 @@ const emit = defineEmits<{ close: [] }>()
 const titleId = useId()
 const backdrop = ref<HTMLElement | null>(null)
 const dialog = ref<HTMLElement | null>(null)
+const composing = ref(false)
 let trigger: Element | null = null
 let alive = true
 const inertStates = new Map<HTMLElement, boolean>()
 function focusable() {
-  return [...(dialog.value?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])].filter((item) => !item.hidden && !item.closest('[inert]'))
+  return [...(dialog.value?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])].filter((item) => !item.hidden && !item.closest('[hidden], [inert]'))
 }
 function focusFirst() { (dialog.value?.querySelector<HTMLElement>('[autofocus]:not([disabled])') || focusable()[0] || dialog.value)?.focus() }
 function requestClose() { if (!props.closeDisabled) emit('close') }
 function keydown(event: KeyboardEvent) {
-  if (!props.open || !dialog.value) return
+  if (!props.open || !dialog.value || composing.value || event.isComposing || event.keyCode === 229) return
   if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); requestClose(); return }
   if (event.key !== 'Tab') return
   const items = focusable()
@@ -27,6 +28,7 @@ function keydown(event: KeyboardEvent) {
 }
 function focusin(event: FocusEvent) { if (props.open && dialog.value && !dialog.value.contains(event.target as Node)) focusFirst() }
 function release() {
+  composing.value = false
   document.removeEventListener('keydown', keydown, true)
   document.removeEventListener('focusin', focusin, true)
   for (const [element, wasInert] of inertStates) element.inert = wasInert
@@ -55,7 +57,7 @@ watch(() => props.open, async (open) => {
 onUnmounted(() => { alive = false; release() })
 </script>
 <template>
-  <div v-if="open" ref="backdrop" class="canvas-dialog-backdrop" @pointerdown.self="requestClose">
+  <div v-if="open" ref="backdrop" class="canvas-dialog-backdrop" @compositionstart.capture="composing = true" @compositionend.capture="composing = false" @pointerdown.self="requestClose">
     <section ref="dialog" class="canvas-dialog" role="dialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1">
       <header class="canvas-dialog-header"><h2 :id="titleId">{{ title }}</h2><button class="canvas-dialog-close" type="button" :aria-label="t('workflow.closePanel')" :disabled="closeDisabled" @click="requestClose">×</button></header>
       <div class="canvas-dialog-body"><slot /></div>

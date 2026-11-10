@@ -1,5 +1,20 @@
 export const workflowMessages = {
   "zh-CN": {
+    "nodeLibraryTitle": "添加节点",
+    "libraryInputType": "输入类型",
+    "libraryOutputType": "输出类型",
+    "libraryAllTypes": "全部类型",
+    "libraryCategories": "节点分类",
+    "libraryAllNodes": "全部",
+    "libraryShowDetails": "查看详情",
+    "libraryDetails": "详情",
+    "libraryDetailsFor": "查看{name}详情",
+    "libraryBack": "返回列表",
+    "libraryRequired": "必需",
+    "libraryInputs": "输入",
+    "libraryOutputs": "输出",
+    "libraryFields": "字段",
+
     "port_llm_connection": "LLM 服务",
     "port_asr_connection": "ASR 服务",
     "port_llm_model": "LLM 模型",
@@ -460,6 +475,21 @@ export const workflowMessages = {
     "error_INVALID_TEXT_FORMAT": "文本输出格式无效，请选择可用格式。"
   },
   "en": {
+    "nodeLibraryTitle": "Add node",
+    "libraryInputType": "Input type",
+    "libraryOutputType": "Output type",
+    "libraryAllTypes": "All types",
+    "libraryCategories": "Node categories",
+    "libraryAllNodes": "All",
+    "libraryShowDetails": "Show details",
+    "libraryDetails": "Details",
+    "libraryDetailsFor": "Show details for {name}",
+    "libraryBack": "Back to list",
+    "libraryRequired": "Required",
+    "libraryInputs": "Inputs",
+    "libraryOutputs": "Outputs",
+    "libraryFields": "Fields",
+
     "port_llm_connection": "LLM service",
     "port_asr_connection": "ASR service",
     "port_llm_model": "LLM model",
