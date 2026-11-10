@@ -1,9 +1,7 @@
-"""Mock recognition using an independently composed language context."""
+"""Mock recognition using the current audio's declared language."""
 
 from ..domain.context_values import (
-    ASRContext,
     normalize_processor_config,
-    optional_packet,
     resolve_audio_language,
 )
 from ..domain.node_categories import SPEECH_RECOGNITION
@@ -16,14 +14,13 @@ normalize = normalize_processor_config
 
 def validate_inputs(context):
     normalize(context.node.config)
-    optional_packet(context, "asr_context", ASRContext)
 
 
 async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..application.workflow_asr import execute_asr_node
 
     validate_inputs(context)
-    language = resolve_audio_language(context, optional_packet(context, "asr_context", ASRContext))
+    language = resolve_audio_language(context)
     execution_node = context.node.model_copy(
         update={"config": {"provider": "mock", "language": language}}, deep=True
     )
@@ -46,7 +43,7 @@ def definition() -> NodeDefinition:
         type=ASR_NODE_TYPE,
         label="语音识别（Mock）",
         category=SPEECH_RECOGNITION,
-        input_ports=(AUDIO_PORT, "asr_context"),
+        input_ports=(AUDIO_PORT,),
         required_input_ports=(AUDIO_PORT,),
         output_ports=(TRANSCRIPT_PORT,),
         terminal=False,
@@ -56,6 +53,5 @@ def definition() -> NodeDefinition:
         validate_config=normalize,
         execute=execute,
         validate_inputs=validate_inputs,
-        validation_input_ports=("asr_context",),
-        execution_version="2",
+        execution_version="3",
     )

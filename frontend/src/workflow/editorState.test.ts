@@ -14,7 +14,7 @@ const graph = (): WorkflowDocumentInput => ({
 })
 const capabilities = readCapabilities(catalogFixture({
   schema_version: '1.0', workflow: {
-    schema_version: "1.16",
+    schema_version: "1.17",
     nodes: [
       nodeFixture({ type: 'future_source', label: 'Source', is_source: true, removable: false, max_instances: 1, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } }),
       nodeFixture({ type: 'future_processor', label: 'Processor', input_ports: ['audio'], output_ports: ['audio'], removable: true, config: { kind: 'extension', fields: [
@@ -26,7 +26,7 @@ const capabilities = readCapabilities(catalogFixture({
   }, asr: { providers: [] }, export: { formats: [], naming_modes: [] },
 }))
 const documentBody = (value = graph()): WorkflowDocument => ({
-  ...cloneDocument(value), schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-06T00:00:00Z',
+  ...cloneDocument(value), schema_version: "3.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '2026-11-06T00:00:00Z',
 })
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(value)) }) as Response
 let store: ReturnType<typeof useWorkflowStore>

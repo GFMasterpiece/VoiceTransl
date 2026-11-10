@@ -19,7 +19,7 @@ class BatchStore:
         # Project IDs are filesystem components on every supported platform.
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", project_id):
             raise ValueError("invalid project id")
-        root = self.projects.project_dir(project_id) / "batches-v2"
+        root = self.projects.project_dir(project_id) / "batches-v3"
         if root.is_symlink():
             raise ValueError("batch directory must not be a symlink")
         return root

@@ -8,7 +8,6 @@ from app.application.workflow_reuse import execution_config
 from app.domain.context_values import (
     ASROptions,
     JSONValue,
-    TranslationContext,
     TranslationOptions,
 )
 from app.domain.node_execution import NodeData, NodeExecutionContext, NodeExecutionError
@@ -28,13 +27,21 @@ async def evaluate(node_type, config=None, inputs=None):
 
 @pytest.mark.asyncio
 async def test_text_chain_has_explicit_order_and_preserves_fallback():
-    first = await evaluate("text_join", {"left": "背景", "right": "角色"})
-    fallback = {"left": "不会变", "right": "要求", "separator": " | "}
-    second = await evaluate("text_join", fallback, {"text_left": first.outputs["string"]})
+    first = await evaluate(
+        "text_join", {"items": [{"id": "a1", "value": "背景"}, {"id": "b2", "value": "角色"}]}
+    )
+    fallback = {
+        "items": [{"id": "a1", "value": "不会变"}, {"id": "b2", "value": "要求"}],
+        "separator": " | ",
+    }
+    second = await evaluate("text_join", fallback, {"text_a1": first.outputs["string"]})
     assert second.outputs["string"].value == "背景\n\n角色 | 要求"
-    assert fallback["left"] == "不会变"
+    assert fallback["items"][0]["value"] == "不会变"
     with pytest.raises(ValueError):
-        await evaluate("text_join", {"left": "a" * 32768, "right": "b" * 32768})
+        await evaluate(
+            "text_join",
+            {"items": [{"id": "a1", "value": "a" * 32768}, {"id": "a2", "value": "b" * 32768}]},
+        )
 
 
 @pytest.mark.asyncio
@@ -61,33 +68,23 @@ async def test_json_merge_is_top_level_and_projects_fresh_dict(policy, expected)
 
 
 @pytest.mark.asyncio
-async def test_json_to_context_wire_accepts_business_terms_and_replaces_only_effective_config():
-    glossary = await evaluate("json_value", {"value": {"password": "密码"}})
-    config = {
-        "target_language": "en",
-        "glossary": {"fallback": "后备"},
-        "background": "人物背景",
-        "instructions": "保留语气",
-    }
-    result = await evaluate("translation_context", config, {"glossary": glossary.outputs["json"]})
-    packet = result.outputs["translation_context"].value
-    assert packet.glossary == {"password": "密码"}
-    assert (
-        packet.render_instructions()
-        == "[Background]\n人物背景\n\n[Translation instructions]\n保留语气"
+async def test_plain_context_has_no_dedicated_node_and_requires_nonempty_string():
+    assert "translation_context" not in NODE_DEFINITIONS
+    assert "asr_context" not in NODE_DEFINITIONS
+    assert "translation_context" not in TYPE_DEFINITIONS
+    assert "asr_context" not in TYPE_DEFINITIONS
+    result = await evaluate(
+        "text_join",
+        {
+            "items": [
+                {"id": "x", "value": "English"},
+                {"id": "y", "value": "terms"},
+                {"id": "z", "value": ""},
+            ],
+            "separator": "|",
+        },
     )
-    assert config["glossary"] == {"fallback": "后备"}
-    copy = packet.glossary
-    copy["new"] = "新"
-    assert packet.glossary == {"password": "密码"}
-
-
-@pytest.mark.asyncio
-async def test_empty_target_is_a_valid_draft_but_cannot_materialize():
-    assert NODE_DEFINITIONS["translation_context"].normalize_config({})["target_language"] == ""
-    with pytest.raises(NodeExecutionError) as error:
-        await evaluate("translation_context")
-    assert error.value.code == "LLM_TARGET_LANGUAGE_REQUIRED"
+    assert result.outputs["string"].value == "English|terms|"
 
 
 @pytest.mark.asyncio
@@ -95,7 +92,6 @@ async def test_empty_target_is_a_valid_draft_but_cannot_materialize():
     "type_id,value",
     [
         ("json_object", JSONValue.from_object({"b": [2], "a": 1})),
-        ("translation_context", TranslationContext(target_language="zh")),
         ("translation_options", TranslationOptions(timeout_seconds=9)),
         ("asr_options", ASROptions(timeout_seconds=7)),
     ],
@@ -122,9 +118,11 @@ def test_json_rejects_invalid_size_and_depth(value):
 def test_json_encoded_duplicate_keys_and_combined_text_limits():
     with pytest.raises(ValueError):
         JSONValue(value_json='{"a":1,"a":2}')
+    from app.domain.context_values import validate_text
+
     with pytest.raises(ValueError):
-        TranslationContext(background="a" * 4096, instructions="b" * 4096)
-    assert TranslationContext(instructions="a" * 8192).render_instructions() == "a" * 8192
+        validate_text("x" * 65537)
+    assert validate_text("x" * 65536) == "x" * 65536
 
 
 @pytest.mark.asyncio
@@ -143,24 +141,32 @@ async def test_actual_configuration_graph_materializes_json_and_text_ancestors()
     from app.domain.workflow import WorkflowEdge, WorkflowSnapshot
 
     nodes = [
-        WorkflowNode(id="terms", type="json_value", config={"value": {"password": "密码"}}),
-        WorkflowNode(id="join", type="text_join", config={"left": "人物", "right": "世界"}),
-        WorkflowNode(id="context", type="translation_context", config={"target_language": "en"}),
+        WorkflowNode(id="terms", type="string_value", config={"value": "terms"}),
+        WorkflowNode(
+            id="join",
+            type="text_join",
+            config={"items": [{"id": "a1", "value": "fallback"}, {"id": "a2", "value": "world"}]},
+        ),
+        WorkflowNode(
+            id="context",
+            type="text_join",
+            config={"items": [{"id": "x", "value": "English"}, {"id": "y", "value": ""}]},
+        ),
     ]
     edges = [
         WorkflowEdge(
-            id="termscontext",
+            id="termsjoin",
             source="terms",
-            source_port="json",
-            target="context",
-            target_port="glossary",
+            source_port="string",
+            target="join",
+            target_port="text_a1",
         ),
         WorkflowEdge(
             id="joincontext",
             source="join",
             source_port="string",
             target="context",
-            target_port="background",
+            target_port="text_y",
         ),
     ]
     run = SimpleNamespace(
@@ -169,17 +175,15 @@ async def test_actual_configuration_graph_materializes_json_and_text_ancestors()
     result = await evaluate_configuration_graph(
         None, run, None, asyncio.Event(), required_ids={"context"}
     )
-    packet = result["context"].outputs["translation_context"].value
-    assert packet.glossary == {"password": "密码"}
-    assert packet.background == "人物\n\n世界"
-    assert nodes[-1].config == {"target_language": "en"}
+    assert result["context"].outputs["string"].value == "English\n\nterms\n\nworld"
+    assert nodes[1].config["items"][0]["value"] == "fallback"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "protocol,target,error_code",
     [
-        ("openai_chat", "", "LLM_TARGET_LANGUAGE_REQUIRED"),
+        ("openai_chat", "", "LLM_CONTEXT_INVALID"),
         ("qwen_filetrans", "en", "MODEL_PROTOCOL_INCOMPATIBLE"),
     ],
 )
@@ -200,7 +204,7 @@ async def test_configuration_preflight_rejects_target_and_protocol_without_proce
             },
         ),
         WorkflowNode(id="model", type="model_config", config={"model_name": "model"}),
-        WorkflowNode(id="context", type="translation_context", config={"target_language": target}),
+        WorkflowNode(id="context", type="string_value", config={"value": target}),
         WorkflowNode(id="processor", type="llm_translate"),
     ]
     edges = [
@@ -217,9 +221,9 @@ async def test_configuration_preflight_rejects_target_and_protocol_without_proce
         WorkflowEdge(
             id="cp",
             source="context",
-            source_port="translation_context",
+            source_port="string",
             target="processor",
-            target_port="translation_context",
+            target_port="context",
         ),
     ]
     run = SimpleNamespace(

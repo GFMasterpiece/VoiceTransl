@@ -8,7 +8,12 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-from ..domain.node_registry import NODE_DEFINITIONS
+from ..domain.node_registry import (
+    NODE_DEFINITIONS,
+    resolve_port,
+    resolved_fields,
+    validate_dynamic_config,
+)
 from ..domain.workflow import WorkflowNodeStatus, WorkflowRerun, WorkflowRunStatus
 from .workflow_checkpoints import capture_source_identity, load_checkpoint
 
@@ -45,19 +50,28 @@ def digest(value):
 def execution_config(node, inputs, record=None):
     definition = NODE_DEFINITIONS[node.type]
     config = deepcopy(node.config)
-    for item in definition.fields:
+    for item in resolved_fields(definition, node.config):
         if item.input_port is not None and item.input_port in inputs:
             value = inputs[item.input_port].value
-            from ..domain.node_registry import PORT_DEFINITIONS, TYPE_DEFINITIONS
+            from ..domain.node_registry import TYPE_DEFINITIONS
 
-            type_id = inputs[item.input_port].type_id or PORT_DEFINITIONS[item.input_port].type_id
+            type_id = inputs[item.input_port].type_id or resolve_port(item.input_port, node).type_id
             projection = TYPE_DEFINITIONS[type_id].config_value
-            config[item.key] = deepcopy(projection(value) if projection else value)
+            value = deepcopy(projection(value) if projection else value)
+            group = definition.dynamic_inputs
+            if group and item.input_port.startswith(group["port_prefix"]):
+                slot_id = item.input_port[len(group["port_prefix"]) :]
+                next(slot for slot in config[group["config_key"]] if slot["id"] == slot_id)[
+                    "value"
+                ] = value
+            else:
+                config[item.key] = value
     json.dumps(config, allow_nan=False)
     if record is not None:
         record.effective_config = deepcopy(config)
     if definition.validate_config:
         definition.validate_config(config)
+    validate_dynamic_config(definition, config)
     if definition.normalize_config:
         config = definition.normalize_config(config)
         if not isinstance(config, dict):

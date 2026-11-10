@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -29,7 +30,6 @@ from .llm_translation_protocol import (
     validate_additional_parameters as validate_additional_parameters,
 )
 from .llm_translation_protocol import validate_base_url as validate_base_url
-from .llm_translation_protocol import validate_glossary as validate_glossary
 from .private_http import PRIVATE_HTTP, ensure_private_http_filters
 
 
@@ -51,6 +51,7 @@ class TranslationResult:
     translations: dict[str, str]
     request_count: int
     usage: dict[str, int]
+    language: str
 
 
 def _client():
@@ -111,9 +112,7 @@ def _preflight(
     api_key,
     model,
     source_language,
-    target_language,
-    instructions,
-    glossary,
+    context,
     batch_size,
     max_batch_characters,
     context_segments,
@@ -132,11 +131,7 @@ def _preflight(
         ):
             if type(value) is not int or not low <= value <= high:
                 raise ValueError
-        for value, maximum, required in (
-            (model, 128, True),
-            (source_language, 32, True),
-            (target_language, 32, True),
-        ):
+        for value, maximum, required in ((model, 128, True),):
             if (
                 not isinstance(value, str)
                 or len(value) > maximum
@@ -146,10 +141,13 @@ def _preflight(
             ):
                 raise ValueError
             value.encode("utf-8")
-        if not isinstance(instructions, str) or len(instructions) > 8192:
+        from ..domain.context_values import validate_language, validate_text
+
+        if source_language is not None:
+            validate_language(source_language)
+        validate_text(context)
+        if not context.strip():
             raise ValueError
-        instructions.encode("utf-8")
-        validate_glossary(glossary)
         validate_additional_parameters(additional_parameters)
     except (ValueError, TypeError, UnicodeError):
         raise LLMTranslationError(
@@ -255,9 +253,14 @@ def _parse_output(envelope, expected):
         result = _json(content)
         if (
             not isinstance(result, dict)
-            or set(result) != {"translations"}
+            or set(result) != {"language", "translations"}
             or not isinstance(result["translations"], list)
         ):
+            raise ValueError
+        from ..domain.context_values import validate_language
+
+        language = validate_language(result["language"])
+        if not re.fullmatch(r"[A-Za-z]{1,8}(?:[-_][A-Za-z0-9]{1,8})*", language):
             raise ValueError
         translated = {}
         for item in result["translations"]:
@@ -275,10 +278,10 @@ def _parse_output(envelope, expected):
             item["translation"].encode("utf-8")
         if set(translated) != expected:
             raise ValueError
-        return translated
+        return translated, language
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise LLMTranslationError(
-            "OUTPUT_INVALID", "翻译结果必须逐项完整匹配输入ID且包含非空译文"
+            "OUTPUT_INVALID", "翻译结果须返回有效语言代码，并逐项匹配输入ID及非空译文"
         ) from None
 
 
@@ -308,9 +311,7 @@ async def _run(
     api_key,
     model,
     source_language,
-    target_language,
-    instructions,
-    glossary,
+    context,
     batch_size,
     max_batch_characters,
     context_segments,
@@ -321,19 +322,21 @@ async def _run(
     if output_bytes > MAX_TOTAL_OUTPUT_BYTES:
         raise LLMTranslationError("RESPONSE_TOO_LARGE", "翻译结果总量超出安全大小限制")
     translated, usage, count = dict(blanks), {}, 0
+    output_language = None
     async with _client() as client:
         for items, before, after in _batches(
             records, batch_size, max_batch_characters, context_segments
         ):
             data = {
-                "source_language": source_language,
-                "target_language": target_language,
-                "additional_instructions": instructions,
-                "glossary": glossary,
+                "translation_context": context,
                 "context_before": before,
                 "items": items,
                 "context_after": after,
             }
+            if source_language:
+                data["source_language_hint"] = source_language
+            if output_language:
+                data["output_language"] = output_language
             payload = {
                 "model": model,
                 "messages": [
@@ -377,7 +380,9 @@ async def _run(
                             value = envelope["usage"].get(key)
                             if type(value) is int and value >= 0:
                                 usage[key] = usage.get(key, 0) + value
-                    result = _parse_output(envelope, {item["id"] for item in items})
+                    result, language = _parse_output(envelope, {item["id"] for item in items})
+                    if output_language is not None and language != output_language:
+                        raise LLMTranslationError("OUTPUT_INVALID", "不同翻译批次返回的语言不一致")
                 except LLMTranslationError as error:
                     if (
                         error.code
@@ -393,21 +398,20 @@ async def _run(
                 output_bytes += sum(len(text.encode("utf-8")) for text in result.values())
                 if output_bytes > MAX_TOTAL_OUTPUT_BYTES:
                     raise LLMTranslationError("RESPONSE_TOO_LARGE", "翻译结果总量超出安全大小限制")
+                output_language = language
                 translated.update(result)
                 break
-    return TranslationResult(translated, count, usage)
+    return TranslationResult(translated, count, usage, output_language)
 
 
 async def translate(
     *,
     items,
-    source_language,
-    target_language,
+    context,
+    source_language=None,
     connection: InlineConnection,
     api_key: str,
     model,
-    instructions="",
-    glossary=None,
     batch_size=DEFAULT_BATCH_SIZE,
     max_batch_characters=DEFAULT_MAX_BATCH_CHARACTERS,
     context_segments=DEFAULT_CONTEXT_SEGMENTS,
@@ -415,7 +419,6 @@ async def translate(
     additional_parameters=None,
     cancel_event,
 ):
-    glossary = {} if glossary is None else glossary
     additional_parameters = {} if additional_parameters is None else additional_parameters
     records, blanks = _preflight(
         items,
@@ -423,9 +426,7 @@ async def translate(
         api_key,
         model,
         source_language,
-        target_language,
-        instructions,
-        glossary,
+        context,
         batch_size,
         max_batch_characters,
         context_segments,
@@ -435,7 +436,6 @@ async def translate(
     if cancel_event.is_set():
         raise LLMTranslationCancelled()
     # Keep later batches independent of mutation by callers while a request awaits IO.
-    glossary = copy.deepcopy(glossary)
     additional_parameters = copy.deepcopy(additional_parameters)
     token = PRIVATE_HTTP.set(True)
     work = asyncio.create_task(
@@ -446,9 +446,7 @@ async def translate(
             api_key,
             model,
             source_language,
-            target_language,
-            instructions,
-            glossary,
+            context,
             batch_size,
             max_batch_characters,
             context_segments,

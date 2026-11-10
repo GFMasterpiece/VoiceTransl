@@ -15,14 +15,20 @@ from test_inline_credentials import run, save, update_body
 
 def graph(document):
     body = base_graph(document)
-    body["nodes"].append({"id": "cloud_context", "type": "asr_context", "config": {}})
+    body["nodes"].append(
+        {
+            "id": "cloud_context",
+            "type": "text_join",
+            "config": {"items": [{"id": "a1", "value": "vocabulary"}], "separator": ""},
+        }
+    )
     body["edges"].append(
         {
             "id": "context",
             "source": "cloud_context",
-            "source_port": "asr_context",
+            "source_port": "string",
             "target": "cloud",
-            "target_port": "asr_context",
+            "target_port": "context",
         }
     )
     return body
@@ -258,7 +264,7 @@ async def test_parameter_descendants_reuse_side_ancestor_and_changed_parameter_r
                     "source": "lang",
                     "source_port": "string",
                     "target": "cloud_context",
-                    "target_port": "language",
+                    "target_port": "text_a1",
                 },
                 {
                     "id": "name-edge",
@@ -461,7 +467,7 @@ async def test_layout_edge_ids_irrelevant_but_manual_connected_fallback_is_finge
                 "source": "lang",
                 "source_port": "string",
                 "target": "cloud_context",
-                "target_port": "language",
+                "target_port": "text_a1",
             }
         )
         document = await save(client, pid, body)
@@ -481,9 +487,9 @@ async def test_layout_edge_ids_irrelevant_but_manual_connected_fallback_is_finge
             },
         )
         assert (await plan(client, pid, aids[0], rerun_body(document, source)))["valid"]
-        next(n for n in document["nodes"] if n["id"] == "cloud_context")["config"]["language"] = (
-            "en"
-        )
+        next(n for n in document["nodes"] if n["id"] == "cloud_context")["config"]["items"][0][
+            "value"
+        ] = "en"
         document = await save(
             client,
             pid,

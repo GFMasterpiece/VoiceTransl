@@ -20,8 +20,9 @@ from ..domain.node_execution import (
 )
 from ..domain.node_registry import (
     NODE_DEFINITIONS,
-    PORT_DEFINITIONS,
     TYPE_DEFINITIONS,
+    resolve_port,
+    resolved_input_ports,
     type_is_compatible,
     validate_node_result,
     validate_port_value,
@@ -76,16 +77,18 @@ async def _run_registered_node(context: NodeExecutionContext) -> NodeResult:
         raise ValueError("node input is missing a required port")
     for port, data in context.inputs.items():
         if (
-            port not in definition.input_ports
+            port not in resolved_input_ports(definition, context.node.config)
             or data.port != port
-            or (data.type_id is None and not validate_port_value(port, data.value))
+            or (data.type_id is None and not validate_port_value(port, data.value, context.node))
             or (
                 data.type_id is not None
                 and (
                     data.type_id not in TYPE_DEFINITIONS
-                    or not type_is_compatible(data.type_id, PORT_DEFINITIONS[port].type_id)
+                    or not type_is_compatible(
+                        data.type_id, resolve_port(port, context.node).type_id
+                    )
                     or not TYPE_DEFINITIONS[data.type_id].is_valid(data.value)
-                    or not PORT_DEFINITIONS[port].capability_requirements
+                    or not resolve_port(port, context.node).capability_requirements
                     <= TYPE_DEFINITIONS[data.type_id].capabilities
                 )
             )

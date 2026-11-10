@@ -36,8 +36,8 @@ async def test_qwen_default_fields_follow_declared_order_and_connection_roles(tm
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         settings = (await client.get("/api/v1/settings")).json()
         catalog = (await client.get("/api/v1/capabilities")).json()
-    assert catalog["workflow"]["schema_version"] == "1.16"
-    assert settings["schema_version"] == "2.0"
+    assert catalog["workflow"]["schema_version"] == "1.17"
+    assert settings["schema_version"] == "3.0"
     nodes = {node["type"]: node for node in catalog["workflow"]["nodes"]}
     ordered = ["protocol", "endpoint", "region"]
     fields = settings["node_defaults"]["service_connection"]["fields"]

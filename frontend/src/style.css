@@ -477,3 +477,7 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 .backend-connection-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 .backend-connection-actions .text-button { margin-right: auto; }
 .backend-connection-feedback { color: var(--muted); font-size: 12px; }
+
+.node-slot-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin: 0 0 8px; }
+.node-slot-actions .text-button { min-height: 28px; padding: 3px 7px; font: 11px/1.5 var(--sans); }
+.node-add-input { align-self: flex-start; max-width: 100%; min-height: 32px; white-space: normal; overflow-wrap: anywhere; }

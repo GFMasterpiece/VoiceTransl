@@ -25,12 +25,12 @@ export const WORKFLOW_NODE_PORT_Y = 45
 export const WORKFLOW_NODE_FIELDS_Y = 62
 export const WORKFLOW_NODE_PORT_ROW_HEIGHT = 24
 export const WORKFLOW_NODE_BODY_BOTTOM = 12
-export function workflowNodeFieldsY(type: NodeType, registry: NodeRegistry): number {
-  const count = Math.max(registry.inputPortsForNode(type).length, registry.outputPortsForNode(type).length, 1)
+export function workflowNodeFieldsY(type: NodeType, registry: NodeRegistry, config: Record<string, unknown> = {}): number {
+  const count = Math.max(registry.inputPortsForNode(type, config).length, registry.outputPortsForNode(type).length, 1)
   return WORKFLOW_NODE_FIELDS_Y + (count - 1) * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
-export function workflowPortY(type: NodeType, port: PortName, direction: 'input' | 'output', registry: NodeRegistry): number | null {
-  const ports = direction === 'input' ? registry.inputPortsForNode(type) : registry.outputPortsForNode(type)
+export function workflowPortY(type: NodeType, port: PortName, direction: 'input' | 'output', registry: NodeRegistry, config: Record<string, unknown> = {}): number | null {
+  const ports = direction === 'input' ? registry.inputPortsForNode(type, config) : registry.outputPortsForNode(type)
   const index = ports.indexOf(port)
   return index < 0 ? null : WORKFLOW_NODE_PORT_Y + index * WORKFLOW_NODE_PORT_ROW_HEIGHT
 }
@@ -41,19 +41,19 @@ export function workflowFieldHeight(field: { type: string; widget?: string | nul
 
 export const WORKFLOW_RESOURCE_HEIGHT = 236
 export const WORKFLOW_PREVIEW_HEIGHT = 190
-export function workflowVisibleFields(node: { type: NodeType; id?: string }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
+export function workflowVisibleFields(node: { type: NodeType; id?: string; config?: Record<string, unknown> }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
   const kind = registry.kind(node.type)
-  return (kind?.fields || []).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey
+  return registry.fieldsForNode(node.type, node.config).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey
     && !inlineConnectionKeys(kind).includes(field.key)
     && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
-export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
-  return workflowVisibleFields({ type, id: nodeId }, registry, edges).reduce((height, field) => height + workflowFieldHeight(field), 0)
+export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
+  return workflowVisibleFields({ type, id: nodeId, config }, registry, edges).reduce((height, field) => height + workflowFieldHeight(field), 0)
 }
-export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = []): number {
+export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
   const kind = registry.kind(type)
-  const bodyY = workflowNodeFieldsY(type, registry)
-  return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges)
+  const bodyY = workflowNodeFieldsY(type, registry, config)
+  return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges, config)
     + (kind?.resourceInput ? kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + WORKFLOW_NODE_BODY_BOTTOM)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
@@ -70,14 +70,14 @@ export interface WorkflowNode {
 }
 
 /** Layout dimensions never change the node's configuration or execution identity. */
-export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { id?: string }, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize, edges: readonly WorkflowEdge[] = []): WorkflowNodeSize {
+export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { id?: string; config?: Record<string, unknown> }, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize, edges: readonly WorkflowEdge[] = []): WorkflowNodeSize {
   const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
   return {
     width: Math.max(registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
-      registry?.kind(node.type)?.fields.length ? WORKFLOW_NODE_FORM_WIDTH : 0,
+      registry?.fieldsForNode(node.type, node.config).length ? WORKFLOW_NODE_FORM_WIDTH : 0,
       registry?.kind(node.type)?.inlineConnectionInput ? WORKFLOW_NODE_CONNECTION_WIDTH : 0,
       dimension(node.size?.width), dimension(measuredMin?.width)),
-    height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges) : WORKFLOW_NODE_HEIGHT,
+    height: Math.max(registry ? workflowNodeHeight(node.type, registry, node.id, edges, node.config) : WORKFLOW_NODE_HEIGHT,
       dimension(node.size?.height), dimension(measuredMin?.height)),
   }
 }
@@ -232,8 +232,8 @@ export function outputPortForNode(type: NodeType, registry: NodeRegistry): Outpu
   return registry.outputPortForNode(type)
 }
 
-export function inputPortForNode(type: NodeType, registry: NodeRegistry): InputPortName | null {
-  return registry.inputPortForNode(type)
+export function inputPortForNode(type: NodeType, registry: NodeRegistry, config?: Record<string, unknown>): InputPortName | null {
+  return registry.inputPortForNode(type, config)
 }
 
 export function isTerminalNode(type: NodeType, registry: NodeRegistry): boolean {
@@ -295,7 +295,7 @@ export function resolveArtifactUrl(
 
 function readWorkflow(value: unknown): WorkflowDocument {
   const document = value as WorkflowDocument
-  if (!document || typeof document !== 'object' || document.schema_version !== '2.0'
+  if (!document || typeof document !== 'object' || document.schema_version !== '3.0'
     || typeof document.project_id !== 'string' || !Number.isInteger(document.revision)
     || !Number.isInteger(document.workflow_revision) || !Array.isArray(document.nodes)
     || !Array.isArray(document.edges)) {
@@ -320,7 +320,7 @@ function readArtifact(value: unknown): WorkflowArtifact | null {
 
 function readRun(value: unknown): WorkflowRun {
   const run = value as WorkflowRun
-  if (!run || run.schema_version !== '2.0' || run.workflow?.schema_version !== '2.0' || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
+  if (!run || run.schema_version !== '3.0' || run.workflow?.schema_version !== '3.0' || typeof run.id !== 'string' || typeof run.audio_id !== 'string'
     || (run.batch_item_sequence != null && (!Number.isInteger(run.batch_item_sequence) || run.batch_item_sequence < 1))
     || (run.batch_id != null && (typeof run.batch_id !== 'string' || !run.batch_id))
     || typeof run.status !== 'string' || !Array.isArray(run.nodes)
@@ -800,7 +800,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (['1.16'].includes(capabilities.value.schemaVersion)) await loadSettings()
+      if (['1.17'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
@@ -1165,7 +1165,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (['1.16'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.17'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1183,14 +1183,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.16'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.17'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = ['1.16'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.17'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }
@@ -1227,7 +1227,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const resource = registry.value?.kind(node.type)?.resourceInput
       if (fields.length === 1 && fields[0] !== resource?.configKey && fields[0] !== resource?.collectionKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
     }
-    if (patch.config !== undefined) node.config = JSON.parse(JSON.stringify(patch.config))
+    if (patch.config !== undefined) {
+      node.config = JSON.parse(JSON.stringify(patch.config))
+      const ports = registry.value?.inputPortsForNode(node.type, node.config) || []
+      draft.value.edges = draft.value.edges.filter((edge) => edge.target !== id || ports.includes(edge.target_port))
+    }
     if (patch.position !== undefined) node.position = { ...patch.position }
     if (patch.size !== undefined) node.size = patch.size === null ? null : { ...patch.size }
     recordEdit(before, key)
@@ -1304,12 +1308,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const to = draft.value.nodes.find((node) => node.id === target)
     if (!registry.value) return false
     const sourcePort = sourcePortId ?? (from ? outputPortForNode(from.type, registry.value) : null)
-    const targetPort = targetPortId ?? (to ? inputPortForNode(to.type, registry.value) : null)
-    if (!from || !to || !sourcePort || !targetPort || !registry.value.outputPortsForNode(from.type).includes(sourcePort) || !registry.value.inputPortsForNode(to.type).includes(targetPort)) {
+    const targetPort = targetPortId ?? (to ? inputPortForNode(to.type, registry.value, to.config) : null)
+    if (!from || !to || !sourcePort || !targetPort || !registry.value.outputPortsForNode(from.type).includes(sourcePort) || !registry.value.inputPortsForNode(to.type, to.config).includes(targetPort)) {
       errorState.set(message('workflow.noPorts'))
       return false
     }
-    if (!registry.value.portsCompatible(sourcePort, targetPort)) {
+    if (!registry.value.portsCompatible(sourcePort, targetPort, to)) {
       errorState.set(message('workflow.connectPortMismatch', { p0: sourcePort, p1: targetPort }))
       return false
     }

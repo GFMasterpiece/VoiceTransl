@@ -28,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export", "languages"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.16"
+    assert body["workflow"]["schema_version"] == "1.17"
     assert [
         port for port in body["workflow"]["ports"] if port["id"] in {"audio", "transcript", "text"}
     ] == [
@@ -88,8 +88,6 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "llm_translate",
         "service_connection",
         "model_config",
-        "translation_context",
-        "asr_context",
         "translation_options",
         "asr_options",
         "json_value",
@@ -113,8 +111,6 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
             "boolean_value",
             "service_connection",
             "model_config",
-            "translation_context",
-            "asr_context",
             "translation_options",
             "asr_options",
             "json_value",
@@ -166,11 +162,13 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "config_key": "audio_id",
         "collection_key": "audio_ids",
     }
-    asr_language = next(
-        field for field in nodes["asr_context"]["config"]["fields"] if field["key"] == "language"
+    assert "translation_context" not in nodes and "asr_context" not in nodes
+    region = next(
+        field
+        for field in nodes["service_connection"]["config"]["fields"]
+        if field["key"] == "region"
     )
-    assert asr_language["default"] == ""
-    assert asr_language["suggestion_source"] == "languages"
+    assert region["nullable"] is True and region["max_length"] == 64
     output_stem = next(
         field
         for field in nodes["text_output"]["config"]["fields"]
@@ -197,11 +195,11 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "creation_default" in field for node in nodes.values() for field in node["config"]["fields"]
     )
     ports = {port["id"]: port for port in body["workflow"]["ports"]}
-    for name in ("language", "filename_stem", "text_format", "string"):
+    for name in ("context", "filename_stem", "text_format", "string"):
         assert ports[name]["type_id"] == "string"
+    assert {"language", "target_language", "glossary"}.isdisjoint(ports)
     types = {item["id"]: item for item in body["workflow"]["data_types"]}
     assert types["integer"]["parent_type_id"] == "number"
-    assert asr_language["input_port"] == "language"
     assert output_stem["input_port"] == "filename_stem"
     assert text_format["input_port"] == "text_format"
     lowered = response.text.lower()
@@ -360,15 +358,6 @@ def test_language_suggestions_are_explicit_and_preserve_config_values():
     )
     with pytest.raises(ValueError, match="suggestion source"):
         validate_node_definition(invalid)
-    for node_type in ("asr_context",):
-        definition = NODE_DEFINITIONS[node_type]
-        field = next(item for item in definition.fields if item.key == "language")
-        assert field.suggestion_source == "languages"
-        assert field.type == "string"
-        assert field.input_port == "language"
-        value = {item.key: item.default for item in definition.fields if item.default is not None}
-        value["language"] = "x-Custom-Language"
-        assert definition.normalize_config(value)["language"] == "x-Custom-Language"
 
 
 @pytest.mark.asyncio
@@ -383,12 +372,12 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _ = await create_project(client)
         graph = parameter_graph()
-        next(node for node in graph["nodes"] if node["id"] == "asr_context")["config"][
-            "language"
+        next(node for node in graph["nodes"] if node["id"] == "asr_context")["config"]["items"][0][
+            "value"
         ] = "x-Custom"
         saved = await save_graph(client, pid, 0, graph)
         document = WorkflowDocument.model_validate(saved)
-        workflow_path = app.state.store.project_dir(pid) / "workflow-v2.json"
+        workflow_path = app.state.store.project_dir(pid) / "workflow-v3.json"
         original_bytes = workflow_path.read_bytes()
         snapshot = workflow_snapshot(document).model_dump_json()
         digest = workflow_semantic_digest(document.nodes, document.edges)
@@ -397,10 +386,10 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         assert before.json()["languages"]
         assert workflow_path.read_bytes() == original_bytes
         monkeypatch.setattr(languages, "_LANGUAGES", [])
-        definition = NODE_DEFINITIONS["asr_context"]
+        definition = NODE_DEFINITIONS["text_join"]
         monkeypatch.setitem(
             NODE_DEFINITIONS,
-            "asr_context",
+            "text_join",
             replace(
                 definition,
                 fields=tuple(
@@ -413,10 +402,10 @@ async def test_language_metadata_does_not_change_workflow_snapshot_or_digest(tmp
         assert after.status_code == 200
         assert after.json()["languages"] == []
         asr = next(
-            node for node in after.json()["workflow"]["nodes"] if node["type"] == "asr_context"
+            node for node in after.json()["workflow"]["nodes"] if node["type"] == "text_join"
         )
         assert (
-            next(field for field in asr["config"]["fields"] if field["key"] == "language")[
+            next(field for field in asr["config"]["fields"] if field["key"] == "separator")[
                 "suggestion_source"
             ]
             is None

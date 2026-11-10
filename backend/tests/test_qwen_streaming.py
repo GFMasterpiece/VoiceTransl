@@ -555,22 +555,25 @@ async def test_connect_timeout_and_close_timeout_are_part_of_total_deadline(tmp_
             release.set()
     assert not wire.runs
 
+    close_entered = asyncio.Event()
     close_completed = asyncio.Event()
     original = qwen._close
 
     async def slow_close(ws):
         try:
-            await asyncio.sleep(0.06)
+            close_entered.set()
+            await asyncio.sleep(3)
         finally:
             await original(ws)
             close_completed.set()
 
     monkeypatch.setattr(qwen, "_close", slow_close)
     async with platform(Wire()) as connection:
-        connection.default_timeout = 0.03
+        connection.default_timeout = 2
         with pytest.raises(qwen.QwenStreamingError) as caught:
             await transcribe(audio(tmp_path), connection)
     assert caught.value.code == "QWEN_STREAM_TIMEOUT"
+    assert close_entered.is_set()
     assert close_completed.is_set()
 
 
@@ -637,4 +640,26 @@ async def test_secret_is_explicit_and_never_read_from_environment(tmp_path, monk
         with pytest.raises(qwen.QwenStreamingError) as caught:
             await transcribe(audio(tmp_path), connection, api_key=key)
     assert caught.value.code == "QWEN_STREAM_API_KEY_REQUIRED"
+    assert not wire.handshakes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", [None, "", "password secret 普通领域词\n😀", "😀" * 400])
+async def test_plain_context_wire_mapping(tmp_path, text):
+    wire = Wire()
+    async with platform(wire) as connection:
+        await transcribe(audio(tmp_path), connection, context=text)
+    expected = (
+        [{"role": "user", "content": [{"type": "input_text", "text": text}]}] if text else None
+    )
+    assert wire.runs[0]["payload"]["input"].get("context") == expected
+
+
+@pytest.mark.asyncio
+async def test_context_over_limit_rejected_before_handshake(tmp_path):
+    wire = Wire()
+    async with platform(wire) as connection:
+        with pytest.raises(Exception) as error:
+            await transcribe(audio(tmp_path), connection, context="😀" * 401)
+    assert error.value.code == "QWEN_CONTEXT_TOO_LONG"
     assert not wire.handshakes

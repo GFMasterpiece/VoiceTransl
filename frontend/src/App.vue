@@ -247,7 +247,7 @@ onUnmounted(() => {
       <a class="brand" href="#" :aria-label="t('app.brandHome')" @click.prevent="showList"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>VoiceTransl</span></a>
       <span class="topbar-divider" aria-hidden="true"></span><span class="topbar-caption">{{ t('app.caption') }}</span><button class="topbar-status" type="button" data-backend-connection :class="`is-${connectionStatus}`" :disabled="formBusy || deleting || backendSwitching || backendOpen || settingsOpen || createOpen" :aria-label="t('backend.title')" @click="showBackendConnection"><span class="status-dot"></span>{{ t(`backend.${connectionStatus}`) }}</button>
       <button v-if="homeCapabilitiesFailed" class="secondary-button compact-button" type="button" data-settings-retry :disabled="homeCapabilitiesLoading" @click="loadHomeCapabilities">{{ t('settings.retryCapabilities') }}</button>
-      <button v-if="['1.16'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings :disabled="formBusy || deleting || backendSwitching || backendOpen || settingsOpen || createOpen" @click="showSettings">{{ t('settings.title') }}</button>
+      <button v-if="['1.17'].includes(homeCapabilities?.schemaVersion || '')" class="secondary-button compact-button" type="button" data-global-settings :disabled="formBusy || deleting || backendSwitching || backendOpen || settingsOpen || createOpen" @click="showSettings">{{ t('settings.title') }}</button>
     </header>
 
     <main class="main-content">

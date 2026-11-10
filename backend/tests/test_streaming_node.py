@@ -3,6 +3,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from app.domain.batch import ACTIVE_BATCH_STATUSES
 from app.domain.inline_connection import InlineConnection
 from app.domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from app.domain.node_registry import NODE_DEFINITIONS, node_catalog, validate_node_definition
@@ -245,7 +246,11 @@ async def test_streaming_language_parameter_and_timestamp_export(tmp_path, strea
         payload["nodes"][2]["config"]["format"] = "srt"
         payload["nodes"].append({"id": "lang", "type": "string_value", "config": {"value": "en"}})
         payload["nodes"].append(
-            {"id": "context", "type": "asr_context", "config": {"language": "ja"}}
+            {
+                "id": "context",
+                "type": "text_join",
+                "config": {"items": [{"id": "a1", "value": "背景"}], "separator": ""},
+            }
         )
         payload["edges"].append(
             {
@@ -253,25 +258,29 @@ async def test_streaming_language_parameter_and_timestamp_export(tmp_path, strea
                 "source": "lang",
                 "source_port": "string",
                 "target": "context",
-                "target_port": "language",
+                "target_port": "text_a1",
             }
         )
         payload["edges"].append(
             {
                 "id": "context_cloud",
                 "source": "context",
-                "source_port": "asr_context",
+                "source_port": "string",
                 "target": "cloud",
-                "target_port": "asr_context",
+                "target_port": "context",
             }
         )
         saved = await save(client, pid, payload)
         saved = await save(client, pid, update_body(saved))
         completed = await run(client, app, pid, aids[0], saved)
         assert completed.status.value == "completed"
-        assert stream["calls"][0]["language"] == "en"
+        assert stream["calls"][0]["language"] == "ja"
+        assert stream["calls"][0]["context"] == "en"
         assert stream["calls"][0]["model"] == "future-stream-model"
-        assert config_of(completed.workflow.model_dump(mode="json"), "context")["language"] == "ja"
+        assert (
+            config_of(completed.workflow.model_dump(mode="json"), "context")["items"][0]["value"]
+            == "背景"
+        )
         output = next(record for record in completed.nodes if record.node_id == "output")
         downloaded = await client.get(output.artifact.download_url)
         assert downloaded.status_code == 200
@@ -319,24 +328,28 @@ async def test_streaming_batch_inherits_each_audio_language_from_empty_context(t
         assert response.status_code == 201, response.text
         aids.append(response.json()["audio"]["id"])
         payload = streaming_graph(document)
-        payload["nodes"].append({"id": "context", "type": "asr_context", "config": {}})
+        payload["nodes"].append({"id": "context", "type": "string_value", "config": {"value": ""}})
         payload["edges"].append(
             {
                 "id": "ctx_cloud",
                 "source": "context",
-                "source_port": "asr_context",
+                "source_port": "string",
                 "target": "cloud",
-                "target_port": "asr_context",
+                "target_port": "context",
             }
         )
         saved = await save(client, pid, payload)
         saved = await save(client, pid, update_body(saved))
         created = await submit(client, pid, aids, saved)
-        batch = await finished(app, pid, created["id"])
+        # Both runs persist checkpoints; allow bounded filesystem contention on Windows.
+        async with asyncio.timeout(30):
+            while app.state.batches.get(pid, created["id"]).status in ACTIVE_BATCH_STATUSES:
+                await asyncio.sleep(0.005)
+        batch = app.state.batches.get(pid, created["id"])
         assert batch.status == "completed"
         assert {call["language"] for call in stream["calls"]} == {"ja", "fr"}
         assert {call["api_key"] for call in stream["calls"]} == {KEY_A}
-        assert config_of(saved, "context")["language"] == ""
+        assert config_of(saved, "context")["value"] == ""
     await app.state.batches.shutdown()
     await app.state.jobs.shutdown()
 
@@ -435,3 +448,37 @@ async def test_processing_extension_uses_streaming_protocol_without_scheduler_ch
         saved = await save(client, pid, update_body(saved))
         assert (await run(client, app, pid, aids[0], saved)).status.value == "completed"
         assert stream["calls"][-1]["connection"].provider_type == "qwen_streaming"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_type", ["qwen_asr", "qwen_asr_streaming"])
+async def test_submission_rejects_long_plain_context_before_adapter(tmp_path, stream, node_type):
+    app = create_app(tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, aids, document = await setup(client, 1)
+        payload = (
+            streaming_graph(document) if node_type == "qwen_asr_streaming" else graph(document)
+        )
+        payload["nodes"].append(
+            {"id": "context", "type": "string_value", "config": {"value": "x" * 401}}
+        )
+        payload["edges"].append(
+            {
+                "id": "ctx",
+                "source": "context",
+                "source_port": "string",
+                "target": "cloud",
+                "target_port": "context",
+            }
+        )
+        saved = await save(client, pid, payload)
+        saved = await save(client, pid, update_body(saved))
+        response = await client.post(
+            f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs",
+            json={"workflow_revision": saved["workflow_revision"]},
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "QWEN_CONTEXT_TOO_LONG"
+        assert not stream["calls"]
+        assert not app.state.jobs.tasks
+    await app.state.jobs.shutdown()

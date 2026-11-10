@@ -157,7 +157,7 @@ async def test_invalid_resource_collection_cannot_be_saved(tmp_path, selection):
         response = await save_input(client, pid, document, {"audio_ids": selection})
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_WORKFLOW"
-        assert not (app.state.store.project_dir(pid) / "workflow-v2.json").exists()
+        assert not (app.state.store.project_dir(pid) / "workflow-v3.json").exists()
 
 
 @pytest.mark.asyncio

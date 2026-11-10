@@ -17,7 +17,7 @@ from test_inline_credentials import cloud as cloud
 
 def test_schema_checks_documents_without_scanning_business_json():
     validate_schema_payload(
-        {"schema_version": "2.0", "nodes": [{"config": {"schema_version": "business-v9"}}]},
+        {"schema_version": "3.0", "nodes": [{"config": {"schema_version": "business-v9"}}]},
         "workflow",
     )
     validate_schema_payload(
@@ -37,6 +37,12 @@ async def test_old_settings_graph_run_and_batch_namespaces_are_ignored_and_untou
         root / "workflow-revisions" / "1.json",
         root / "workflow-runs" / ("wfr_" + "1" * 32) / "run.json",
         root / "batches" / ("bat_" + "1" * 32 + ".json"),
+        tmp_path / "settings-v2.json",
+        root / "workflow-v2.json",
+        root / "workflow-revisions-v2" / "1.json",
+        root / "workflow-runs-v2" / ("wfr_" + "2" * 32) / "run.json",
+        root / "audios" / aids[0] / "workflow-runs-v2" / ("wfr_" + "3" * 32) / "run.json",
+        root / "batches-v2" / ("bat_" + "2" * 32 + ".json"),
     ]
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +56,7 @@ async def test_old_settings_graph_run_and_batch_namespaces_are_ignored_and_untou
     ) as client:
         assert (await client.get("/api/v1/settings")).json()["revision"] == 0
         document = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()
-        assert document["schema_version"] == "2.0" and document["revision"] == 0
+        assert document["schema_version"] == "3.0" and document["revision"] == 0
         assert [node["type"] for node in document["nodes"]] == ["audio_input", "audio_output"]
         assert (await client.get(f"/api/v1/projects/{pid}/audios/{aids[0]}/workflow-runs")).json()[
             "total"

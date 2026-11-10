@@ -138,11 +138,11 @@ const nodeKinds = computed(() => (registry.value?.kinds || []).filter(kind => is
 const connectPointer = ref<{ x: number; y: number } | null>(null)
 const connectPointerId = ref<number | null>(null)
 function outputPortsForNode(type: string) { return registry.value?.outputPortsForNode(type) || [] }
-function inputPortsForNode(type: string) { return registry.value?.inputPortsForNode(type) || [] }
-function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value) : null }
-function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value) : WORKFLOW_NODE_FIELDS_Y }
-function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node.type).length, outputPortsForNode(node.type).length, 1) }
-function portStyle(id: string) { const typeId = registry.value?.port(id)?.typeId; const color = store.capabilities?.dataTypes.find(type => type.id === typeId)?.presentation?.color; return color ? { '--port-color': color } : undefined }
+function inputPortsForNode(node: WorkflowNode) { return registry.value?.inputPortsForNode(node.type, node.config) || [] }
+function portY(node: WorkflowNode, port: string, direction: PortDirection) { return registry.value ? workflowPortY(node.type, port, direction, registry.value, node.config) : null }
+function fieldsY(node: WorkflowNode) { return registry.value ? workflowNodeFieldsY(node.type, registry.value, node.config) : WORKFLOW_NODE_FIELDS_Y }
+function portRows(node: WorkflowNode) { return Math.max(inputPortsForNode(node).length, outputPortsForNode(node.type).length, 1) }
+function portStyle(id: string, node?: WorkflowNode) { const typeId = registry.value?.port(id, node)?.typeId; const color = store.capabilities?.dataTypes.find(type => type.id === typeId)?.presentation?.color; return color ? { '--port-color': color } : undefined }
 function portLabel(id: string | null) { return id ? (hasMessage(`batch.sourcePort_${id}`) ? t(`batch.sourcePort_${id}`) : registry.value?.port(id)?.label || id) : '' }
 function nodeLabel(node: WorkflowNode) { return registry.value ? registeredNodeLabel(node, registry.value) : node.type }
 const inputAudioName = computed(() => store.boundAudioId
@@ -151,11 +151,11 @@ const inputAudioName = computed(() => store.boundAudioId
 const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => [node.node_id, node])))
 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
-function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value, node.id, store.draft.edges) : 0 }
-function hasConfigFields(node: WorkflowNode) { return kind(node)?.fields.some((field) => field.key !== kind(node)?.resourceInput?.configKey && field.key !== kind(node)?.resourceInput?.collectionKey) }
+function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value, node.id, store.draft.edges, node.config) : 0 }
+function hasConfigFields(node: WorkflowNode) { return registry.value?.fieldsForNode(node.type, node.config).some((field) => field.key !== kind(node)?.resourceInput?.configKey && field.key !== kind(node)?.resourceInput?.collectionKey) }
 function inputPortLabel(node: WorkflowNode, port: string) {
-  const field = kind(node)?.fields.find((field) => field.inputPort === port)
-  const typeId = registry.value?.port(port)?.typeId
+  const field = registry.value?.fieldsForNode(node.type, node.config).find((field) => field.inputPort === port)
+  const typeId = registry.value?.port(port, node)?.typeId
   const type = registry.value?.capabilities.dataTypes.find((type) => type.id === typeId)
   const typeKey = `workflow.dataType_${typeId}`
   const typeLabel = hasMessage(typeKey) ? t(typeKey) : type?.label || portLabel(port)
@@ -164,7 +164,7 @@ function inputPortLabel(node: WorkflowNode, port: string) {
 }
 function inputPortDescription(node: WorkflowNode, port: string) {
   const description = t('workflow.inputPort', { port: `${inputPortLabel(node, port)} · ${port}` })
-  const edge = kind(node)?.fields.some((field) => field.inputPort === port)
+  const edge = registry.value?.fieldsForNode(node.type, node.config).some((field) => field.inputPort === port)
     ? store.draft.edges.find((edge) => edge.target === node.id && edge.target_port === port) : undefined
   return edge ? `${description} · ${t('workflow.parameterConnected', { node: edge.source, port: edge.source_port })}` : description
 }
@@ -404,8 +404,8 @@ const observedBodies = new Set<Element>()
 const measuredNodes = new Set<string>()
 function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
-    bodyY: fieldsY(node), width: registry.value ? workflowNodeSize({ type: node.type }, registry.value).width : WORKFLOW_NODE_WIDTH,
-    height: registry.value ? workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges) : WORKFLOW_NODE_HEIGHT,
+    bodyY: fieldsY(node), width: registry.value ? workflowNodeSize({ type: node.type, config: node.config }, registry.value).width : WORKFLOW_NODE_WIDTH,
+    height: registry.value ? workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges, node.config) : WORKFLOW_NODE_HEIGHT,
     fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
     preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
   }
@@ -428,7 +428,7 @@ function measureContent() {
     if (!node) continue
     // Start from catalog minima every time, never from a previous user size or measurement.
     const minimum = measureNodeContent(group, {
-      bodyY: fieldsY(node), width: workflowNodeSize({ type: node.type }, registry.value).width, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges),
+      bodyY: fieldsY(node), width: workflowNodeSize({ type: node.type, config: node.config }, registry.value).width, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges, node.config),
       fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
@@ -463,7 +463,7 @@ function scheduleMeasurement() {
   if (measurementFrame === null) measurementFrame = requestAnimationFrame(measureContent)
 }
 watch(() => new Map(store.draft.nodes.map((node) => [node.id, registry.value
-  ? workflowVisibleFields(node, registry.value, store.draft.edges).map((field) => field.key).join(',') : ''])), (current, previous) => {
+  ? JSON.stringify([registry.value.inputPortsForNode(node.type, node.config), workflowVisibleFields(node, registry.value, store.draft.edges).map((field) => field.key)]) : ''])), (current, previous) => {
   for (const [id, fields] of current) {
     if (previous?.get(id) === fields) continue
     delete contentMinimums.value[id]
@@ -485,7 +485,7 @@ function bodyStyle(node: WorkflowNode) {
   return { '--node-fields-min': `${minimum.fields}px`, '--node-resource-min': `${minimum.resource}px`, '--node-preview-min': `${minimum.preview}px` }
 }
 function headerPath(node: WorkflowNode) { return `M 14 0 H ${nodeWidth(node) - 14} Q ${nodeWidth(node)} 0 ${nodeWidth(node)} 14 V 30 H 0 V 14 Q 0 0 14 0 Z` }
-function portClipWidth(node: WorkflowNode) { return inputPortsForNode(node.type).length && outputPortsForNode(node.type).length ? (nodeWidth(node) - 24) / 2 : nodeWidth(node) - 20 }
+function portClipWidth(node: WorkflowNode) { return inputPortsForNode(node).length && outputPortsForNode(node.type).length ? (nodeWidth(node) - 24) / 2 : nodeWidth(node) - 20 }
 function startResize(event: PointerEvent, node: WorkflowNode, axis: 'right' | 'bottom' | 'corner') {
   if (editingBlocked.value || event.button !== 0 || event.isPrimary === false) return
   event.preventDefault()
@@ -894,12 +894,12 @@ onUnmounted(() => {
 
                 <text v-if="kind(node)?.isSource && !hasConfigFields(node) && !kind(node)?.resourceInput" class="node-meta" x="12" :y="fieldsY(node) + 15"><title>{{ inputAudioName }}</title>{{ t('workflow.boundAudio') }}</text>
                 <rect class="node-outline" :width="nodeWidth(node)" :height="nodeHeight(node)" rx="14" />
-                <g v-for="port in inputPortsForNode(node.type)" :key="`input-${port}`">
-                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :style="portStyle(port)" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>
+                <g v-for="port in inputPortsForNode(node)" :key="`input-${port}`">
+                  <circle class="node-port node-port-in" data-port-direction="input" :data-port-id="port" :style="portStyle(port, node)" cx="0" :cy="portY(node, port, 'input')!" r="6" :aria-label="inputPortDescription(node, port)" @pointerdown.stop="startConnection(node, 'input', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ inputPortDescription(node, port) }}</title></circle>
                   <text class="node-port-label node-port-label-in" :clip-path="`url(#${clipId}-${node.id}-port-in)`" x="10" :y="portY(node, port, 'input')! + 3" aria-hidden="true"><title>{{ inputPortLabel(node, port) }}</title>{{ inputPortLabel(node, port) }}</text>
                 </g>
                 <g v-for="port in outputPortsForNode(node.type)" :key="`output-${port}`">
-                  <circle class="node-port node-port-out" data-port-direction="output" :data-port-id="port" :style="portStyle(port)" :cx="nodeWidth(node)" :cy="portY(node, port, 'output')!" r="6" :aria-label="t('workflow.outputPort', { port })" @pointerdown.stop="startConnection(node, 'output', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port }) }}</title></circle>
+                  <circle class="node-port node-port-out" data-port-direction="output" :data-port-id="port" :style="portStyle(port, node)" :cx="nodeWidth(node)" :cy="portY(node, port, 'output')!" r="6" :aria-label="t('workflow.outputPort', { port })" @pointerdown.stop="startConnection(node, 'output', port, $event)" @pointerup.stop="finishConnection($event)"><title>{{ t('workflow.outputPort', { port }) }}</title></circle>
                   <text class="node-port-label node-port-label-out" :clip-path="`url(#${clipId}-${node.id}-port-out)`" :x="nodeWidth(node) - 10" :y="portY(node, port, 'output')! + 3" aria-hidden="true"><title>{{ portLabel(port) }}</title>{{ portLabel(port) }}</text>
                 </g>
                 <text v-if="nodeIssue(node)" class="node-error-mark" :x="nodeWidth(node) - 28" y="20" aria-hidden="true">!</text>
@@ -929,7 +929,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!filteredKindGroups.length" role="status">{{ t('workflow.noMatchingNodes') }}</p>
       </template>
-      <button v-if="contextMenu.nodeId && ['1.16'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <button v-if="contextMenu.nodeId && ['1.17'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>

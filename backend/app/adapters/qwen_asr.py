@@ -21,6 +21,7 @@ from ..domain.node_execution import NodeExecutionCancelled, NodeExecutionError
 from ..domain.transcript import Segment, Transcript
 from .private_http import PRIVATE_HTTP as _PRIVATE_HTTP
 from .private_http import ensure_private_http_filters
+from .qwen_context import context_messages
 from .qwen_protocol import (
     CANCEL_TIMEOUT,
     CHUNK_SIZE,
@@ -279,7 +280,7 @@ class _Session:
                 raise QwenASRError("QWEN_RESPONSE_INVALID", f"Qwen{self.stage}未返回JSON对象")
             return value
 
-    async def run(self, path, project_id, language, parameters):
+    async def run(self, path, project_id, language, parameters, messages):
         async with self.client() as control, self.client() as oss, self.client() as result:
             self.stage = "获取上传凭证"
             response = await self.json(
@@ -371,7 +372,10 @@ class _Session:
                 },
                 json={
                     "model": self.model,
-                    "input": {"file_urls": [f"oss://{key}"]},
+                    "input": {
+                        "file_urls": [f"oss://{key}"],
+                        **({"context": messages} if messages else {}),
+                    },
                     "parameters": {**parameters, "language_hints": [language]},
                 },
             )
@@ -446,14 +450,16 @@ async def transcribe(
     additional_parameters,
     cancel_event,
     api_key: str,
+    context: str | None = None,
 ):
+    messages = context_messages(context)
     validate_additional_parameters(additional_parameters)
     if cancel_event.is_set():
         raise QwenASRCancelled()
     session = _Session(connection, model, api_key)
     token = _PRIVATE_HTTP.set(True)
     work = asyncio.create_task(
-        session.run(Path(audio_path), project_id, language, additional_parameters)
+        session.run(Path(audio_path), project_id, language, additional_parameters, messages)
     )
     cancelled = asyncio.create_task(cancel_event.wait())
     try:

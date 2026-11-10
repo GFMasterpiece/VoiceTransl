@@ -3,13 +3,13 @@ import { API_BASE_URL, parseApiError } from '../api'
 import { message } from '../i18n'
 import { parseCapabilityField, type CapabilityField } from '../workflow/capabilities'
 export interface NodeDefaults { label: string; fields: CapabilityField[]; config: Record<string, unknown>; credential_configured: boolean; credential_version: string | null }
-export interface GlobalSettings { schema_version: '2.0'; revision: number; global_fields: CapabilityField[]; global: Record<string, unknown>; node_defaults: Record<string, NodeDefaults> }
+export interface GlobalSettings { schema_version: '3.0'; revision: number; global_fields: CapabilityField[]; global: Record<string, unknown>; node_defaults: Record<string, NodeDefaults> }
 export const settingsCache = shallowRef<GlobalSettings | null>(null)
 let cacheGeneration = 0
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 export function readSettings(value: unknown): GlobalSettings {
   const raw = value as GlobalSettings
-  if (!raw || raw.schema_version !== '2.0' || (!Number.isInteger(raw.revision) || raw.revision < 0) || !Array.isArray(raw.global_fields) || !isRecord(raw.global) || !isRecord(raw.node_defaults)) throw message('settings.invalid')
+  if (!raw || raw.schema_version !== '3.0' || (!Number.isInteger(raw.revision) || raw.revision < 0) || !Array.isArray(raw.global_fields) || !isRecord(raw.global) || !isRecord(raw.node_defaults)) throw message('settings.invalid')
   const fields = (items: unknown[]) => items.map((item) => parseCapabilityField(item))
   const node_defaults: Record<string, NodeDefaults> = {}
   for (const [type, node] of Object.entries(raw.node_defaults)) {

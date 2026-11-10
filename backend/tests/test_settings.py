@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 def save_body(settings, **changes):
     settings = deepcopy(settings)
     body = {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "expected_revision": settings["revision"],
         "request_id": "settings-test",
         "global": settings["global"],
@@ -28,17 +28,12 @@ def test_settings_roundtrip_revision_restart_and_runtime(tmp_path):
     assert set(initial["node_defaults"]) == {
         "service_connection",
         "model_config",
-        "translation_context",
-        "asr_context",
         "translation_options",
         "asr_options",
         "json_value",
         "text_join",
         "json_merge",
     }
-    assert [field["key"] for field in initial["node_defaults"]["asr_context"]["fields"]] == [
-        "language"
-    ]
     body = save_body(initial, **{"global": {"max_concurrent": 4, "upload_concurrency": 7}})
     body["node_defaults"]["model_config"]["model_name"] = "future-compatible-model"
     saved = client.put("/api/v1/settings", json=body)
@@ -107,14 +102,14 @@ def test_settings_failed_write_and_invalid_values_do_not_publish(tmp_path, monke
     monkeypatch.setattr("app.storage.settings_store.atomic_write_json", fail)
     assert client.put("/api/v1/settings", json=save_body(initial)).status_code == 503
     assert client.get("/api/v1/settings").json() == initial
-    assert not (tmp_path / "settings-v2.json").exists()
+    assert not (tmp_path / "settings-v3.json").exists()
 
 
 @pytest.mark.parametrize(
     "content", ['{"schema_version":"future"}', "{broken", "[]", "null", "3", '"scalar"']
 )
 def test_existing_invalid_settings_never_fall_back(tmp_path, content):
-    path = tmp_path / "settings-v2.json"
+    path = tmp_path / "settings-v3.json"
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError):
         create_app(tmp_path)
@@ -124,7 +119,7 @@ def test_existing_invalid_settings_never_fall_back(tmp_path, content):
 @pytest.mark.parametrize("content", ["[]", "null", "3", '"scalar"'])
 def test_bad_settings_structure_returns_safe_read_error(tmp_path, content):
     client = TestClient(create_app(tmp_path))
-    path = tmp_path / "settings-v2.json"
+    path = tmp_path / "settings-v3.json"
     path.write_text(content, encoding="utf-8")
     response = client.get("/api/v1/settings")
     assert response.status_code == 503
@@ -139,7 +134,7 @@ def test_settings_symlink_is_rejected_including_broken_links(tmp_path, broken):
     target = tmp_path / "target.json"
     if not broken:
         target.write_bytes(b"original target")
-    path = tmp_path / "settings-v2.json"
+    path = tmp_path / "settings-v3.json"
     try:
         path.symlink_to(target)
     except (OSError, NotImplementedError) as error:
@@ -179,7 +174,7 @@ def test_existing_settings_additive_registry_extension_is_read_only(tmp_path, mo
     client = TestClient(create_app(tmp_path))
     saved = client.put("/api/v1/settings", json=save_body(client.get("/api/v1/settings").json()))
     assert saved.status_code == 200
-    path = tmp_path / "settings-v2.json"
+    path = tmp_path / "settings-v3.json"
     original = path.read_bytes()
     monkeypatch.setitem(NODE_DEFINITIONS, "model_config", definition)
     monkeypatch.setitem(
@@ -200,11 +195,11 @@ def test_stale_replay_after_further_update_cannot_create_or_publish_keys(tmp_pat
     first = save_body(client.get("/api/v1/settings").json())
     second = client.put("/api/v1/settings", json=first).json()
     latest = client.put("/api/v1/settings", json=save_body(second, request_id="second")).json()
-    original = (tmp_path / "settings-v2.json").read_bytes()
+    original = (tmp_path / "settings-v3.json").read_bytes()
     first["credential_updates"] = [
         {"node_type": "service_connection", "operation": "set", "api_key": "stale-key"}
     ]
     assert client.put("/api/v1/settings", json=first).status_code == 409
     assert client.get("/api/v1/settings").json() == latest
-    assert (tmp_path / "settings-v2.json").read_bytes() == original
+    assert (tmp_path / "settings-v3.json").read_bytes() == original
     assert not (tmp_path / ".default_credentials").exists()

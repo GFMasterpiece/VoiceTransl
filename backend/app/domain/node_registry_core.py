@@ -132,9 +132,57 @@ def type_is_compatible(source_type_id: str, target_type_id: str) -> bool:
     return False
 
 
-def ports_are_compatible(source_port_id: str, target_port_id: str) -> bool:
-    source = PORT_DEFINITIONS.get(source_port_id)
-    target = PORT_DEFINITIONS.get(target_port_id)
+def resolved_input_ports(definition, config):
+    group = definition.dynamic_inputs
+    if group is None:
+        return definition.input_ports
+    items = config.get(group["config_key"], [])
+    if not isinstance(items, list):
+        return definition.input_ports
+    return definition.input_ports + tuple(
+        group["port_prefix"] + item["id"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    )
+
+
+def resolved_fields(definition, config):
+    fields = list(definition.fields)
+    group = definition.dynamic_inputs
+    if group is not None:
+        items = config.get(group["config_key"], [])
+        if not isinstance(items, list):
+            return tuple(fields)
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                fields.append(
+                    CapabilityField.model_validate(
+                        {
+                            **group["field"],
+                            "key": f"{group['config_key']}.{item['id']}.value",
+                            "input_port": group["port_prefix"] + item["id"],
+                            "input_type_id": group["type_id"],
+                        }
+                    )
+                )
+    return tuple(fields)
+
+
+def resolve_port(port_id, node=None):
+    if node is not None:
+        definition = NODE_DEFINITIONS.get(node.type)
+        group = definition.dynamic_inputs if definition else None
+        if group and port_id in resolved_input_ports(definition, node.config):
+            if port_id.startswith(group["port_prefix"]):
+                return PortDefinition(port_id=port_id, type_id=group["type_id"], label=port_id)
+    return PORT_DEFINITIONS.get(port_id)
+
+
+def ports_are_compatible(
+    source_port_id: str, target_port_id: str, source_node=None, target_node=None
+) -> bool:
+    source = resolve_port(source_port_id, source_node)
+    target = resolve_port(target_port_id, target_node)
     return bool(
         source
         and target
@@ -143,8 +191,8 @@ def ports_are_compatible(source_port_id: str, target_port_id: str) -> bool:
     )
 
 
-def validate_port_value(port_id: str, value: object) -> bool:
-    definition = PORT_DEFINITIONS.get(port_id)
+def validate_port_value(port_id: str, value: object, node=None) -> bool:
+    definition = resolve_port(port_id, node)
     if definition is None:
         return False
     type_definition = TYPE_DEFINITIONS.get(definition.type_id)
@@ -152,6 +200,36 @@ def validate_port_value(port_id: str, value: object) -> bool:
 
 
 NODE_DEFINITIONS: dict[str, NodeDefinition] = {}
+
+
+def validate_dynamic_config(definition, config):
+    group = definition.dynamic_inputs
+    if group is None:
+        return
+    items = config.get(group["config_key"])
+    if not isinstance(items, list) or not group["min_items"] <= len(items) <= group["max_items"]:
+        raise ValueError("invalid dynamic input count")
+    seen = set()
+    template = CapabilityField.model_validate(group["field"])
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"id", "value"}
+            or not isinstance(item["id"], str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", item["id"])
+            or item["id"] in seen
+            or not TYPE_DEFINITIONS[group["type_id"]].is_valid(item["value"])
+        ):
+            raise ValueError("invalid dynamic input item")
+        seen.add(item["id"])
+        value = item["value"]
+        if isinstance(value, str) and (
+            (template.required and not value)
+            or (template.min_length is not None and len(value) < template.min_length)
+            or (template.max_length is not None and len(value) > template.max_length)
+            or (template.pattern is not None and not re.search(template.pattern, value))
+        ):
+            raise ValueError("invalid dynamic input value")
 
 
 def node_ports():
@@ -340,6 +418,54 @@ def _validate_categories(definitions):
 
 
 def validate_node_definition(definition: NodeDefinition) -> None:
+    group = definition.dynamic_inputs
+    if group is not None:
+        if (
+            set(group)
+            != {
+                "config_key",
+                "port_prefix",
+                "type_id",
+                "min_items",
+                "max_items",
+                "field",
+                "default_items",
+            }
+            or group["type_id"] != "string"
+            or not isinstance(group["config_key"], str)
+            or not re.fullmatch(PORT_PATTERN, group["config_key"])
+            or any(item.key == group["config_key"] for item in definition.fields)
+            or not isinstance(group["port_prefix"], str)
+            or len(group["port_prefix"]) > 32
+            or not re.fullmatch(r"[a-z][a-z0-9_]*_", group["port_prefix"])
+            or type(group["min_items"]) is not int
+            or type(group["max_items"]) is not int
+            or not 1 <= group["min_items"] <= group["max_items"] <= 32
+        ):
+            raise ValueError("invalid dynamic input declaration")
+        template = CapabilityField.model_validate(group["field"])
+        if (
+            template.type != group["type_id"]
+            or template.input_port is not None
+            or template.nullable
+            or not isinstance(template.default, str)
+        ):
+            raise ValueError("invalid dynamic input field template")
+        if any(
+            port.startswith(group["port_prefix"])
+            for port in (*definition.input_ports, *definition.output_ports)
+        ):
+            raise ValueError("dynamic inputs overlap fixed node ports")
+        validate_dynamic_config(definition, {group["config_key"]: group["default_items"]})
+        validate_dynamic_config(
+            definition,
+            {
+                group["config_key"]: [
+                    {"id": f"default_{index}", "value": template.default}
+                    for index in range(group["min_items"])
+                ]
+            },
+        )
     if definition.evaluation_kind not in {"configuration", "processing"}:
         raise ValueError("invalid evaluation kind")
     if definition.can_start_without_inputs and definition.evaluation_kind != "configuration":
@@ -489,6 +615,7 @@ def node_catalog() -> list[dict[str, object]]:
             "debug_only": item.debug_only,
             "evaluation_kind": item.evaluation_kind,
             "can_start_without_inputs": item.can_start_without_inputs,
+            "dynamic_inputs": item.dynamic_inputs,
             "category": _category(item),
             "input_ports": list(item.input_ports),
             "output_ports": list(item.output_ports),

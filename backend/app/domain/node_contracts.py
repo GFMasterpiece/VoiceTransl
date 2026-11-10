@@ -16,6 +16,7 @@ class CapabilityField(BaseModel):
     key: str
     type: str
     required: bool = False
+    nullable: bool = Field(default=False, strict=True)
     default: object = None
     creation_default: object = None
     minimum: float | int | None = None
@@ -79,6 +80,7 @@ class NodeDefinition:
     binding_inputs: dict[str, str] = field(default_factory=dict)
     validate_inputs: Callable[[NodeExecutionContext], None] | None = None
     validation_input_ports: tuple[str, ...] = ()
+    dynamic_inputs: dict[str, object] | None = None
 
     @property
     def required_ports(self) -> tuple[str, ...]:
@@ -138,6 +140,11 @@ def fields_from_model(
     for key, spec in schema.get("properties", {}).items():
         if key in excluded:
             continue
+        branches = spec.get("anyOf", [])
+        nullable = any(branch.get("type") == "null" for branch in branches)
+        nonnull = [branch for branch in branches if branch.get("type") != "null"]
+        if nullable and len(nonnull) == 1:
+            spec = {**spec, **nonnull[0]}
         type_name = {
             "integer": "integer",
             "boolean": "boolean",
@@ -153,6 +160,7 @@ def fields_from_model(
                 key=key,
                 type=field_type,
                 required=key in required,
+                nullable=nullable,
                 default=spec.get("default"),
                 creation_default=spec.get("creation_default"),
                 suggestion_source=spec.get("suggestion_source"),

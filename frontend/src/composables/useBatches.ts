@@ -67,7 +67,7 @@ function validPending(value: unknown): value is PendingRequest {
   return /^\/[A-Za-z0-9_-]+\/retry$/.test(request.path) && typeof request.body.include_cancelled === 'boolean'
 }
 
-export function batchPendingStorageKey(projectId: string, apiBase = API_BASE_URL) { return `voicetransl.batch.v2.pending:${encodeURIComponent(backendIdentity(apiBase))}:${encodeURIComponent(projectId)}` }
+export function batchPendingStorageKey(projectId: string, apiBase = API_BASE_URL) { return `voicetransl.batch.v3.pending:${encodeURIComponent(backendIdentity(apiBase))}:${encodeURIComponent(projectId)}` }
 export function restoreBatchPending(projectId: string, apiBase = API_BASE_URL): PendingRequest | null {
   try {
     const key = batchPendingStorageKey(projectId, apiBase)
@@ -147,7 +147,7 @@ export function useBatches(projectId: string) {
         request(`/${encodeURIComponent(id)}`), request(`/${encodeURIComponent(id)}/items?limit=${items.value.limit}&offset=${offset}`),
       ])
       const batch = readSummary(rawDetail) as BatchDetail
-      if (batch.id !== id || batch.project_id !== projectId || !batch.workflow || batch.workflow.schema_version !== '2.0' || !Array.isArray(batch.workflow.nodes) || !Array.isArray(batch.workflow.edges)) throw message('batch.invalidResponse')
+      if (batch.id !== id || batch.project_id !== projectId || !batch.workflow || batch.workflow.schema_version !== '3.0' || !Array.isArray(batch.workflow.nodes) || !Array.isArray(batch.workflow.edges)) throw message('batch.invalidResponse')
       const page = readPage(rawItems, readItem)
       if (!alive || sequence !== detailSequence) return
       detail.value = batch; items.value = page

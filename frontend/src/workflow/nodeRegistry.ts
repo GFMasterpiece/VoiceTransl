@@ -1,3 +1,4 @@
+import { fieldValueErrors } from './fieldValidation'
 import { t, hasMessage, i18n, type MessageParams } from '../i18n'
 import type { Capabilities, CapabilityNode, CapabilityPort } from './capabilities'
 
@@ -17,11 +18,12 @@ export interface NodeRegistry {
   kind(type: string): CapabilityNode | null
   has(type: string): boolean
   outputPortsForNode(type: string): readonly PortName[]
-  inputPortsForNode(type: string): readonly PortName[]
+  inputPortsForNode(type: string, config?: Record<string, unknown>): readonly PortName[]
+  fieldsForNode(type: string, config?: Record<string, unknown>): readonly CapabilityNode['fields'][number][]
   outputPortForNode(type: string): PortName | null
-  inputPortForNode(type: string): PortName | null
-  port(id: string): CapabilityPort | null
-  portsCompatible(sourceId: string, targetId: string): boolean
+  inputPortForNode(type: string, config?: Record<string, unknown>): PortName | null
+  port(id: string, node?: { type: string; config: Record<string, unknown> }): CapabilityPort | null
+  portsCompatible(sourceId: string, targetId: string, target?: { type: string; config: Record<string, unknown> }): boolean
   isTerminalNode(type: string): boolean
   label(type: string): string
   createDefaultConfig(type: string, creating?: boolean): Record<string, unknown>
@@ -34,17 +36,6 @@ function issueText(messageKey: string, messageParams?: MessageParams) {
 
 function cloneDefault(value: unknown): unknown {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
-}
-
-function valueMatchesType(item: CapabilityNode['fields'][number], value: unknown): boolean {
-  if (value === null) return false
-  if (value === undefined) return !item.required
-  if (item.type === 'boolean') return typeof value === 'boolean'
-  if (item.type === 'integer') return typeof value === 'number' && Number.isInteger(value)
-  if (item.type === 'number') return typeof value === 'number' && Number.isFinite(value)
-  if (item.type === 'string' || item.type === 'select') return typeof value === 'string'
-  if (item.type === 'json') return typeof value === 'object' && !Array.isArray(value)
-  return false
 }
 
 export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
@@ -79,19 +70,33 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     }
     return false
   }
+  const slots = (type: string, config: Record<string, unknown> = {}) => {
+    const d = byType.get(type)?.dynamicInputs
+    const value = d ? config[d.configKey] : null
+    return Array.isArray(value) ? value.filter((item): item is { id: string; value: string } => !!item && typeof item === 'object' && typeof item.id === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(item.id)) : []
+  }
+  const resolvePort = (id: string, node?: { type: string; config: Record<string, unknown> }): CapabilityPort | null => {
+    const d = node && byType.get(node.type)?.dynamicInputs
+    return d && slots(node!.type, node!.config).some((slot) => d.portPrefix + slot.id === id)
+      ? { id, typeId: d.typeId, label: id, capabilityRequirements: [] } : byPort.get(id) || null
+  }
   const registry: NodeRegistry = {
     capabilities,
     kinds: nodes,
     kind: (type) => byType.get(type) || null,
     has: (type) => byType.has(type),
     outputPortsForNode: (type) => byType.get(type)?.outputPorts || [],
-    inputPortsForNode: (type) => byType.get(type)?.inputPorts || [],
+    inputPortsForNode: (type, config) => [...(byType.get(type)?.inputPorts || []), ...slots(type, config).map((slot) => byType.get(type)!.dynamicInputs!.portPrefix + slot.id)],
+    fieldsForNode: (type, config) => [...(byType.get(type)?.fields || []), ...slots(type, config).map((slot, index) => {
+      const d = byType.get(type)!.dynamicInputs!
+      return { ...d.field, key: `${d.configKey}.${slot.id}.value`, inputPort: d.portPrefix + slot.id, label: t('workflow.dynamicInputLabel', { number: index + 1 }) }
+    })],
     outputPortForNode: (type) => { const ports = byType.get(type)?.outputPorts; return ports?.length === 1 ? ports[0]! : null },
-    inputPortForNode: (type) => { const ports = byType.get(type)?.inputPorts; return ports?.length === 1 ? ports[0]! : null },
-    port: (id) => byPort.get(id) || null,
-    portsCompatible: (sourceId, targetId) => {
+    inputPortForNode: (type, config) => { const ports = registry.inputPortsForNode(type, config); return ports.length === 1 ? ports[0]! : null },
+    port: resolvePort,
+    portsCompatible: (sourceId, targetId, node) => {
       const source = byPort.get(sourceId)
-      const target = byPort.get(targetId)
+      const target = resolvePort(targetId, node)
       const sourceType = source ? byDataType.get(source.typeId) : null
       return !!source && !!target && !!sourceType
         && typeCompatible(source.typeId, target.typeId)
@@ -99,21 +104,25 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
     },
     isTerminalNode: (type) => byType.get(type)?.terminal === true,
     label: (type) => byType.get(type)?.label || type,
-    createDefaultConfig: (type, creating = false) => Object.fromEntries((byType.get(type)?.fields || [])
+    createDefaultConfig: (type, creating = false) => Object.assign(byType.get(type)?.dynamicInputs ? { [byType.get(type)!.dynamicInputs!.configKey]: cloneDefault(byType.get(type)!.dynamicInputs!.defaultItems) } : {}, Object.fromEntries((byType.get(type)?.fields || [])
       .map((field) => ({ field, value: creating ? field.creationDefault ?? field.default : field.default }))
       .filter(({ field, value }) => value !== null || field.required)
-      .map(({ field, value }) => [field.key, cloneDefault(value)])),
+      .map(({ field, value }) => [field.key, cloneDefault(value)]))),
     validateConfig: (type, config) => {
       const definition = byType.get(type)
       if (!definition) return [{ code: 'UNKNOWN_NODE_TYPE', ...issueText('workflow.unknownType', { p0: type }) }]
       const issues: NodeRegistryIssue[] = []
-      const allowed = new Set(definition.fields.map((field) => field.key))
+      const allowed = new Set([...definition.fields.map((field) => field.key), ...(definition.dynamicInputs ? [definition.dynamicInputs.configKey] : [])])
       const unexpected = Object.keys(config || {}).filter((key) => !allowed.has(key))
       if (unexpected.length) issues.push({ code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: unexpected.join(', ') }) })
-      for (const field of definition.fields) {
-        const value = config?.[field.key]
-        const inline = definition.inlineConnectionInput
-        if (value === null && inline && [inline.regionKey, inline.credentialRefKey].includes(field.key)) continue
+      const d = definition.dynamicInputs
+      if (d) {
+        const items = config[d.configKey]
+        if (!Array.isArray(items) || items.length < d.minItems || items.length > d.maxItems || new Set(slots(type, config).map((slot) => slot.id)).size !== items.length || items.some((slot) => !slot || typeof slot !== 'object' || Object.keys(slot).some((key) => !['id', 'value'].includes(key)) || !Object.prototype.hasOwnProperty.call(slot, 'value'))) issues.push({ field: d.configKey, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: d.configKey }) })
+      }
+      for (const field of registry.fieldsForNode(type, config)) {
+        const value = d && field.key.startsWith(`${d.configKey}.`) ? slots(type, config).find((slot) => slot.id === field.key.split('.')[1])?.value : config?.[field.key]
+        if (value === null && field.nullable) continue
         if (value === undefined) {
           if (field.required) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.requiredField', { p0: field.key }) })
           continue
@@ -125,22 +134,7 @@ export function createNodeRegistry(capabilities: Capabilities): NodeRegistry {
           if (config[resource!.configKey] !== undefined) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.unknownFields', { p0: resource!.configKey }) })
           continue
         }
-        if (!valueMatchesType(field, value)) {
-          issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldType', { p0: field.key }) })
-          continue
-        }
-        if ((field.type === 'integer' || field.type === 'number') && typeof value === 'number') {
-          if (field.minimum !== null && value < field.minimum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinimum', { p0: field.key }) })
-          if (field.maximum !== null && value > field.maximum) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaximum', { p0: field.key }) })
-        }
-        if (field.type === 'select' && !field.options.some((option) => option.value === value)) {
-          issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldOption', { p0: field.key }) })
-        }
-        if (typeof value === 'string') {
-          if (field.minLength !== null && value.length < field.minLength) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMinLength', { p0: field.key }) })
-          if (field.maxLength !== null && value.length > field.maxLength) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldMaxLength', { p0: field.key }) })
-          if (field.pattern && !(new RegExp(field.pattern).test(value))) issues.push({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText('workflow.fieldPattern', { p0: field.key }) })
-        }
+        issues.push(...fieldValueErrors(field, value).map((key) => ({ field: field.key, code: 'INVALID_NODE_CONFIG', ...issueText(`workflow.${key}`, { p0: field.key }) })))
       }
       return issues
     },

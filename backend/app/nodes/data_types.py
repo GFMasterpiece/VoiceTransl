@@ -124,7 +124,7 @@ def register_builtin_types(register_type, register_port):
     )
     for port in ("string", "number", "integer", "boolean"):
         register_port(port, type_id=port)
-    for port in ("language", "filename_stem", "text_format", "model_name", "target_language"):
+    for port in ("filename_stem", "text_format", "model_name"):
         register_port(port, type_id="string")
     register_configuration_types(register_type, register_port)
     register_port("additional_parameters", type_id="json_object", label="模型请求参数")

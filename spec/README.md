@@ -16,7 +16,8 @@
 
 | 规格 | 状态 | 主题 |
 | --- | --- | --- |
-| [可组合的节点配置与上下文](composable-node-configuration.md) | Implemented | 连接、模型、上下文及执行参数拆分；新图契约不兼容旧图 |
+| [普通文本上下文与多输入拼接](plain-text-context.md) | Implemented | 普通字符串上下文、动态输入拼接、可选地域及可空字段声明 |
+| [可组合的节点配置与上下文](composable-node-configuration.md) | Implemented | 首版职责拆分；现用普通文本上下文与动态拼接见上项 |
 | [LLM API 翻译节点](llm-translation.md) | Implemented | 通用兼容 API、上游当前文本、链式翻译、预览导出及结果复用 |
 | [浏览器后端连接设置](backend-connection.md) | Implemented | 主页连接状态、地址检测与浏览器保存、刷新隔离及受控 CORS |
 | [兼容性与扩展性整改](compatibility-extensibility.md) | Approved | 严格版本、能力/节点单一来源、可取消传输、附加参数、跨平台、语言与命名/分页 |

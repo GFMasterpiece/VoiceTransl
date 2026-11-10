@@ -67,17 +67,20 @@ def parameter_graph():
                 type="audio_output",
                 config={"filename_stem": "backup", "naming_mode": "exact"},
             ),
-            dict(id="asr_context", type="asr_context", config={"language": "ja"}),
+            dict(
+                id="asr_context",
+                type="text_join",
+                config={"items": [{"id": "a1", "value": "ja"}], "separator": ""},
+            ),
         ],
         "edges": [
             edge("audio-asr", "input", "audio", "asr", "audio"),
             edge("transcript", "asr", "transcript", "text", "transcript"),
-            edge("language-wire", "language", "string", "asr_context", "language"),
+            edge("language-wire", "language", "string", "asr_context", "text_a1"),
             edge("name-wire", "name", "string", "text", "filename_stem"),
             edge("format-wire", "format", "string", "text", "text_format"),
             edge("backup-audio", "input", "audio", "backup", "audio"),
-            edge("backup-name", "name", "string", "backup", "filename_stem"),
-            edge("context", "asr_context", "asr_context", "asr", "asr_context"),
+            edge("context", "asr_context", "string", "backup", "filename_stem"),
         ],
     }
 
@@ -108,34 +111,34 @@ async def test_wire_values_drive_outputs_and_disconnect_restores_saved_literals(
         document = await save_graph(client, pid, 0, graph)
         run, records = await run_graph(app, client, pid, aid, document)
         assert run["status"] == "completed", run
-        assert records["asr_context"]["config"]["language"] == "ja"
-        assert records["asr_context"]["effective_config"]["language"] == "en-US"
-        assert records["asr_context"]["parameter_sources"]["language"] == {
+        assert records["asr_context"]["config"]["items"][0]["value"] == "ja"
+        assert records["asr_context"]["effective_config"]["items"][0]["value"] == "en-US"
+        assert records["asr_context"]["parameter_sources"]["items.a1.value"] == {
             "kind": "connection",
             "edge_id": "language-wire",
             "source_node_id": "language",
             "source_port": "string",
-            "target_port": "language",
+            "target_port": "text_a1",
         }
-        assert records["asr_context"]["parameter_sources"]["language"]["kind"] == "connection"
+        assert records["asr_context"]["parameter_sources"]["items.a1.value"]["kind"] == "connection"
         assert records["text"]["artifact"]["filename"] == "wired.srt"
-        assert records["backup"]["artifact"]["filename"] == "wired.wav"
+        assert records["backup"]["artifact"]["filename"] == "en-US.wav"
         transcript = (await client.get(records["asr"]["artifact"]["download_url"])).json()
-        assert transcript["language"] == "en-US"
-        assert all(segment["language"] == "en-US" for segment in transcript["segments"])
+        assert transcript["language"] == "ja"
+        assert all(segment["language"] == "ja" for segment in transcript["segments"])
         assert (
             next(item for item in run["workflow"]["nodes"] if item["id"] == "asr_context")[
                 "config"
-            ]["language"]
+            ]["items"][0]["value"]
             == "ja"
         )
         old_bytes = (
             await client.get(f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{run['id']}")
         ).content
 
-        # The name root still supplies the independent audio export.
+        # Disconnected roots are removed with their outgoing parameter edges.
         graph["nodes"] = [
-            node for node in graph["nodes"] if node["id"] not in {"language", "format"}
+            node for node in graph["nodes"] if node["id"] not in {"language", "format", "name"}
         ]
         graph["edges"] = [
             item
@@ -145,8 +148,8 @@ async def test_wire_values_drive_outputs_and_disconnect_restores_saved_literals(
         document = await save_graph(client, pid, document["revision"], graph)
         restored, restored_records = await run_graph(app, client, pid, aid, document)
         assert restored["status"] == "completed"
-        assert restored_records["asr_context"]["effective_config"]["language"] == "ja"
-        assert restored_records["asr_context"]["parameter_sources"]["language"] == {
+        assert restored_records["asr_context"]["effective_config"]["items"][0]["value"] == "ja"
+        assert restored_records["asr_context"]["parameter_sources"]["items.a1.value"] == {
             "kind": "config"
         }
         assert restored_records["text"]["artifact"]["filename"] == "manual.txt"
@@ -158,7 +161,7 @@ async def test_wire_values_drive_outputs_and_disconnect_restores_saved_literals(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "node_id,value",
-    [("format", "ass"), ("name", "../escape"), ("name", "CON"), ("language", " en")],
+    [("format", "ass"), ("name", "../escape"), ("name", "CON"), ("language", "x" * 65537)],
 )
 async def test_invalid_wired_candidates_fail_without_fallback_or_artifact(tmp_path, node_id, value):
     app = create_app(tmp_path)
@@ -209,14 +212,14 @@ def test_primitive_configuration_rejects_coercions_and_nonfinite_values(node_typ
 
 def test_parameter_graph_rejects_bad_types_duplicates_and_invalid_manual_fallback():
     graph = parameter_graph()
-    graph["edges"].append(edge("duplicate", "name", "string", "asr_context", "language"))
+    graph["edges"].append(edge("duplicate", "name", "string", "asr_context", "text_a1"))
     assert any(item.code == "INVALID_NODE_INPUT_COUNT" for item in graph_issues(graph))
     graph = parameter_graph()
     graph["nodes"][3] = dict(id="language", type="integer_value", config={"value": 42})
     graph["edges"][2]["source_port"] = "integer"
     assert any(item.code == "INVALID_PORT" for item in graph_issues(graph))
     graph = parameter_graph()
-    graph["nodes"][-1]["config"]["language"] = " "
+    graph["nodes"][-1]["config"]["items"][0]["value"] = "x" * 65537
     assert any(item.code == "INVALID_NODE_CONFIG" for item in graph_issues(graph))
 
 
@@ -237,7 +240,7 @@ async def test_raw_json_nonfinite_configuration_returns_stable_422(tmp_path, tok
         )
         assert response.status_code == 422, response.text
         assert response.json()["error"]["code"] == "INVALID_WORKFLOW"
-        assert not (app.state.store.project_dir(pid) / "workflow-v2.json").exists()
+        assert not (app.state.store.project_dir(pid) / "workflow-v3.json").exists()
 
 
 @pytest.mark.asyncio
@@ -266,8 +269,8 @@ async def test_queued_run_freezes_origins_and_values_before_editing_graph(tmp_pa
         await asyncio.gather(*app.state.jobs.tasks.values())
         run = (await client.get(root + "/" + queued["id"])).json()
         record = next(item for item in run["nodes"] if item["node_id"] == "asr_context")
-        assert record["effective_config"]["language"] == "en-US"
-        assert record["parameter_sources"]["language"]["edge_id"] == "language-wire"
+        assert record["effective_config"]["items"][0]["value"] == "en-US"
+        assert record["parameter_sources"]["items.a1.value"]["edge_id"] == "language-wire"
 
 
 @pytest.mark.asyncio
@@ -284,7 +287,9 @@ async def test_failed_parameter_root_blocks_consumers_and_keeps_independent_bran
         evaluate_config=None,
     )
     graph = parameter_graph()
-    graph["edges"] = [item for item in graph["edges"] if item["id"] != "backup-name"]
+    graph["nodes"] = [node for node in graph["nodes"] if node["id"] != "name"]
+    graph["edges"] = [item for item in graph["edges"] if item["id"] != "name-wire"]
+    next(item for item in graph["edges"] if item["id"] == "context")["target"] = "text"
     app = create_app(tmp_path)
     app.state.jobs.delay_ms = 0
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -293,7 +298,8 @@ async def test_failed_parameter_root_blocks_consumers_and_keeps_independent_bran
         run, records = await run_graph(app, client, pid, aid, document)
         assert run["status"] == "partial"
         assert records["language"]["error"]["type"] == "PARAMETER_UNAVAILABLE"
-        assert records["asr"]["status"] == records["text"]["status"] == "blocked"
+        assert records["asr"]["status"] == "completed"
+        assert records["text"]["status"] == "blocked"
         assert records["asr_context"]["effective_config"] is None
         assert records["backup"]["status"] == "completed"
 
@@ -448,19 +454,26 @@ def test_structured_parameter_origins_reject_partial_or_mixed_metadata():
 
 @pytest.mark.parametrize("candidate", [float("nan"), float("inf"), object()])
 def test_non_json_candidate_fails_without_poisoning_execution_record(candidate):
-    node = WorkflowNode(id="asr_context", type="asr_context", config={"language": "ja"})
+    node = WorkflowNode(
+        id="asr_context",
+        type="text_join",
+        config={"items": [{"id": "a1", "value": "ja"}], "separator": ""},
+    )
     record = WorkflowNodeRecord(node_id=node.id, node_type=node.type, config=node.config)
     with pytest.raises(NodeExecutionError, match="执行配置无效") as error:
         _execution_node(
             node,
-            NODE_DEFINITIONS["asr_context"],
-            {"language": NodeData("language", candidate)},
+            NODE_DEFINITIONS["text_join"],
+            {"text_a1": NodeData("text_a1", candidate)},
             record,
         )
     assert error.value.code == "INVALID_NODE_CONFIG"
     assert record.effective_config is None
-    assert json.loads(record.model_dump_json())["config"] == {"language": "ja"}
-    assert node.config == {"language": "ja"}
+    assert json.loads(record.model_dump_json())["config"] == {
+        "items": [{"id": "a1", "value": "ja"}],
+        "separator": "",
+    }
+    assert node.config == {"items": [{"id": "a1", "value": "ja"}], "separator": ""}
 
 
 @pytest.mark.asyncio
@@ -488,7 +501,7 @@ async def test_current_run_optional_parameter_metadata_reads_without_rewrite(tmp
             f"/api/v1/projects/{pid}/audios/{aid}/workflow-runs/{run['id']}"
         )
         assert response.status_code == 200, response.text
-        assert response.json()["schema_version"] == "2.0"
+        assert response.json()["schema_version"] == "3.0"
         assert all(
             item["parameter_sources"] is None and item["effective_config"] is None
             for item in response.json()["nodes"]

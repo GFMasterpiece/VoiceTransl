@@ -47,6 +47,7 @@ def validate_additional_parameters(value):
     forbidden = {
         "model",
         "input",
+        "context",
         "parameters",
         "fileurl",
         "fileurls",

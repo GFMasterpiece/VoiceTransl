@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from app.application.workflow_asr import TranscriptData
-from app.domain.context_values import ASRContext, ASROptions, TranslationContext, TranslationOptions
+from app.domain.context_values import ASROptions, TranslationOptions
 from app.domain.node_execution import NodeData, NodeExecutionContext, NodeExecutionError
 from app.domain.node_registry import NODE_DEFINITIONS
 from app.domain.transcript import Segment, Transcript
@@ -52,7 +52,7 @@ def test_processors_have_no_inline_configuration(node_type):
     assert definition.normalize_config({}) == {}
     with pytest.raises(ValueError, match="独立"):
         definition.normalize_config({"language": "ja"})
-    assert definition.validation_input_ports
+    assert definition.validation_input_ports or node_type == "asr"
 
 
 @pytest.mark.asyncio
@@ -69,20 +69,16 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
 
     async def translate(**kwargs):
         calls.append(kwargs)
-        prefix = kwargs["target_language"] + ":"
+        prefix = ("en" if kwargs["context"] == "first preferences" else "zh") + ":"
         return SimpleNamespace(
-            translations={item["id"]: prefix + item["text"] for item in kwargs["items"]}
+            translations={item["id"]: prefix + item["text"] for item in kwargs["items"]},
+            language=prefix[:-1],
         )
 
     monkeypatch.setattr("app.domain.configuration.resolve_model", resolve)
     monkeypatch.setattr("app.adapters.llm_translation.translate", translate)
     original = transcript()
-    first_context = TranslationContext.from_values(
-        target_language="en",
-        background="人物背景",
-        instructions="保留语气",
-        glossary={"password": "密码"},
-    )
+    first_context = "first preferences"
     first = await llm_translate.execute(
         context(
             tmp_path,
@@ -90,7 +86,7 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
             {
                 "model": model,
                 "transcript": TranscriptData(tmp_path / "raw.json", original),
-                "translation_context": first_context,
+                "context": first_context,
                 "translation_options": TranslationOptions(timeout_seconds=33, batch_size=4),
             },
             node_id="first",
@@ -103,20 +99,17 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
             {
                 "model": model,
                 "transcript": first.outputs["transcript"].value,
-                "translation_context": TranslationContext(target_language="zh"),
+                "context": "second preferences",
             },
             node_id="second",
         )
     )
     assert calls[0]["source_language"] == "ja"
-    assert (
-        calls[0]["instructions"] == "[Background]\n人物背景\n\n[Translation instructions]\n保留语气"
-    )
-    assert calls[0]["glossary"] == {"password": "密码"}
+    assert calls[0]["context"] == first_context
     assert calls[0]["batch_size"] == 4
     assert calls[1]["items"] == [{"id": "s1", "text": "en:原文"}]
     assert calls[1]["source_language"] == "en"
-    assert calls[1]["instructions"] == ""
+    assert calls[1]["context"] == "second preferences"
     assert resolutions == [("translation", 33), ("translation", 120)]
     result = second.outputs["transcript"].value.transcript
     assert result.segments[0].source_text == original.segments[0].source_text == "原文"
@@ -133,14 +126,14 @@ async def test_two_translations_share_model_but_use_previous_translation_and_own
 @pytest.mark.parametrize(
     "packet,error_code",
     [
-        (TranslationContext(), "LLM_TARGET_LANGUAGE_REQUIRED"),
-        (object(), "CONFIGURATION_VALUE_INVALID"),
+        ("", "LLM_CONTEXT_INVALID"),
+        (object(), "LLM_CONTEXT_INVALID"),
     ],
 )
 def test_preflight_rejects_context_without_actual_transcript_or_network(
     tmp_path, packet, error_code
 ):
-    ctx = context(tmp_path, "llm_translate", {"translation_context": packet})
+    ctx = context(tmp_path, "llm_translate", {"context": packet})
     with pytest.raises(NodeExecutionError) as error:
         llm_translate.validate_inputs(ctx)
     assert error.value.code == error_code
@@ -151,7 +144,8 @@ def test_preflight_rejects_context_without_actual_transcript_or_network(
     "module,operation", [(qwen_asr, "asr_file"), (qwen_asr_streaming, "asr_streaming")]
 )
 @pytest.mark.parametrize(
-    "audio_id,override,expected", [("a", "", "ja"), ("b", "", "fr"), ("b", "de", "de")]
+    "audio_id,override,expected",
+    [("a", "", "ja"), ("b", "", "fr"), ("b", "recognition vocabulary", "fr")],
 )
 async def test_cloud_asr_reads_each_current_audio_language_and_independent_options(
     tmp_path, monkeypatch, module, operation, audio_id, override, expected
@@ -184,7 +178,7 @@ async def test_cloud_asr_reads_each_current_audio_language_and_independent_optio
             {
                 "audio": SimpleNamespace(path=tmp_path / "audio.wav"),
                 "model": object(),
-                "asr_context": ASRContext(language=override),
+                "context": override,
                 "asr_options": ASROptions(timeout_seconds=19),
             },
             audio_id=audio_id,

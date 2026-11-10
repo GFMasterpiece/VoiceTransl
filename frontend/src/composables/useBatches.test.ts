@@ -17,7 +17,7 @@ function setup(override?: (path: string, options?: RequestInit) => Promise<Respo
     if (path.includes('/items?')) return Promise.resolve(response(page([batchItem])))
     if (path.includes('/batches?')) return Promise.resolve(response(page([summary()])))
     if (options?.method === 'POST') return Promise.resolve(response(summary(), 202))
-    return Promise.resolve(response({ ...summary(), workflow: { schema_version: '2.0', nodes: [], edges: [] } }))
+    return Promise.resolve(response({ ...summary(), workflow: { schema_version: '3.0', nodes: [], edges: [] } }))
   })
   vi.stubGlobal('fetch', fetcher)
   const batches = useBatches('p1'); sessions.push(batches)
@@ -107,7 +107,7 @@ describe('batch REST state', () => {
     let release!: (value: Response) => void
     const { batches, fetcher } = setup((path) => {
       if (path.endsWith('/b1')) return new Promise((resolve) => { release = resolve })
-      if (path.endsWith('/b2')) return Promise.resolve(response({ ...summary({ id: 'b2' }), workflow: { schema_version: '2.0', nodes: [], edges: [] } }))
+      if (path.endsWith('/b2')) return Promise.resolve(response({ ...summary({ id: 'b2' }), workflow: { schema_version: '3.0', nodes: [], edges: [] } }))
       if (path.endsWith('offset=20')) return Promise.resolve(response(page(path.includes('/items?') ? [batchItem] : [summary({ id: 'b2' })], 25, 20)))
       return undefined
     })
@@ -116,7 +116,7 @@ describe('batch REST state', () => {
     expect(batches.history.value.total).toBe(25)
     const older = batches.select('b1')
     await batches.select('b2', 20)
-    release(response({ ...summary(), workflow: { schema_version: '2.0', nodes: [], edges: [] } })); await older
+    release(response({ ...summary(), workflow: { schema_version: '3.0', nodes: [], edges: [] } })); await older
     expect(batches.detail.value?.id).toBe('b2')
     expect(batches.items.value.offset).toBe(20)
     expect(fetcher.mock.calls.some(([path]) => path.endsWith('/items?limit=20&offset=20'))).toBe(true)
@@ -169,7 +169,7 @@ describe('pending requests isolated by actual backend', () => {
   const request = { path: '', body: { request_id: 'do-not-duplicate', workflow_revision: 7, audio_ids: ['a1'] } }
   it('does not restore prior-schema requests on the default or custom deployment', () => {
     sessionStorage.setItem('voicetransl.batch.pending:p1', JSON.stringify(request))
-    sessionStorage.setItem(batchPendingStorageKey('p1').replace('.batch.v2.pending:', '.batch.pending:'), JSON.stringify(request))
+    sessionStorage.setItem(batchPendingStorageKey('p1').replace('.batch.v3.pending:', '.batch.pending:'), JSON.stringify(request))
     expect(restoreBatchPending('p1', 'https://api-b.test/voice/api/v1')).toBeNull()
     expect(sessionStorage.getItem('voicetransl.batch.pending:p1')).not.toBeNull()
     expect(restoreBatchPending('p1')).toBeNull()

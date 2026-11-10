@@ -95,7 +95,7 @@ def test_workflow_run_rejects_missing_nested_snapshot_version(tmp_path):
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("version", [None, 1, 1.0, "1.1", "2.0", ""])
+@pytest.mark.parametrize("version", [None, 1, 1.0, "1.1", "3.0", ""])
 def test_persisted_top_level_version_missing_or_wrong_is_rejected(tmp_path, version):
     store, project_id = make_store(tmp_path)
     path = tmp_path / "projects" / project_id / "project.json"
@@ -140,7 +140,7 @@ async def test_api_maps_persisted_project_schema_error_and_preserves_bytes(tmp_p
     project_id = await create_api_project(app)
     path = tmp_path / "projects" / project_id / "project.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["schema_version"] = "2.0"
+    payload["schema_version"] = "3.0"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     before = path.read_bytes()
 
@@ -170,19 +170,19 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
         app.state.store.save_job(make_job(project_id, LegacyPipelineConfig()))
         path = project_dir / "job.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["config_snapshot"]["schema_version"] = "2.0"
+        payload["config_snapshot"]["schema_version"] = "3.0"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/job"
     elif document == "config":
         path = project_dir / "config.json"
         payload = LegacyPipelineConfig().model_dump(mode="json")
-        payload["schema_version"] = "2.0"
+        payload["schema_version"] = "3.0"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/config"
     elif document == "workflow":
         payload = default_workflow(project_id).model_dump(mode="json")
         payload["schema_version"] = "1.0"
-        path = project_dir / "workflow-v2.json"
+        path = project_dir / "workflow-v3.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         route = f"/api/v1/projects/{project_id}/workflow"
     else:
@@ -205,7 +205,7 @@ async def test_api_maps_nested_schema_errors_instead_of_404(tmp_path, document):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(route)
         assert_schema_rejection(
-            response, tmp_path, "2.0" if document in {"workflow", "workflow-run"} else "1.0"
+            response, tmp_path, "3.0" if document in {"workflow", "workflow-run"} else "1.0"
         )
     assert path.read_bytes() == before
 
@@ -230,7 +230,7 @@ async def test_explicit_request_schema_versions_are_clearly_rejected(tmp_path):
                 },
             ),
         ):
-            assert_schema_rejection(response, tmp_path, "2.0")
+            assert_schema_rejection(response, tmp_path, "3.0")
 
         retired = await client.put(
             f"/api/v1/projects/{project_id}/config",

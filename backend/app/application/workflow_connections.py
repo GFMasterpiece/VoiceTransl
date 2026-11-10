@@ -7,7 +7,7 @@ from ..domain.node_execution import NodeExecutionError
 
 
 def _validate_execution_configs(snapshot, node_ids):
-    from ..domain.node_registry import NODE_DEFINITIONS
+    from ..domain.node_registry import NODE_DEFINITIONS, resolved_fields
 
     for node in snapshot.nodes:
         if node_ids is not None and node.id not in node_ids:
@@ -17,7 +17,9 @@ def _validate_execution_configs(snapshot, node_ids):
             continue
         connected_ports = {edge.target_port for edge in snapshot.edges if edge.target == node.id}
         connected_fields = frozenset(
-            field.key for field in definition.fields if field.input_port in connected_ports
+            field.key
+            for field in resolved_fields(definition, node.config)
+            if field.input_port in connected_ports
         )
         try:
             config = (

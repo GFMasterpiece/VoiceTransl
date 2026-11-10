@@ -2,7 +2,7 @@ import type { WorkflowDocumentInput, WorkflowEdge, WorkflowNode } from '../store
 import type { NodeRegistry } from './nodeRegistry'
 
 export const WORKFLOW_TRANSFER_MAX_BYTES = 4 * 1024 * 1024
-const SCHEMA_VERSION = '2.0'
+const SCHEMA_VERSION = '3.0'
 const LAYOUT_BOUND = 1_000_000
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
@@ -108,8 +108,14 @@ export function validateTransferGraph(graph: unknown, registry: NodeRegistry): W
     if (!registry.has(node.type)) fail('workflow.transferUnknownNode', node.type)
     const definition = registry.kind(node.type)!
     const config = object(node.config)
-    const allowed = new Set(definition.fields.map((field) => field.key))
+    const allowed = new Set([...definition.fields.map((field) => field.key), ...(definition.dynamicInputs ? [definition.dynamicInputs.configKey] : [])])
     for (const key of Object.keys(config)) if (!allowed.has(key)) fail('workflow.transferUnknownField', key)
+    const dynamic = definition.dynamicInputs
+    if (dynamic) {
+      const items = config[dynamic.configKey]
+      if (!Array.isArray(items) || items.length < dynamic.minItems || items.length > dynamic.maxItems || new Set(items.map(item => item?.id)).size !== items.length
+        || items.some(item => !item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['id', 'value'].includes(key)) || !/^[a-z][a-z0-9_]{0,31}$/.test(item.id) || !Object.prototype.hasOwnProperty.call(item, 'value'))) fail('workflow.transferStructure')
+    }
     const position = object(node.position)
     exactKeys(position, ['x', 'y'])
     coordinate(position.x)
@@ -141,8 +147,8 @@ export function validateTransferGraph(graph: unknown, registry: NodeRegistry): W
     const target = nodes.get(identifier(edge.target))
     if (!source || !target || source.id === target.id || typeof edge.source_port !== 'string' || typeof edge.target_port !== 'string'
       || !registry.outputPortsForNode(source.type).includes(edge.source_port)
-      || !registry.inputPortsForNode(target.type).includes(edge.target_port)
-      || !registry.portsCompatible(edge.source_port, edge.target_port)) fail('workflow.transferInvalidEdge', id)
+      || !registry.inputPortsForNode(target.type, target.config).includes(edge.target_port)
+      || !registry.portsCompatible(edge.source_port, edge.target_port, target)) fail('workflow.transferInvalidEdge', id)
     const occupied = targetInputs.get(target.id) || new Set<string>()
     if (occupied.has(edge.target_port)) fail('workflow.transferInvalidEdge', id)
     occupied.add(edge.target_port)

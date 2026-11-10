@@ -28,7 +28,7 @@ function catalog(streaming = false): any {
   const output={...node('text_extension'),input_ports:['transcript'],required_input_ports:['transcript'],required_inbound:1,terminal:true}
   const value={...node('language_value',[field('value','string','custom-lang')]),output_ports:['language'],is_parameter_source:true}
   const config=streaming?{endpoint:'wss://stream.service.test/api-ws/v1/inference',timeout:37,credential_handle:null,model:'qwen-audio-3.0-asr-flash-streaming',language:'',additional_parameters:{}}:{endpoint:'https://inline.service.test/api',timeout:37,region:null,credential_handle:'saved-ref',model:'model-not-in-a-list',language:'',additional_parameters:{}}
-  return catalogFixture({schema_version:'1.0',workflow:{schema_version:"1.16",nodes:[source,cloud,output,value,stream],ports:['audio','transcript','language'].map(id=>({id,type_id:id==='language'?'string':id,label:id})),data_types:['audio','transcript','string'].map(id=>(typeFixture({id,label:id,parent_type_id:null,capabilities:[]}))),constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},default_graph:{nodes:[{id:'input',type:'source_extension',config:{},position:{x:0,y:0}},{id:'cloud',type:streaming?'qwen_asr_streaming':'remote_extension',config,position:{x:450,y:0}},{id:'output',type:'text_extension',config:{},position:{x:900,y:0}}],edges:[{id:'first',source:'input',source_port:'audio',target:'cloud',target_port:'audio'},{id:'second',source:'cloud',source_port:'transcript',target:'output',target_port:'transcript'}]}},asr:{providers:[]}})
+  return catalogFixture({schema_version:'1.0',workflow:{schema_version:"1.17",nodes:[source,cloud,output,value,stream],ports:['audio','transcript','language'].map(id=>({id,type_id:id==='language'?'string':id,label:id})),data_types:['audio','transcript','string'].map(id=>(typeFixture({id,label:id,parent_type_id:null,capabilities:[]}))),constraints:{max_nodes:64,max_edges:64,min_sources:1,max_sources:1,min_terminals:1},default_graph:{nodes:[{id:'input',type:'source_extension',config:{},position:{x:0,y:0}},{id:'cloud',type:streaming?'qwen_asr_streaming':'remote_extension',config,position:{x:450,y:0}},{id:'output',type:'text_extension',config:{},position:{x:900,y:0}}],edges:[{id:'first',source:'input',source_port:'audio',target:'cloud',target_port:'audio'},{id:'second',source:'cloud',source_port:'transcript',target:'output',target_port:'transcript'}]}},asr:{providers:[]}})
 }
 const inlineCatalog = () => catalog()
 const streamingCatalog = () => catalog(true)
@@ -39,7 +39,7 @@ let root:HTMLDivElement|undefined
 function setup(options:{inline?:boolean;streaming?:boolean;legacy?:boolean}={}) {
   const state={rejectWorkflow:false,loseSaveResponse:false}
   const initial=catalog(options.streaming)
-  let document={...initial.workflow.default_graph,schema_version:"2.0",project_id:'p1',revision:1,workflow_revision:1,updated_at:'2026-11-08T00:00:00Z'}
+  let document={...initial.workflow.default_graph,schema_version:"3.0",project_id:'p1',revision:1,workflow_revision:1,updated_at:'2026-11-08T00:00:00Z'}
   if(options.legacy) document.nodes[1].config={provider_profile_id:'old-profile',connection_mode:'profile',api_key_env:'OLD_ENV',model:'old-model',language:'',additional_parameters:{}}
   const savedRequests=new Map<string,any>()
   const audio={id:'a1',source:{original_name:'local.wav',language:'ja',size_bytes:4}}

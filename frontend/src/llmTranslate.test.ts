@@ -20,10 +20,9 @@ function catalog() {
     const config: Record<string, unknown> = Object.fromEntries(fields.map(field => [field.key, field.type === 'json' && field.default === null ? {} : field.default]))
     if (kind.type === 'service_connection') config.endpoint = 'https://llm.test/v1'
     if (kind.type === 'model_config') config.model_name = 'future-deployment/model-2028'
-    if (kind.type === 'translation_context') config.target_language = 'en'
     return [kind.type, { label: kind.label, fields, config, credential_configured: kind.type === 'service_connection', credential_version: kind.type === 'service_connection' ? 'frozen-global-key' : null }]
   }))
-  const settings = { schema_version: '2.0', revision: 1, global_fields: [], global: {}, node_defaults }
+  const settings = { schema_version: '3.0', revision: 1, global_fields: [], global: {}, node_defaults }
   return { capabilities, settings, graph: capabilities.workflow.default_graph }
 }
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response
@@ -32,7 +31,7 @@ async function settle() { for (let count = 0; count < 45; count++) await Promise
 function mount(component: any, props: Record<string, unknown>, pinia = createPinia()) { setActivePinia(pinia); root = document.createElement('div'); document.body.append(root); app = createApp(component, props).use(pinia); app.mount(root) }
 function edit(input: HTMLInputElement, value: string) { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }
 function setup() {
-  const fixture = catalog(); let document = { ...fixture.graph, schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '' }; let runCount = 0
+  const fixture = catalog(); let document = { ...fixture.graph, schema_version: "3.0", project_id: 'p1', revision: 1, workflow_revision: 1, updated_at: '' }; let runCount = 0
   const state = { failure: false }; const saves: any[] = []
   const artifact = (id: string) => ({ artifact_id: 'a', port: 'text', filename: 'translation.txt', media_type: 'text/plain', size_bytes: 12, sha256: 'abc', download_url: `/api/v1/projects/p1/audios/a1/workflow-runs/result/outputs/${id}/download` })
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -58,23 +57,20 @@ function setup() {
 afterEach(() => { app?.unmount(); root?.remove(); app = undefined; root = undefined; settingsCache.value = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale('zh-CN') })
 
 describe('catalog-driven API translation', () => {
-  it('adds an empty processing node and searches language fields on its separate context in both locales', async () => {
+  it('uses ordinary string context and keeps processors free of builder fields in both locales', async () => {
     const { store, fetcher } = setup(); await settle(); store.addNode('llm_translate'); await settle()
     const processor = root!.querySelector(`[data-node-id="${store.selectedNodeId}"]`)!
     expect(store.selectedNode!.config).toEqual({})
     expect(processor.querySelector('foreignObject, .node-meta, [data-credential-input]')).toBeNull()
     expect(processor.querySelectorAll('.node-port-in')).toHaveLength(4)
     store.addNode('model_config'); expect(store.selectedNode!.config.model_name).toBe('future-deployment/model-2028')
-    store.addNode('translation_context'); await settle()
+    store.addNode('string_value'); await settle()
     const node = root!.querySelector(`[data-node-id="${store.selectedNodeId}"]`)!
-    expect(node.querySelectorAll('[role=combobox]')).toHaveLength(2)
-    expect(node.querySelector('[data-field=instructions]')!.tagName).toBe('TEXTAREA')
-    expect(node.querySelector('[data-field=background]')!.tagName).toBe('TEXTAREA')
-    const source = node.querySelector<HTMLInputElement>('[data-field=source_language]')!; source.focus(); edit(source, '日语'); await settle()
-    document.querySelector<HTMLElement>('[data-language-code=ja]')!.click(); await settle(); expect(store.selectedNode!.config.source_language).toBe('ja')
-    const target = node.querySelector<HTMLInputElement>('[data-field=target_language]')!; target.focus(); edit(target, 'xx-CUSTOM'); await settle(); target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await settle(); expect(store.selectedNode!.config.target_language).toBe('xx-CUSTOM')
-    setLocale('en'); await settle(); expect(node.querySelector('.node-name')!.textContent).toContain('Translation context')
-    expect(node.querySelector<HTMLInputElement>('[data-field=target_language]')!.getAttribute('aria-label')).toBe('Target language')
+    const value = node.querySelector<HTMLTextAreaElement>('[data-field=value]')!
+    edit(value as unknown as HTMLInputElement, 'Translate into English. Keep names unchanged.'); await settle()
+    setLocale('en'); await settle(); expect(value.value).toBe('Translate into English. Keep names unchanged.')
+    expect(store.registry!.has('translation_context')).toBe(false)
+    expect(store.registry!.has('asr_context')).toBe(false)
     expect(fetcher.mock.calls.every(([url]) => !String(url).startsWith('https://llm.test'))).toBe(true)
   })
   it('copies global key versions into independent connection nodes and strips credentials from copied connections', async () => {
@@ -97,11 +93,11 @@ describe('catalog-driven API translation', () => {
     const { store, fetcher, state } = setup(); await settle(); store.removeNode('output')
     const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
     const asr = add('asr'), first = add('llm_translate'), second = add('llm_translate'), preview = add('text_preview'), output = add('text_output')
-    const connection = add('service_connection'), model = add('model_config'), context = add('translation_context'), options = add('translation_options')
+    const connection = add('service_connection'), model = add('model_config'), context = add('string_value'), options = add('translation_options')
     expect(store.connect(connection, model, 'connection', 'connection')).toBe(true)
     for (const target of [first, second]) {
       expect(store.connect(model, target, 'model', 'model')).toBe(true)
-      expect(store.connect(context, target, 'translation_context', 'translation_context')).toBe(true)
+      expect(store.connect(context, target, 'string', 'context')).toBe(true)
       expect(store.connect(options, target, 'translation_options', 'translation_options')).toBe(true)
     }
     expect(store.connect('input', asr, 'audio', 'audio')).toBe(true)
@@ -130,33 +126,51 @@ describe('catalog-driven API translation', () => {
     expect(workflowCredentials(store.credentialContext).updates()).toEqual([])
     state.failure = true; await store.startRun(); await settle(); root!.querySelector<HTMLButtonElement>('[data-open-panel=run]')!.click(); await settle()
     expect(root!.textContent).toContain(t('workflow.error_LLM_TRANSLATION_OUTPUT_INVALID'))
-    setLocale('en'); await settle(); expect(root!.textContent).toContain('The translated output does not match the input segments.')
+    setLocale('en'); await settle(); expect(root!.textContent).toContain('The translated output does not match the input segments, or its output language is invalid.')
   })
-  it('joins multiline text and JSON values through declared bindings while preserving fallbacks and undo', async () => {
+  it('edits ordered dynamic inputs, preserves fallbacks, and restores deleted connections with undo', async () => {
     const { store } = setup(); await settle()
     const add = (type: string) => { store.addNode(type); return store.selectedNodeId! }
-    const first = add('string_value'), second = add('string_value'), join = add('text_join'), context = add('translation_context'), object = add('json_value'), merge = add('json_merge'), model = add('model_config')
-    await settle()
-    const text = root!.querySelector<HTMLTextAreaElement>(`[data-node-id="${first}"] textarea[data-field=value]`)!
-    expect(text).not.toBeNull(); edit(text as unknown as HTMLInputElement, '第一段\nSecond line')
-    text.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await settle()
-    expect(store.draft.nodes.find(node => node.id === first)!.config.value).toBe('第一段\nSecond line')
-    store.updateNodeConfig(context, { ...store.draft.nodes.find(node => node.id === context)!.config, instructions: 'handwritten fallback' })
-    expect(store.connect(first, join, 'string', 'text_left')).toBe(true)
-    expect(store.connect(second, join, 'string', 'text_right')).toBe(true)
-    expect(store.connect(join, context, 'string', 'instructions')).toBe(true)
+    const first = add('string_value'), join = add('text_join'), object = add('json_value'), merge = add('json_merge'), model = add('model_config')
+    store.updateNodeConfig(join, { items: [{ id: 'a', value: 'first' }, { id: 'b', value: 'fallback' }, { id: 'c', value: 'last' }], separator: '\n' })
+    expect(store.connect(first, join, 'string', 'text_b')).toBe(true)
     expect(store.connect(object, merge, 'json', 'json_left')).toBe(true)
     expect(store.connect(object, merge, 'json', 'json_right')).toBe(true)
-    expect(store.connect(merge, context, 'json', 'glossary')).toBe(true)
     expect(store.connect(merge, model, 'json', 'additional_parameters')).toBe(true)
     await settle()
-    const bound = root!.querySelector<HTMLInputElement>(`[data-node-id="${context}"] [data-field=instructions]`)!
-    expect(bound.disabled).toBe(true)
-    expect(store.draft.nodes.find(node => node.id === context)!.config.instructions).toBe('handwritten fallback')
-    const edge = store.draft.edges.find(edge => edge.target === context && edge.target_port === 'instructions')!
-    store.disconnect(edge.id); await settle(); expect(bound.disabled).toBe(false)
-    expect(bound.value).toBe('handwritten fallback')
-    store.undo(); await settle(); expect(bound.disabled).toBe(true)
+    const node = root!.querySelector(`[data-node-id="${join}"]`)!
+    const bound = node.querySelector<HTMLTextAreaElement>('[data-field="items.b.value"]')!
+    expect(bound.disabled).toBe(true); expect(bound.closest('label')!.style.display).toBe('none')
+    const buttons = node.querySelectorAll<HTMLButtonElement>('[data-slot=b] button')
+    expect([...buttons].every(button => button.classList.contains('text-button'))).toBe(true)
+    expect(node.querySelector('[data-add-input]')!.classList.contains('secondary-button')).toBe(true)
+    const manual = node.querySelector<HTMLTextAreaElement>('[data-field="items.a.value"]')!
+    edit(manual as unknown as HTMLInputElement, 'edited first'); await settle()
+    buttons[0]!.click(); await settle()
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[]).map(slot => slot.id)).toEqual(['b', 'a', 'c'])
+    expect(store.draft.edges.some(edge => edge.target === join && edge.target_port === 'text_b')).toBe(true)
+    store.undo(); await settle()
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[]).map(slot => slot.id)).toEqual(['a', 'b', 'c'])
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[])[0].value).toBe('edited first')
+    store.undo(); await settle()
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[])[0].value).toBe('first')
+    store.redo(); store.redo(); await settle()
+    buttons[2]!.click(); await settle()
+    expect(store.draft.edges.some(edge => edge.target === join)).toBe(false)
+    store.undo(); await settle()
+    expect(store.draft.edges.some(edge => edge.target === join && edge.target_port === 'text_b')).toBe(true)
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[])[0]).toEqual({ id: 'b', value: 'fallback' })
+    const edge = store.draft.edges.find(edge => edge.target === join)!
+    store.disconnect(edge.id); await settle()
+    const restored = node.querySelector<HTMLTextAreaElement>('[data-field="items.b.value"]')!
+    expect(restored.disabled).toBe(false); expect(restored.value).toBe('fallback')
+    node.querySelector<HTMLButtonElement>('[data-add-input]')!.click(); await settle()
+    expect((store.draft.nodes.find(node => node.id === join)!.config.items as any[])).toHaveLength(4)
+    const copied = preparePaste(copySelection(store.draft, [join], store.registry!), store.draft, store.registry!, { x: 100, y: 100 })
+    expect(copied.nodes[0]!.config.items).toEqual(store.draft.nodes.find(node => node.id === join)!.config.items)
+    store.connect(first, join, 'string', 'text_b')
+    const fragment = preparePaste(copySelection(store.draft, [first, join], store.registry!), store.draft, store.registry!, { x: 200, y: 200 })
+    expect(fragment.edges).toHaveLength(1); expect(fragment.edges[0]!.target_port).toBe('text_b')
     expect(workflowCredentials(store.credentialContext).updates()).toEqual([])
   })
   it('shows translation defaults from the same directory and preserves the private default key while changing interface language', async () => {
@@ -167,14 +181,14 @@ describe('catalog-driven API translation', () => {
     const type = root!.querySelector<HTMLSelectElement>('[data-settings-node-type]')!; type.value = 'service_connection'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     expect([...root!.querySelectorAll('[data-settings-section=connection] [data-field], [data-settings-key]')].map(input => input.getAttribute('data-field') || 'KEY')).toEqual(['protocol', 'endpoint', 'region', 'KEY'])
     expect(root!.querySelector('[data-settings-section=parameters]')).toBeNull()
-    edit(root!.querySelector<HTMLInputElement>('[data-settings-key]')!, 'private-template-key'); type.value = 'translation_context'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle(); edit(root!.querySelector<HTMLInputElement>('[data-field=instructions]')!, 'Keep names unchanged.'); type.value = 'service_connection'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    edit(root!.querySelector<HTMLInputElement>('[data-settings-key]')!, 'private-template-key'); type.value = 'string_value'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle(); edit(root!.querySelector<HTMLInputElement>('[data-field=value]')!, 'Keep names unchanged.'); type.value = 'service_connection'; type.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     setLocale('en'); await settle(); expect(root!.querySelector<HTMLInputElement>('[data-settings-key]')!.value).toBe('private-template-key')
     root!.querySelector<HTMLButtonElement>('[data-settings-actions] .primary-button')!.click(); await settle()
-    expect(bodies[0].node_defaults.translation_context.instructions).toBe('Keep names unchanged.')
+    expect(bodies[0].node_defaults.string_value.value).toBe('Keep names unchanged.')
     expect(bodies[0].credential_updates).toEqual([{ node_type: 'service_connection', operation: 'set', api_key: 'private-template-key' }])
     expect(bodies[0].node_defaults.service_connection).not.toHaveProperty('credential_ref')
   })
-  it.each(['CONNECTION_ENDPOINT_REQUIRED', 'MODEL_NAME_REQUIRED', 'MODEL_PROTOCOL_INCOMPATIBLE', 'CONNECTION_BINDING_INVALID', 'CONNECTION_BINDING_CHANGED', 'MODEL_BINDING_INVALID', 'CONFIGURATION_INVALID', 'CONFIGURATION_VALUE_INVALID', 'JSON_MERGE_CONFLICT', 'ASR_LANGUAGE_REQUIRED', 'CURRENT_TEXT_INVALID', 'CURRENT_TEXT_MISSING', 'LLM_BASE_URL_REQUIRED', 'LLM_MODEL_REQUIRED', 'LLM_TARGET_LANGUAGE_REQUIRED', 'LLM_SOURCE_LANGUAGE_REQUIRED', 'LLM_TRANSLATION_CREDENTIALS_MISSING', 'LLM_TRANSLATION_HTTP_ERROR', 'LLM_TRANSLATION_OUTPUT_INVALID', 'LLM_TRANSLATION_REFUSED', 'LLM_TRANSLATION_TIMEOUT'])('localizes safe translation error %s in both interfaces', code => {
+  it.each(['CONNECTION_ENDPOINT_REQUIRED', 'MODEL_NAME_REQUIRED', 'MODEL_PROTOCOL_INCOMPATIBLE', 'CONNECTION_BINDING_INVALID', 'CONNECTION_BINDING_CHANGED', 'MODEL_BINDING_INVALID', 'CONFIGURATION_INVALID', 'CONFIGURATION_VALUE_INVALID', 'JSON_MERGE_CONFLICT', 'ASR_LANGUAGE_REQUIRED', 'LLM_CONTEXT_INVALID', 'QWEN_CONTEXT_INVALID', 'QWEN_CONTEXT_TOO_LONG', 'CURRENT_TEXT_INVALID', 'CURRENT_TEXT_MISSING', 'LLM_TRANSLATION_CREDENTIALS_MISSING', 'LLM_TRANSLATION_HTTP_ERROR', 'LLM_TRANSLATION_OUTPUT_INVALID', 'LLM_TRANSLATION_REFUSED', 'LLM_TRANSLATION_TIMEOUT'])('localizes safe translation error %s in both interfaces', code => {
     for (const locale of ['zh-CN', 'en']) { setLocale(locale); expect(workflowErrorLabel({ code, message: 'server fallback' })).toBe(t(`workflow.error_${code}`)); expect(workflowErrorLabel({ code, message: 'server fallback' })).not.toBe('server fallback') }
   })
 })
@@ -182,7 +196,18 @@ describe('catalog-driven API translation', () => {
 
 it('localizes a translation submission rejection without losing the stable API error code', async () => {
   setLocale('en')
-  const error = await parseApiError({ status: 422, json: async () => ({ error: { code: 'LLM_MODEL_REQUIRED', message: '请填写翻译模型' } }) } as Response) as ApiError
-  expect(error.message).toBe(t('workflow.error_LLM_MODEL_REQUIRED'))
-  expect(error.code).toBe('LLM_MODEL_REQUIRED'); expect(error.status).toBe(422)
+  const error = await parseApiError({ status: 422, json: async () => ({ error: { code: 'MODEL_NAME_REQUIRED', message: '请填写模型名称' } }) } as Response) as ApiError
+  expect(error.message).toBe(t('workflow.error_MODEL_NAME_REQUIRED'))
+  expect(error.code).toBe('MODEL_NAME_REQUIRED'); expect(error.status).toBe(422)
+})
+
+it('explains current context and output-language errors in both interface languages', () => {
+  setLocale('zh-CN')
+  expect(workflowErrorLabel({ code: 'QWEN_CONTEXT_TOO_LONG', message: 'fallback' })).toContain('400 个字符')
+  expect(workflowErrorLabel({ code: 'LLM_CONTEXT_INVALID', message: 'fallback' })).toContain('非空')
+  expect(workflowErrorLabel({ code: 'LLM_TRANSLATION_OUTPUT_INVALID', message: 'fallback' })).toContain('输出语言无效')
+  setLocale('en')
+  expect(workflowErrorLabel({ code: 'QWEN_CONTEXT_TOO_LONG', message: 'fallback' })).toContain('400 characters')
+  expect(workflowErrorLabel({ code: 'LLM_CONTEXT_INVALID', message: 'fallback' })).toContain('nonempty')
+  expect(workflowErrorLabel({ code: 'LLM_TRANSLATION_OUTPUT_INVALID', message: 'fallback' })).toContain('output language is invalid')
 })

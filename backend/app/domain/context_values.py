@@ -4,14 +4,12 @@ import json
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..adapters.llm_translation_protocol import validate_glossary
 from .node_execution import NodeExecutionError
 
 MAX_JSON_BYTES = 16 * 1024
 MAX_TEXT_BYTES = 64 * 1024
-MAX_INSTRUCTIONS_CHARACTERS = 8192
 
 
 def validate_text(value, *, limit=MAX_TEXT_BYTES):
@@ -113,59 +111,6 @@ class JSONValue(_Packet):
         return json.loads(self.value_json)
 
 
-class TranslationContext(_Packet):
-    source_language: str = ""
-    target_language: str = ""
-    instructions: str = Field(default="", max_length=MAX_INSTRUCTIONS_CHARACTERS)
-    background: str = Field(default="", max_length=MAX_INSTRUCTIONS_CHARACTERS)
-    glossary_json: str = "{}"
-
-    @field_validator("source_language", "target_language")
-    @classmethod
-    def validate_languages(cls, value):
-        return validate_language(value)
-
-    @field_validator("glossary_json")
-    @classmethod
-    def validate_terms(cls, value):
-        encoded = _canonical_encoded(value)
-        validate_glossary(json.loads(encoded))
-        return encoded
-
-    @model_validator(mode="after")
-    def validate_rendered(self):
-        rendered = self.render_instructions()
-        validate_text(rendered, limit=32 * 1024)
-        if len(rendered) > MAX_INSTRUCTIONS_CHARACTERS:
-            raise ValueError("背景与翻译要求合成后不能超过8192字符")
-        return self
-
-    @classmethod
-    def from_values(cls, *, glossary=None, **values):
-        return cls(glossary_json=canonical_object({} if glossary is None else glossary), **values)
-
-    @property
-    def glossary(self):
-        return json.loads(self.glossary_json)
-
-    def render_instructions(self):
-        if not self.background:
-            return self.instructions
-        parts = ["[Background]\n" + self.background]
-        if self.instructions:
-            parts.append("[Translation instructions]\n" + self.instructions)
-        return "\n\n".join(parts)
-
-
-class ASRContext(_Packet):
-    language: str = ""
-
-    @field_validator("language")
-    @classmethod
-    def validate_language_code(cls, value):
-        return validate_language(value)
-
-
 class TranslationOptionsFields(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     timeout_seconds: int = Field(default=120, ge=1, le=3600)
@@ -190,8 +135,6 @@ class ASROptions(ASROptionsFields, _Packet):
 
 CONFIGURATION_TYPES = {
     "json_object": JSONValue,
-    "translation_context": TranslationContext,
-    "asr_context": ASRContext,
     "translation_options": TranslationOptions,
     "asr_options": ASROptions,
 }
@@ -215,14 +158,12 @@ def optional_packet(context, port, packet_type):
         raise NodeExecutionError("CONFIGURATION_VALUE_INVALID", "配置输入内容无效") from None
 
 
-def resolve_audio_language(context, packet):
+def resolve_audio_language(context):
     audio = next((item for item in context.project.audios if item.id == context.run.audio_id), None)
-    language = packet.language or (audio.source.language if audio else "")
+    language = audio.source.language if audio else ""
     try:
         if not language:
             raise ValueError
         return validate_language(language)
     except ValueError:
-        raise NodeExecutionError(
-            "ASR_LANGUAGE_REQUIRED", "请在识别上下文或当前音频中声明语言"
-        ) from None
+        raise NodeExecutionError("ASR_LANGUAGE_REQUIRED", "请在当前音频中声明语言") from None

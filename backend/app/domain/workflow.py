@@ -38,7 +38,7 @@ from .node_registry import (
 )
 from .schema import require_schema_version
 
-WORKFLOW_SCHEMA_VERSION = "2.0"
+WORKFLOW_SCHEMA_VERSION = "3.0"
 MAX_WORKFLOW_NODES = 64
 MAX_WORKFLOW_EDGES = 64
 # Graph-level limits are shared with the capabilities API so clients can render
@@ -410,7 +410,7 @@ def workflow_parameter_sources(
         return {}
     incoming = {edge.target_port: edge for edge in edges if edge.target == node.id}
     origins = {}
-    for item in definition.fields:
+    for item in _nodes.resolved_fields(definition, node.config):
         edge = incoming.get(item.input_port) if item.input_port is not None else None
         origins[item.key] = (
             WorkflowParameterSource(
@@ -522,9 +522,11 @@ def validate_workflow_graph(
             parameter_sources.append(node)
         if definition.terminal:
             output_nodes.append(node)
-        if definition.validate_config is not None:
+        if definition.validate_config is not None or definition.dynamic_inputs is not None:
             try:
-                definition.validate_config(node.config)
+                if definition.validate_config is not None:
+                    definition.validate_config(node.config)
+                _nodes.validate_dynamic_config(definition, node.config)
             except (TypeError, ValueError, ValidationError) as error:
                 issues.append(_config_error_issue(f"{node.type} 配置无效", error, node_id=node.id))
 
@@ -584,12 +586,21 @@ def validate_workflow_graph(
         if target is None:
             issues.append(_issue("UNKNOWN_EDGE_ENDPOINT", "连接目标节点不存在", edge_id=edge.id))
         if source is not None and target is not None:
-            _, source_ports = _nodes.node_ports().get(source.type, (frozenset(), frozenset()))
-            target_ports = _nodes.node_ports().get(target.type, (frozenset(), frozenset()))[0]
+            source_ports = (
+                _nodes.NODE_DEFINITIONS[source.type].output_ports
+                if source.type in _nodes.NODE_DEFINITIONS
+                else ()
+            )
+            target_definition = _nodes.NODE_DEFINITIONS.get(target.type)
+            target_ports = (
+                _nodes.resolved_input_ports(target_definition, target.config)
+                if target_definition
+                else ()
+            )
             if (
                 edge.source_port not in source_ports
                 or edge.target_port not in target_ports
-                or not ports_are_compatible(edge.source_port, edge.target_port)
+                or not ports_are_compatible(edge.source_port, edge.target_port, source, target)
             ):
                 issues.append(
                     _issue(
@@ -609,9 +620,10 @@ def validate_workflow_graph(
                     edge_id=edge.id,
                 )
             )
-        if (
-            target is not None
-            and not _nodes.node_ports().get(target.type, (frozenset(), frozenset()))[0]
+        if target is not None and not (
+            _nodes.resolved_input_ports(_nodes.NODE_DEFINITIONS[target.type], target.config)
+            if target.type in _nodes.NODE_DEFINITIONS
+            else ()
         ):
             issues.append(
                 _issue(
@@ -634,7 +646,7 @@ def validate_workflow_graph(
         by_port: dict[str, int] = {}
         for edge in incoming[node.id]:
             by_port[edge.target_port] = by_port.get(edge.target_port, 0) + 1
-        for port in definition.input_ports:
+        for port in _nodes.resolved_input_ports(definition, node.config):
             count = by_port.get(port, 0)
             if count > 1 or (port in definition.required_ports and count != 1):
                 issues.append(

@@ -12,7 +12,7 @@ import { createNodeRegistry } from './nodeRegistry'
 const payload = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: "1.16",
+    schema_version: "1.17",
     nodes: [
       nodeFixture({ type: 'source', label: 'Source', is_source: true, position_x: 0, input_ports: [], output_ports: ['audio'], config: { kind: 'none', fields: [] } }),
       nodeFixture({ type: 'processor', label: 'Processor', position_x: 500, input_ports: ['audio'], output_ports: ['audio'], config: { kind: 'processor', fields: [] } }),
@@ -30,7 +30,7 @@ const capabilities = readCapabilities(payload)
 const registry = createNodeRegistry(capabilities)
 const node = (id = 'node-1', type = 'processor', x = 500, y = 176): WorkflowNode => ({ id, type, config: {}, position: { x, y } })
 const document = (nodes = [node()]): WorkflowDocument => ({
-  schema_version: "2.0", project_id: 'p1', revision: 1, workflow_revision: 1,
+  schema_version: "3.0", project_id: 'p1', revision: 1, workflow_revision: 1,
   updated_at: '2026-11-01T00:00:00Z', nodes, edges: [],
 })
 const response = (value: unknown) => ({ ok: true, status: 200, json: async () => structuredClone(value) }) as Response

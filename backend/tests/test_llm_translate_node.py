@@ -40,11 +40,11 @@ def translator(monkeypatch):
                 state["cleaned"].set()
         return llm_translation.TranslationResult(
             translations={
-                item["id"]: kwargs["target_language"] + "|" + item["text"]
-                for item in kwargs["items"]
+                item["id"]: kwargs["context"] + "|" + item["text"] for item in kwargs["items"]
             },
             request_count=1,
             usage={},
+            language=kwargs["context"],
         )
 
     async def transcribe(self, audio, project):
@@ -140,8 +140,7 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
     if parameters:
         for field, value in (
             ("model", "parameter-model"),
-            ("target_language", "xx-target"),
-            ("source_language", "xx-source"),
+            ("context", "xx-target"),
         ):
             nodes.append({"id": field, "type": "string_value", "config": {"value": value}})
             edges.append(
@@ -186,17 +185,10 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
                 },
                 {
                     "id": ident + "_context",
-                    "type": "translation_context",
+                    "type": "text_join",
                     "config": {
-                        key: saved[key]
-                        for key in (
-                            "source_language",
-                            "target_language",
-                            "instructions",
-                            "background",
-                            "glossary",
-                        )
-                        if key in saved
+                        "items": [{"id": "a1", "value": saved.get("target_language", "")}],
+                        "separator": "",
                     },
                 },
                 {
@@ -221,11 +213,11 @@ async def setup(client, *, two=False, translation_config=None, keys=True, parame
                 if item["target_port"] == "model":
                     item.update(target=ident + "_model", target_port="model_name")
                 else:
-                    item["target"] = ident + "_context"
+                    item.update(target=ident + "_context", target_port="text_a1")
         for source, source_port, target, target_port in (
             (ident + "_connection", "connection", ident + "_model", "connection"),
             (ident + "_model", "model", ident, "model"),
-            (ident + "_context", "translation_context", ident, "translation_context"),
+            (ident + "_context", "string", ident, "context"),
             (ident + "_options", "translation_options", ident, "translation_options"),
         ):
             edges.append(
@@ -285,7 +277,7 @@ async def test_translation_chain_branches_preserve_original_and_rerun_current_vi
         assert run.status.value == "completed", run.error
         first, second = translator["calls"]
         assert first["items"] == [{"id": "stable-id", "text": "original"}]
-        assert (first["source_language"], first["target_language"], first["api_key"]) == (
+        assert (first["source_language"], first["context"], first["api_key"]) == (
             "ja",
             "en",
             "KEY-llm1",
@@ -346,7 +338,7 @@ async def test_translation_chain_branches_preserve_original_and_rerun_current_vi
     [
         ({"model": "custom", "target_language": "en"}, "INLINE_CONNECTION_INVALID"),
         ({"base_url": "https://example.com/v1", "target_language": "en"}, "MODEL_NAME_REQUIRED"),
-        ({"base_url": "https://example.com/v1", "model": "custom"}, "LLM_TARGET_LANGUAGE_REQUIRED"),
+        ({"base_url": "https://example.com/v1", "model": "custom"}, "LLM_CONTEXT_INVALID"),
     ],
 )
 async def test_empty_drafts_defaults_save_but_single_and_batch_submit_reject(
@@ -389,8 +381,8 @@ async def test_parameter_inputs_resolve_before_validation_and_record_effective_c
         run = await start(client, app, pid, aid, document)
         assert run.status.value == "completed", run.error
         assert translator["calls"][0]["model"] == "parameter-model"
-        assert translator["calls"][0]["source_language"] == "xx-source"
-        assert translator["calls"][0]["target_language"] == "xx-target"
+        assert translator["calls"][0]["source_language"] == "ja"
+        assert translator["calls"][0]["context"] == "xx-target"
         record = next(record for record in run.nodes if record.node_id == "llm1_model")
         assert record.config["model_name"] == ""
         assert record.effective_config["model_name"] == "parameter-model"
@@ -402,9 +394,7 @@ async def test_empty_connected_required_value_blocks_before_api_request(tmp_path
     app.state.jobs.delay_ms = 0
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aid, document = await setup(client, parameters=True)
-        next(node for node in document["nodes"] if node["id"] == "target_language")["config"][
-            "value"
-        ] = ""
+        next(node for node in document["nodes"] if node["id"] == "context")["config"]["value"] = ""
         saved = await client.put(
             f"/api/v1/projects/{pid}/workflow",
             json={
@@ -419,7 +409,7 @@ async def test_empty_connected_required_value_blocks_before_api_request(tmp_path
             json={"workflow_revision": saved.json()["revision"]},
         )
         assert rejected.status_code == 422
-        assert rejected.json()["error"]["code"] == "LLM_TARGET_LANGUAGE_REQUIRED"
+        assert rejected.json()["error"]["code"] == "LLM_CONTEXT_INVALID"
         assert translator["calls"] == []
 
 
@@ -442,16 +432,9 @@ async def test_node_directory_and_no_environment_credential_fallback(
         )
         binding = connection["presentation"]["inline_connection_input"]
         assert binding["timeout_key"] is None and binding["provider_type"] == "service_connection"
-        context = next(
-            value
-            for value in catalog["workflow"]["nodes"]
-            if value["type"] == "translation_context"
-        )
-        fields = {field["key"]: field for field in context["config"]["fields"]}
-        assert (
-            fields["source_language"]["suggestion_source"]
-            == fields["target_language"]["suggestion_source"]
-            == "languages"
+        assert "context" in node["required_input_ports"]
+        assert not any(
+            value["type"] == "translation_context" for value in catalog["workflow"]["nodes"]
         )
         pid, aid, document = await setup(client, keys=False)
         response = await client.post(
@@ -484,7 +467,7 @@ async def test_real_adapter_protocol_renders_current_translation_without_auth_le
         assert payload["model"] == "future-model"
         assert request.headers["authorization"] == "Bearer KEY-llm1"
         user = json.loads(payload["messages"][1]["content"])
-        assert user["source_language"] == "ja" and user["target_language"] == "en"
+        assert user["source_language_hint"] == "ja" and user["translation_context"] == "en"
         translations = [
             {"id": item["id"], "translation": "translated-" + item["text"]}
             for item in user["items"]
@@ -494,7 +477,9 @@ async def test_real_adapter_protocol_renders_current_translation_without_auth_le
             json={
                 "choices": [
                     {
-                        "message": {"content": json.dumps({"translations": translations})},
+                        "message": {
+                            "content": json.dumps({"language": "en", "translations": translations})
+                        },
                         "finish_reason": "stop",
                     }
                 ]
@@ -566,7 +551,7 @@ def test_only_affected_text_renderers_change_execution_version():
     assert NODE_DEFINITIONS["text_output"].execution_version == "2"
     assert NODE_DEFINITIONS["text_preview"].execution_version == "2"
     assert NODE_DEFINITIONS["audio_preview"].execution_version == "1"
-    assert NODE_DEFINITIONS["asr"].execution_version == "2"
+    assert NODE_DEFINITIONS["asr"].execution_version == "3"
     with pytest.raises(ValueError, match="validate_execution_config"):
         from app.domain.node_registry import validate_node_definition
 
@@ -587,7 +572,6 @@ async def test_empty_or_invalid_transcript_never_reaches_translation_api(
     translator, tmp_path, segments, code
 ):
     from app.application.workflow_asr import TranscriptData
-    from app.domain.context_values import TranslationContext
     from app.domain.node_execution import NodeData, NodeExecutionContext
     from app.domain.workflow import WorkflowNode
     from app.nodes.llm_translate import execute
@@ -598,9 +582,7 @@ async def test_empty_or_invalid_transcript_never_reaches_translation_api(
         run=None,
         node=WorkflowNode(id="llm", type="llm_translate", config={}),
         inputs={
-            "translation_context": NodeData(
-                "translation_context", TranslationContext(target_language="en")
-            ),
+            "context": NodeData("context", "en"),
             "transcript": NodeData(
                 "transcript", TranscriptData(path=tmp_path / "none.json", transcript=value)
             ),

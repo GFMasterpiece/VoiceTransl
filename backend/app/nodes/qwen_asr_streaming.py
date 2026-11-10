@@ -2,8 +2,8 @@
 
 from uuid import uuid4
 
+from ..adapters.qwen_context import input_context
 from ..domain.context_values import (
-    ASRContext,
     ASROptions,
     normalize_processor_config,
     optional_packet,
@@ -18,7 +18,7 @@ normalize = normalize_processor_config
 
 def validate_inputs(context):
     normalize(context.node.config)
-    optional_packet(context, "asr_context", ASRContext)
+    input_context(context)
     optional_packet(context, "asr_options", ASROptions)
 
 
@@ -29,9 +29,9 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
     from ..domain.workflow import WorkflowArtifact
 
     validate_inputs(context)
-    packet = optional_packet(context, "asr_context", ASRContext)
+    text_context = input_context(context)
     options = optional_packet(context, "asr_options", ASROptions)
-    language = resolve_audio_language(context, packet)
+    language = resolve_audio_language(context)
     connection, model, parameters, api_key = resolve_model(
         context, context.input("model").value, "asr_streaming", options.timeout_seconds
     )
@@ -39,6 +39,7 @@ async def execute(context: NodeExecutionContext) -> NodeResult:
         audio_path=context.input("audio").value.path,
         project_id=context.run.project_id,
         language=language,
+        context=text_context,
         connection=connection,
         model=model,
         additional_parameters=parameters,
@@ -76,7 +77,7 @@ def definition():
         type="qwen_asr_streaming",
         label="Qwen Streaming语音识别",
         category=SPEECH_RECOGNITION,
-        input_ports=("audio", "model", "asr_context", "asr_options"),
+        input_ports=("audio", "model", "context", "asr_options"),
         required_input_ports=("audio", "model"),
         output_ports=("transcript",),
         terminal=False,
@@ -85,7 +86,7 @@ def definition():
         validate_config=normalize,
         execute=execute,
         validate_inputs=validate_inputs,
-        validation_input_ports=("model", "asr_context", "asr_options"),
+        validation_input_ports=("model", "context", "asr_options"),
         binding_inputs={"model": "asr_streaming"},
-        execution_version="2",
+        execution_version="3",
     )

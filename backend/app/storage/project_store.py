@@ -74,13 +74,13 @@ class FileSystemProjectStore:
         return AudioProjectStore(self, project_id, audio_id)
 
     def _workflow_path(self, project_id: str) -> Path:
-        path = self.project_dir(project_id) / "workflow-v2.json"
+        path = self.project_dir(project_id) / "workflow-v3.json"
         if path.is_symlink():
             raise ValueError("workflow must not be a symlink")
         return path
 
     def _workflow_history_dir(self, project_id: str) -> Path:
-        return self._project_subdir(project_id, "workflow-revisions-v2")
+        return self._project_subdir(project_id, "workflow-revisions-v3")
 
     def load_workflow(self, project_id: str) -> WorkflowDocument:
         project = self.load_project(project_id)
@@ -167,9 +167,9 @@ class FileSystemProjectStore:
     def workflow_run_root(self, project_id: str, audio_id: str) -> Path:
         self.audio(project_id, audio_id)
         if audio_id == PRIMARY_AUDIO_ID:
-            root = self.project_dir(project_id) / "workflow-runs-v2"
+            root = self.project_dir(project_id) / "workflow-runs-v3"
         else:
-            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs-v2"
+            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs-v3"
         if root.is_symlink():
             raise ValueError("workflow runs directory must not be a symlink")
         root.mkdir(parents=True, exist_ok=True)
@@ -235,9 +235,9 @@ class FileSystemProjectStore:
     ) -> tuple[list[WorkflowRun], int]:
         self.audio(project_id, audio_id)
         if audio_id == PRIMARY_AUDIO_ID:
-            root = self.project_dir(project_id) / "workflow-runs-v2"
+            root = self.project_dir(project_id) / "workflow-runs-v3"
         else:
-            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs-v2"
+            root = self.scope(project_id, audio_id).audio_dir() / "workflow-runs-v3"
         if not root.is_dir() or root.is_symlink():
             return [], 0
         runs = []
@@ -281,9 +281,9 @@ class FileSystemProjectStore:
             for audio in project.audios:
                 try:
                     if audio.id == PRIMARY_AUDIO_ID:
-                        root = self.project_dir(project.id) / "workflow-runs-v2"
+                        root = self.project_dir(project.id) / "workflow-runs-v3"
                     else:
-                        root = self.scope(project.id, audio.id).audio_dir() / "workflow-runs-v2"
+                        root = self.scope(project.id, audio.id).audio_dir() / "workflow-runs-v3"
                     if not root.is_dir() or root.is_symlink():
                         continue
                     for directory in root.iterdir():

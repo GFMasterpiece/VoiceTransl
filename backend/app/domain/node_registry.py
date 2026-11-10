@@ -107,10 +107,22 @@ from .node_registry_core import (
     register_type as register_type,
 )
 from .node_registry_core import (
+    resolve_port as resolve_port,
+)
+from .node_registry_core import (
+    resolved_fields as resolved_fields,
+)
+from .node_registry_core import (
+    resolved_input_ports as resolved_input_ports,
+)
+from .node_registry_core import (
     type_catalog as type_catalog,
 )
 from .node_registry_core import (
     type_is_compatible as type_is_compatible,
+)
+from .node_registry_core import (
+    validate_dynamic_config as validate_dynamic_config,
 )
 from .node_registry_core import (
     validate_node_definition as validate_node_definition,

@@ -204,7 +204,7 @@ async def test_current_explicit_exact_graph_and_run_restart_without_rewriting_or
         pid, aid = await create_project(client)
         graph = output_graph("exact")
         document = WorkflowDocument(project_id=pid, nodes=graph["nodes"], edges=graph["edges"])
-        workflow_path = app.state.store.project_dir(pid) / "workflow-v2.json"
+        workflow_path = app.state.store.project_dir(pid) / "workflow-v3.json"
         workflow_path.write_text(document.model_dump_json(), encoding="utf-8")
         old_workflow = workflow_path.read_bytes()
         loaded = (await client.get(f"/api/v1/projects/{pid}/workflow")).json()

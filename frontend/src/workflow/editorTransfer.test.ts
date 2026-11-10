@@ -57,7 +57,7 @@ function graph(): WorkflowDocumentInput {
   }
 }
 function file(value: unknown, format = 'voicetransl.workflow'): string {
-  return JSON.stringify({ format, schema_version: '2.0', ...(value as object) })
+  return JSON.stringify({ format, schema_version: '3.0', ...(value as object) })
 }
 function expectCode(action: () => unknown, code: string) {
   try { action(); throw new Error('Expected TransferError') } catch (error) {
@@ -75,7 +75,7 @@ describe('portable workflow transfer', () => {
     const expected = structuredClone(original)
     expected.nodes[0].config = {}
     expect(JSON.parse(text).format).toBe('voicetransl.workflow')
-    expect(JSON.parse(text).schema_version).toBe('2.0')
+    expect(JSON.parse(text).schema_version).toBe('3.0')
     expect(result).toEqual(expected)
     expect(result.nodes[1].config.strength).toBe(2.5)
     expect(original).toEqual(before)

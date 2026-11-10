@@ -21,7 +21,7 @@ import { parseWorkflowFile } from './workflow/editorTransfer'
 const testCapabilities: Record<string, any> = catalogFixture({
   schema_version: '1.0',
   workflow: {
-    schema_version: "1.16",
+    schema_version: "1.17",
     nodes: [
       nodeFixture({ type: 'audio_input', label: '音频输入', id_prefix: 'input', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] }, position_x: 96 }),
       nodeFixture({ type: 'preprocess', label: '音频预处理', add_label: '预处理', id_prefix: 'preprocess', input_ports: ['audio'], output_ports: ['audio'], terminal: false, required_inbound: 1, removable: true, config: { kind: 'preprocess', fields: [
@@ -81,7 +81,7 @@ const textArtifact = {
   media_type: 'application/x-subrip', download_url: '/api/v1/projects/p1/audios/a1/workflow-runs/run-1/outputs/text-1/download',
 }
 const documentBody = (revision = 1, workflowRevision = 1): WorkflowDocument => ({
-  schema_version: "2.0", project_id: 'p1', revision, workflow_revision: workflowRevision,
+  schema_version: "3.0", project_id: 'p1', revision, workflow_revision: workflowRevision,
   updated_at: '2026-10-28T00:00:00Z', nodes: structuredClone([input, output]), edges: [structuredClone(edge)],
 })
 
@@ -653,7 +653,7 @@ describe('capability catalog and node registry', () => {
     const backendShape = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: "1.16",
+        schema_version: "1.17",
         nodes: [
           nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
           nodeFixture({ type: 'audio_output', label: '音频输出', input_ports: ['audio'], output_ports: [], terminal: true, max_instances: null, required_inbound: 1, removable: true, config: { kind: 'audio_output', fields: [fieldFixture({ key: 'filename_stem', type: 'string', required: false, default: 'audio-copy', minimum: null, maximum: null, min_length: 1, max_length: 128, validator: 'safe_filename_stem', options: [] })] } }),
@@ -675,7 +675,7 @@ describe('capability catalog and node registry', () => {
     const live = catalogFixture({
       schema_version: '1.0',
       workflow: {
-        schema_version: "1.16",
+        schema_version: "1.17",
         ports: ['audio', 'transcript', 'text'],
         nodes: [
           nodeFixture({ type: 'audio_input', label: '音频输入', input_ports: [], output_ports: ['audio'], terminal: false, is_source: true, max_instances: 1, required_inbound: 0, removable: false, config: { kind: 'none', fields: [] } }),
@@ -698,7 +698,7 @@ describe('capability catalog and node registry', () => {
   })
 
   it('rejects a non-current capabilities schema version', () => {
-    expect(() => readCapabilities({ ...testCapabilities, schema_version: '2.0' })).toThrow('schema_version')
+    expect(() => readCapabilities({ ...testCapabilities, schema_version: '3.0' })).toThrow('schema_version')
   })
 
   it('rejects malformed or missing catalog data instead of falling back to local node defaults', () => {
@@ -858,7 +858,7 @@ describe('inline catalog field editing', () => {
 describe('catalog resources and preview workflows', () => {
   function catalog() {
     const value = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.16'
+    value.workflow.schema_version = '1.17'
     const source = value.workflow.nodes.find((entry: any) => entry.type === 'audio_input')
     source.presentation = { resource_input: { resource_type: 'audio', config_key: 'audio_id', collection_key: null } }
     source.config.fields = [fieldFixture({ key: 'audio_id', label: 'Audio ID', type: 'string', required: false, default: null })]
@@ -1149,7 +1149,7 @@ describe('workflow viewport coordinates and gestures', () => {
 describe('canvas context menus', () => {
   function categorizedCatalog(): any {
     const value: any = structuredClone(testCapabilities)
-    value.workflow.schema_version = '1.16'
+    value.workflow.schema_version = '1.17'
     const categories = [{ id: 'input', label: '输入' }, { id: 'plugin_tools', label: 'Plugin tools' }, { id: 'speech_recognition', label: '语音识别' }, { id: 'output', label: '输出' }]
     value.workflow.nodes.forEach((node: any, index: number) => {
       node.category = categories[Math.min(index, 3)]
@@ -2589,7 +2589,7 @@ describe('editor operations UI', () => {
 describe('catalog-driven parameter connections', () => {
   async function parameterNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.16'
+    catalog.workflow.schema_version = '1.17'
     catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({ id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities] })))
     for (const declaration of catalog.workflow.nodes) {
       declaration.required_input_ports = [...declaration.input_ports]
@@ -2763,7 +2763,7 @@ describe('catalog-driven parameter connections', () => {
 describe('catalog-driven multiple input and output ports', () => {
   async function multiNodes() {
     const catalog = structuredClone(testCapabilities) as any
-    catalog.workflow.schema_version = '1.16'
+    catalog.workflow.schema_version = '1.17'
     catalog.workflow.data_types = testRegistry.capabilities.dataTypes.map((type) => (typeFixture({
       id: type.id, label: type.label, parent_type_id: type.parentTypeId, capabilities: [...type.capabilities],
     })))
@@ -2872,7 +2872,7 @@ describe('resource collection and shared execution', () => {
   const audio = (id: string) => ({ id, source: { original_name: `${id}.wav`, language: 'ja', size_bytes: 4 } })
   function collectionCatalog(collectionKey = 'audio_ids') {
     const catalog = structuredClone(testCapabilities)
-    catalog.workflow.schema_version = '1.16'
+    catalog.workflow.schema_version = '1.17'
     for (const node of catalog.workflow.nodes) {
       node.is_parameter_source = false
       node.required_input_ports = node.required_inbound ? [...node.input_ports] : []
@@ -3153,7 +3153,7 @@ describe('node rerun planning UI', () => {
   const validPlan = { valid: true, execute_node_ids: ['output'], reuse_node_ids: ['input'], skipped_node_ids: [], issues: [] }
   async function ready(override?: FetchOverride) {
     setup(override, createPinia(), { audios: ['a1', 'a2'].map(id => ({ id, source: { original_name: id === 'a1' ? 'chosen-audio.wav' : 'second.wav', language: 'ja', size_bytes: 5 } })) }); await settle()
-    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.16'; store.run = runBody({ status: 'completed' }); await settle(); return store
+    const store = useWorkflowStore(); store.capabilities!.schemaVersion = '1.17'; store.run = runBody({ status: 'completed' }); await settle(); return store
   }
   async function openRerun() {
     node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 400, clientY: 220 })); await settle()
@@ -3247,7 +3247,7 @@ describe('declarative debug node visibility', () => {
   it('hides debug declarations in both add menus while preserving and duplicating existing debug nodes', async () => {
     setup(); await settle(); const store = useWorkflowStore()
     store.addNode('asr'); const existing = store.selectedNodeId!
-    store.capabilities!.schemaVersion = '1.16'
+    store.capabilities!.schemaVersion = '1.17'
     store.capabilities!.nodes.forEach(kind => { kind.debugOnly = kind.type === 'asr' || kind.type === 'preprocess' })
     const extension = JSON.parse(JSON.stringify(store.capabilities!.nodes.find(kind => kind.type === 'asr')!))
     extension.type = 'unusual_extension'; extension.debugOnly = true

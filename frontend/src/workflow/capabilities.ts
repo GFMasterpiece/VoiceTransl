@@ -1,3 +1,4 @@
+import { fieldValueErrors } from './fieldValidation'
 import { API_BASE_URL, parseApiError } from '../api'
 import { message } from '../i18n'
 
@@ -25,6 +26,7 @@ export interface CapabilityField {
   key: string
   inputPort: string | null
   type: 'string' | 'boolean' | 'integer' | 'number' | 'select' | 'json'
+  nullable?: boolean
   required: boolean
   default: CapabilityValue
   creationDefault?: CapabilityValue
@@ -39,6 +41,7 @@ export interface CapabilityField {
   description: string
 }
 export interface CapabilityNode {
+  dynamicInputs?: { configKey: string; portPrefix: string; typeId: string; minItems: number; maxItems: number; defaultItems: { id: string; value: string }[]; field: CapabilityField } | null
   evaluationKind?: 'configuration' | 'processing'
   canStartWithoutInputs?: boolean
   debugOnly?: boolean
@@ -147,6 +150,7 @@ export function parseCapabilityField(value: unknown): CapabilityField {
     inputPort: item.input_port as string | null,
     type: type as CapabilityField['type'],
     required: item.required === true,
+    nullable: item.nullable === true,
     default: defaultValue,
     creationDefault: item.creation_default ?? null,
     minimum,
@@ -251,7 +255,20 @@ function node(value: unknown): CapabilityNode {
   if (preview && (typeof preview.renderer !== 'string' || !preview.renderer)) fail('workflow.capPresentation')
   if (resource && parsedFields.some((field) => (field.key === resource.config_key || (field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
   if (item.is_parameter_source && (item.is_source === true || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
+  let dynamicInputs: CapabilityNode['dynamicInputs'] = null
+  if (item.dynamic_inputs != null) {
+    const d = object(item.dynamic_inputs, 'workflow.capParameter')
+    if (Object.keys(d).some(key => !['config_key', 'port_prefix', 'type_id', 'min_items', 'max_items', 'field', 'default_items'].includes(key))) fail('workflow.capParameter')
+    if (!safeIdentifier(d.config_key) || typeof d.port_prefix !== 'string' || !/^[a-z][a-z0-9_]*_$/.test(d.port_prefix) || d.type_id !== 'string' || d.port_prefix.length > 32 || parsedFields.some(field => field.key === d.config_key)
+      || !Number.isInteger(d.min_items) || !Number.isInteger(d.max_items) || Number(d.min_items) < 1 || Number(d.max_items) > 32 || Number(d.min_items) > Number(d.max_items)) fail('workflow.capParameter')
+    dynamicInputs = { configKey: String(d.config_key), portPrefix: d.port_prefix, typeId: String(d.type_id), minItems: Number(d.min_items), maxItems: Number(d.max_items), field: parseCapabilityField(d.field), defaultItems: d.default_items as { id: string; value: string }[] }
+    const entries = dynamicInputs.defaultItems
+    const f = dynamicInputs.field
+    if (f.type !== 'string' || typeof f.default !== 'string' || fieldValueErrors(f, f.default).length) fail('workflow.capParameter')
+    if (!Array.isArray(entries) || entries.length < dynamicInputs.minItems || entries.length > dynamicInputs.maxItems || new Set(entries.map(slot => slot?.id)).size !== entries.length || entries.some(slot => !slot || typeof slot !== 'object' || Array.isArray(slot) || Object.keys(slot).some(key => !['id', 'value'].includes(key)) || !/^[a-z][a-z0-9_]{0,31}$/.test(slot.id) || !Object.prototype.hasOwnProperty.call(slot, 'value') || fieldValueErrors(f, slot.value).length > 0) || [...inputPorts, ...outputPorts].some(port => port.startsWith(dynamicInputs!.portPrefix))) fail('workflow.capParameter')
+  }
   return {
+    dynamicInputs,
     inlineConnectionInput,
     evaluationKind: item.evaluation_kind as 'configuration' | 'processing',
     canStartWithoutInputs: item.can_start_without_inputs as boolean,
@@ -303,7 +320,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.16') fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version !== '1.17') fail('workflow.capWorkflowSchema')
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map((entry) => node(entry))
   const categoryLabels = new Map<string, string>()
@@ -320,6 +337,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const typeIds = new Set(dataTypes.map((item) => item.id))
   if (ports.some((item) => !typeIds.has(item.typeId))) fail('workflow.capTypes')
   for (const entry of nodes) {
+    if (entry.dynamicInputs && (!typeIds.has(entry.dynamicInputs.typeId) || entry.dynamicInputs.field.key !== 'value' || entry.dynamicInputs.field.inputPort !== null || entry.dynamicInputs.field.type !== entry.dynamicInputs.typeId)) fail('workflow.capParameter')
     for (const port of [...entry.inputPorts, ...entry.outputPorts]) if (!portIds.has(port)) fail('workflow.capUndeclaredPort')
     for (const field of entry.fields) {
       if (field.inputPort === null) continue
