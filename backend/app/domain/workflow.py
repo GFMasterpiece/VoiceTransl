@@ -376,7 +376,7 @@ def default_workflow(project_id: str, updated_at: datetime | None = None) -> Wor
                 id="output",
                 type="audio_output",
                 config={"filename_stem": DEFAULT_FILENAME_STEM, "naming_mode": "prefix_sequence"},
-                position=WorkflowPosition(x=420, y=120),
+                position=WorkflowPosition(x=720, y=120),
             ),
         ],
         edges=[

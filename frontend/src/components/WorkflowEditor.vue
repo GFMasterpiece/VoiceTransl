@@ -11,6 +11,7 @@ import {
   type WorkflowNode, type WorkflowEdge,
 } from '../stores/workflow'
 
+import { visibleViewport } from '../workflow/visibleViewport'
 import NodeConfigFields from './NodeConfigFields.vue'
 import { languageSuggestionsKey } from '../composables/languageSuggestions'
 import CanvasDialog from './CanvasDialog.vue'
@@ -34,6 +35,9 @@ const clipId = useId()
 const props = defineProps<{ projectId: string; audioId: string | null; audioName: string; project?: Project; audios?: readonly Audio[] }>()
 const rerunModalOpen = ref(false)
 const libraryWorld = ref<{ x: number; y: number } | null>(null)
+const libraryAddError = ref('')
+const retryingLoad = ref(false)
+const initialLoadFailed = computed(() => !store.document && !store.loading && !!(store.capabilitiesError || store.error))
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
 const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
@@ -43,6 +47,7 @@ const store = useWorkflowStore()
 watch(() => resourceBusy.value || batch.manifest.uploading.value, (busy) => { store.resourceUploading = busy }, { flush: 'sync' })
 const canvas = ref<HTMLDivElement | null>(null)
 const stage = ref<SVGSVGElement | null>(null)
+const toolbar = ref<HTMLElement | null>(null)
 const drag = ref<{ nodeId: string; moved: boolean; startX: number; startY: number; positions: Array<{ id: string; x: number; y: number }> } | null>(null)
 const marquee = ref<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null)
 const resizing = ref<{ nodeId: string; axis: 'right' | 'bottom' | 'corner'; startX: number; startY: number; width: number; height: number } | null>(null)
@@ -71,9 +76,8 @@ const commands = useEditorCommands(store, {
   context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
   blocked: () => !!libraryWorld.value || controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value || rerunModalOpen.value,
   pastePoint: () => {
-    const bounds = stage.value?.getBoundingClientRect()
-    return bounds && bounds.width > 0 && bounds.height > 0
-      ? canvasPoint({ clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2 } as PointerEvent) : undefined
+    const viewport = availableViewport()
+    return viewport ? canvasPoint({ clientX: viewport.bounds.left + viewport.x + viewport.width / 2, clientY: viewport.bounds.top + viewport.y + viewport.height / 2 } as PointerEvent) : undefined
   },
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
@@ -212,11 +216,12 @@ function closeMenu(restore = false) {
   if (restore && menuTrigger?.isConnected && 'focus' in menuTrigger) (menuTrigger as HTMLElement).focus()
   menuTrigger = null
 }
-function closeLibrary() { libraryWorld.value = null }
+function closeLibrary() { libraryWorld.value = null; libraryAddError.value = '' }
 function openLibrary(world: { x: number; y: number }, trigger?: Element) {
   if (editingBlocked.value || clipboardBusy.value || batch.manifest.uploading.value || drag.value || resizing.value || marquee.value || panning.value || connectionStart.value || store.historyTransactionActive) return
   closeMenu(); closeEditMenu(); clearGestures()
   if (trigger && 'focus' in trigger) (trigger as HTMLElement).focus()
+  libraryAddError.value = ''
   libraryWorld.value = { ...world }
 }
 async function showMenu(x: number, y: number, world: { x: number; y: number }, nodeId?: string, trigger?: Element) {
@@ -242,21 +247,25 @@ function canvasContextMenu(event: MouseEvent) {
   void showMenu(event.clientX, event.clientY, canvasPoint(event as PointerEvent), group?.dataset.nodeId, group || stage.value || undefined)
 }
 function openAddMenu(event?: MouseEvent) {
-  const bounds = stage.value?.getBoundingClientRect()
+  const viewport = availableViewport()
+  const bounds = viewport?.bounds || stage.value?.getBoundingClientRect()
   if (!bounds) return
-  const clientX = bounds.left + bounds.width / 2
-  const clientY = bounds.top + bounds.height / 2
+  const clientX = bounds.left + (viewport ? viewport.x + viewport.width / 2 : bounds.width / 2)
+  const clientY = bounds.top + (viewport ? viewport.y + viewport.height / 2 : bounds.height / 2)
   const point = canvasPoint({ clientX, clientY } as PointerEvent)
   const trigger = event?.currentTarget as Element | undefined
   const anchor = trigger?.getBoundingClientRect()
   void showMenu(anchor?.left ?? clientX, anchor?.bottom ?? clientY, point, undefined, trigger)
 }
 function addFromLibrary(type: string) {
+  libraryAddError.value = ''
   const world = libraryWorld.value
   if (!world || addDisabledReason(type) || clipboardBusy.value || batch.manifest.uploading.value) return
   const count = store.draft.nodes.length
+  store.error = ''
   store.addNode(type, world)
   if (store.draft.nodes.length > count) closeLibrary()
+  else libraryAddError.value = store.error
 }
 
 function runContextCommand(command: 'copy' | 'cut' | 'paste' | 'duplicate') {
@@ -420,8 +429,24 @@ function canvasPoint(event: PointerEvent) {
   return { x: (event.clientX - bounds.left - store.pan.x) / store.zoom, y: (event.clientY - bounds.top - store.pan.y) / store.zoom }
 }
 
+function availableViewport() {
+  const stageBounds = stage.value?.getBoundingClientRect()
+  const bounds = stageBounds && stageBounds.width > 0 && stageBounds.height > 0 ? stageBounds : canvas.value?.getBoundingClientRect()
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null
+  return { bounds, ...visibleViewport(bounds, toolbar.value?.getBoundingClientRect()) }
+}
 function focusNode(node: WorkflowNode) {
   store.selectNode(node.id)
+  const viewport = availableViewport()
+  if (viewport && viewport.width > 0 && viewport.height > 0) {
+    const x = node.position.x * store.zoom + store.pan.x
+    const y = node.position.y * store.zoom + store.pan.y
+    const width = nodeWidth(node) * store.zoom
+    const height = nodeHeight(node) * store.zoom
+    if (x < viewport.x || y < viewport.y || x + width > viewport.x + viewport.width || y + height > viewport.y + viewport.height) {
+      store.pan = { x: viewport.x + Math.max(0, (viewport.width - width) / 2) - node.position.x * store.zoom, y: viewport.y + Math.max(0, (viewport.height - height) / 2) - node.position.y * store.zoom }
+    }
+  }
   void nextTick(() => {
     const group = [...(stage.value?.querySelectorAll<SVGGElement>('.workflow-node') || [])].find((element) => element.dataset.nodeId === node.id)
     group?.querySelector<HTMLElement>('input, select, textarea')?.focus()
@@ -656,13 +681,13 @@ function fitCanvas() {
   const maxY = Math.max(...nodes.map((node) => node.position.y + nodeHeight(node)))
   const width = Math.max(1, maxX - minX)
   const height = Math.max(1, maxY - minY)
-  const bounds = canvas.value?.getBoundingClientRect()
-  if (!bounds || bounds.width <= 0 || bounds.height <= 0) return
-  const candidate = Math.min(1.2, (bounds.width - 48) / width, (bounds.height - 72) / height)
+  const viewport = availableViewport()
+  if (!viewport || viewport.width <= 0 || viewport.height <= 0) return
+  const candidate = Math.min(1.2, viewport.width / width, viewport.height / height)
   store.zoom = Math.max(minZoom, Math.floor(candidate * 100) / 100)
   store.pan = {
-    x: (bounds.width - width * store.zoom) / 2 - minX * store.zoom,
-    y: (bounds.height - height * store.zoom) / 2 - minY * store.zoom,
+    x: viewport.x + (viewport.width - width * store.zoom) / 2 - minX * store.zoom,
+    y: viewport.y + (viewport.height - height * store.zoom) / 2 - minY * store.zoom,
   }
 }
 
@@ -744,9 +769,17 @@ async function runWorkflow() {
   return result
 }
 
+async function retryWorkflowLoad() {
+  if (retryingLoad.value || store.loading || store.document || store.draft.nodes.length || store.draft.edges.length) return
+  retryingLoad.value = true
+  try { await store.load(props.projectId, props.audioId) } finally { retryingLoad.value = false }
+}
 async function reloadCapabilities() {
-  store.capabilities = null
-  await store.load(props.projectId, props.audioId)
+  if (retryingLoad.value || store.loading) return
+  if (!store.document && !store.draft.nodes.length && !store.draft.edges.length) { await retryWorkflowLoad(); return }
+  retryingLoad.value = true
+  try { await store.refreshCapabilities() } catch (reason) { store.setError(reason instanceof Error ? reason : message('workflow.capReadFailed')) }
+  finally { retryingLoad.value = false }
 }
 
 export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
@@ -860,7 +893,7 @@ onUnmounted(() => {
 <template>
   <section class="node-workflow" aria-labelledby="node-workflow-title" :aria-busy="store.loading || store.saving ? 'true' : 'false'">
     <h2 id="node-workflow-title" class="visually-hidden">{{ t('workflow.title') }}</h2>
-    <div class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
+    <div ref="toolbar" class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
       <div class="workflow-workspace-header"><slot name="workspace-header" /></div>
       <div class="workflow-toolbar-actions">
         <div class="editor-menu-anchor">
@@ -870,9 +903,9 @@ onUnmounted(() => {
             <button v-for="command in editorCommands" :key="command.id" type="button" role="menuitem" :data-editor-command="command.id" :disabled="commandDisabled(command.id)" @click="runEditorCommand(command.id)"><span>{{ t(`workflow.editorCommand_${command.id}`) }}</span><kbd v-if="command.shortcut">{{ command.shortcut }}</kbd></button>
           </div>
         </div>
-        <button class="secondary-button compact-button" type="button" data-add-node :disabled="controlsLocked || store.loading" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
+        <button class="secondary-button compact-button" type="button" data-add-node :disabled="editingBlocked" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
-        <span class="workflow-save-state" role="status">{{ store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
+        <span class="workflow-save-state" role="status">{{ !store.document ? t(initialLoadFailed ? 'workflow.loadFailed' : 'workflow.loading') : store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
         <button class="primary-button compact-button" type="button" data-run-workflow :disabled="!!batch.startReason.value" :title="batch.startReason.value || t('workflow.runWorkflow')" @click="runWorkflow">{{ t('workflow.runWorkflow') }}</button>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= minZoom" @click="setZoom(store.zoom - .1)">−</button>
         <span class="zoom-value" aria-live="polite">{{ percentLabel(store.zoom) }}</span>
@@ -883,7 +916,7 @@ onUnmounted(() => {
         <button class="secondary-button compact-button" type="button" data-open-panel="batch" :aria-expanded="activePanel === 'batch'" :disabled="rerunModalOpen" @click="activePanel = 'batch'">{{ t('batch.title') }}</button>
       </div>
     </div>
-    <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><span>{{ store.capabilitiesError || store.error }}</span><button type="button" :aria-label="t('workflow.closeAlert')" @click="store.capabilitiesError = ''; store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button></div>
+    <div v-if="store.capabilitiesError || store.error" class="alert node-workflow-alert" role="alert"><span class="alert-symbol" aria-hidden="true">!</span><strong v-if="initialLoadFailed">{{ t('workflow.loadFailed') }}</strong><span>{{ store.capabilitiesError || store.error }}</span><button v-if="!store.capabilitiesError && !initialLoadFailed" type="button" :aria-label="t('workflow.closeAlert')" @click="store.error = ''">×</button><button v-if="store.capabilitiesError" class="secondary-button compact-button" type="button" data-retry-capabilities :disabled="retryingLoad || store.loading" @click="reloadCapabilities">{{ t('workflow.retryCapabilities') }}</button><button v-else-if="initialLoadFailed" class="secondary-button compact-button" type="button" data-retry-workflow :disabled="retryingLoad || store.loading" @click="retryWorkflowLoad">{{ t('workflow.retryLoad') }}</button></div>
     <div v-if="store.notice" class="workflow-notice" role="status">{{ store.notice }}</div>
     <div v-if="editorNotice" class="workflow-notice" role="status">{{ editorNotice }}</div>
     <div v-if="readingImport" class="workflow-notice" role="status">{{ t('workflow.editorReadingImport') }}<button class="text-button" type="button" @click="commands.cancelImport">{{ t('workflow.editorCancelImport') }}</button></div>
@@ -957,7 +990,7 @@ onUnmounted(() => {
               <rect v-if="marqueeBounds" class="workflow-marquee" :x="marqueeBounds.x" :y="marqueeBounds.y" :width="marqueeBounds.width" :height="marqueeBounds.height" aria-hidden="true" />
               </g>
             </svg>
-          <div v-if="!store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong></div>
+          <div v-if="store.document && !store.draft.nodes.length" class="workflow-empty"><strong>{{ t('workflow.emptyCanvas') }}</strong></div>
         </div>
 
       </div>
@@ -971,7 +1004,7 @@ onUnmounted(() => {
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
-    <NodeLibrary v-if="libraryWorld && registry" :registry="registry" :kinds="nodeKinds" :disabled-reason="addDisabledReason" @add="addFromLibrary" @close="closeLibrary" />
+    <NodeLibrary v-if="libraryWorld && registry" :registry="registry" :kinds="nodeKinds" :disabled-reason="addDisabledReason" :action-error="libraryAddError" @add="addFromLibrary" @close="closeLibrary" />
     <CanvasDialog class="node-rerun-dialog" :open="!!rerun.target.value" :title="t('workflow.rerunTitle')" :close-disabled="rerun.submitting.value" @close="rerun.close">
       <p class="workflow-panel-meta" data-rerun-audio>{{ rerunAudioName }}</p>
       <p v-if="rerun.planning.value" role="status">{{ t('workflow.rerunPlanning') }}</p>

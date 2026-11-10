@@ -463,6 +463,53 @@ describe('workflow localization', () => {
   })
 })
 
+describe('workflow load recovery', () => {
+  it.each(['/capabilities', '/settings'])('keeps a retry visible after an initial %s failure and recovers the saved graph', async (failedPath) => {
+    let blocked = true
+    setup(path => blocked && path.endsWith(failedPath) ? Promise.reject(new TypeError('Failed to fetch')) : undefined)
+    await settle()
+    const store = useWorkflowStore()
+    expect(store.document).toBeNull()
+    expect(root!.querySelector('.workflow-save-state')?.textContent).toBe(t('workflow.loadFailed'))
+    expect(root!.querySelector('.workflow-empty')).toBeNull()
+    expect(root!.querySelector('.node-workflow-alert button[aria-label]')).toBeNull()
+    const selector = failedPath === '/capabilities' ? '[data-retry-capabilities]' : '[data-retry-workflow]'
+    expect(root!.querySelector(selector)).not.toBeNull()
+    blocked = false
+    root!.querySelector<HTMLButtonElement>(selector)!.click()
+    await settle()
+    expect(store.document).not.toBeNull()
+    expect(store.draft.nodes).toHaveLength(2)
+    expect(root!.querySelector('.node-workflow-alert')).toBeNull()
+    expect(root!.querySelector('.workflow-save-state')?.textContent).toBe(t('workflow.synced'))
+  })
+
+  it('retries capabilities without replacing an existing dirty graph or its undo history', async () => {
+    setup()
+    await settle()
+    const store = useWorkflowStore()
+    store.updateNodeUi('input', { position: { x: 999, y: 321 } })
+    const before = JSON.stringify(store.draft)
+    const workflowReads = fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/workflow')).length
+    store.capabilitiesError = 'Catalog temporarily unavailable'
+    await settle()
+    root!.querySelector<HTMLButtonElement>('[data-retry-capabilities]')!.click()
+    await settle()
+    expect(store.capabilitiesError).toBe('')
+    expect(JSON.stringify(store.draft)).toBe(before)
+    expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/workflow'))).toHaveLength(workflowReads)
+    expect(store.canUndo).toBe(true)
+    store.undo()
+    expect(store.draft.nodes.find(item => item.id === 'input')!.position.x).not.toBe(999)
+    store.error = 'Ordinary operation failed'
+    await settle()
+    root!.querySelector<HTMLButtonElement>('.node-workflow-alert button[aria-label]')!.click()
+    await settle()
+    expect(store.error).toBe('')
+    expect(root!.querySelector('.node-workflow-alert')).toBeNull()
+  })
+})
+
 describe('workflow validation and helpers', () => {
   it('uses server-provided defaults and ignores layout and edge IDs in execution signatures', () => {
     const changedLayout = { nodes: [{ ...input, position: { x: 140, y: 160 } }, output], edges: [{ ...edge, id: 'renamed-edge' }] }
@@ -1305,6 +1352,33 @@ describe('canvas context menus', () => {
     expect(JSON.stringify(store.draft)).toBe(before)
   })
 
+  it('shows only the current add failure inside the library and recovers after choosing a new location', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    const svg = root!.querySelector<SVGSVGElement>('.workflow-svg')!
+    store.updateNode('output', { position: { x: 0, y: 999_950 }, size: { width: 500, height: 500 } })
+    store.error = 'Unrelated previous operation failed'
+    menu(svg, 0, 999_950); await settle()
+    expect(root!.querySelector('.node-library [role="alert"]')).toBeNull()
+    root!.querySelector<HTMLButtonElement>('[data-add-kind="preprocess"]')!.click(); await settle()
+    expect(store.draft.nodes).toHaveLength(2)
+    expect(root!.querySelector('.node-library [role="alert"]')!.textContent).toBe(t('workflow.nodePlacementFailed'))
+    expect(root!.querySelector('.node-library')!.textContent).not.toContain('Unrelated previous operation failed')
+    // A new attempt cannot reuse an old local/global error when the action produces none.
+    vi.spyOn(store, 'addNode').mockImplementationOnce(() => {})
+    root!.querySelector<HTMLButtonElement>('[data-add-kind="preprocess"]')!.click(); await settle()
+    expect(root!.querySelector('.node-library [role="alert"]')).toBeNull()
+    root!.querySelector('.node-library')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await settle()
+    menu(svg, 1000, 300); await settle()
+    expect(root!.querySelector('.node-library [role="alert"]')).toBeNull()
+    root!.querySelector<HTMLButtonElement>('[data-add-kind="preprocess"]')!.click(); await settle()
+    expect(root!.querySelector('.node-library')).toBeNull()
+    expect(store.draft.nodes).toHaveLength(3)
+    store.undo()
+    expect(store.draft.nodes).toHaveLength(2)
+    expect(store.draft.nodes.find(item => item.id === 'output')!.position.y).toBe(999_950)
+  })
+
   it('rejects nonfinite or exhausted placement coordinates without inserting illegal graph positions', async () => {
     setup(); await settle()
     const store = useWorkflowStore()
@@ -1785,6 +1859,27 @@ describe('workflow editor interactions', () => {
       .map((item) => item.getAttribute('transform'))
     const step = workflowNodeHeight('audio_output', useWorkflowStore().registry!) + WORKFLOW_NODE_ROW_GAP
     expect(transforms).toEqual([`translate(420 120)`, `translate(420 ${120 + step})`, `translate(420 ${120 + step * 2})`])
+  })
+
+  it('fits below the measured floating toolbar and remeasures its wrapped height', async () => {
+    setup(); await settle()
+    const store = useWorkflowStore()
+    const rect = (left: number, top: number, width: number, height: number) => ({ left, top, width, height, x: left, y: top, right: left + width, bottom: top + height, toJSON: () => ({}) })
+    vi.spyOn(root!.querySelector<SVGSVGElement>('.workflow-svg')!, 'getBoundingClientRect').mockReturnValue(rect(20, 30, 1375, 811))
+    const toolbarRect = vi.spyOn(root!.querySelector<HTMLElement>('.workflow-toolbar')!, 'getBoundingClientRect').mockReturnValue(rect(32, 42, 1351, 92))
+    for (const height of [92, 220]) {
+      toolbarRect.mockReturnValue(rect(32, 42, 1351, height))
+      button(t('workflow.fit'))!.click(); await settle()
+      for (const item of store.draft.nodes) {
+        expect(item.position.y * store.zoom + store.pan.y).toBeGreaterThanOrEqual(12 + height + 24)
+        expect((item.position.y + store.getNodeSize(item).height) * store.zoom + store.pan.y).toBeLessThanOrEqual(811 - 24)
+      }
+    }
+    // Explicitly focusing a hidden node uses the same unobstructed region.
+    store.pan = { x: 0, y: -1000 }
+    node('audio_input').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await settle()
+    expect(store.draft.nodes[0]!.position.y * store.zoom + store.pan.y).toBeGreaterThanOrEqual(12 + 220 + 24)
   })
 
   it('fits all nodes inside a narrow canvas using both dimensions', async () => {

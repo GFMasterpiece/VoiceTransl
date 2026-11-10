@@ -312,7 +312,9 @@ export const workflowMessages = {
     "fit": "适配",
     "resetView": "重置视图",
 
-    "canvasAria": "音频输入、预处理、语音识别与音频/文本输出的节点画布",
+    "loadFailed": "工作流加载失败",
+    "retryLoad": "重试加载",
+    "canvasAria": "节点工作流画布",
     "emptyCanvas": "画布为空",
 
     "unsaved": "未保存",
@@ -787,7 +789,9 @@ export const workflowMessages = {
     "fit": "Fit",
     "resetView": "Reset view",
 
-    "canvasAria": "Node canvas for audio input, preprocessing, speech recognition, and audio/text output",
+    "loadFailed": "Workflow failed to load",
+    "retryLoad": "Retry loading",
+    "canvasAria": "Node workflow canvas",
     "emptyCanvas": "The canvas is empty",
 
     "unsaved": "Unsaved",

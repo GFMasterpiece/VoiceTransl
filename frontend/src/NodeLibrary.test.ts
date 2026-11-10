@@ -134,3 +134,26 @@ it('clears category and type selections when visible declarations no longer offe
   expect(host!.querySelector('.node-library-categories button')!.getAttribute('aria-pressed')).toBe('true')
   expect(host!.querySelectorAll('[data-add-kind]').length).toBeGreaterThan(0)
 })
+
+it('navigates candidates from a focused details button while retaining native Enter and Space', async () => {
+  const { add } = await mount()
+  const rows = [...host!.querySelectorAll<HTMLElement>('[data-add-kind]')]
+  const first = rows[0]!.querySelector<HTMLButtonElement>('[data-library-item-details]')!, next = rows[1]!.querySelector<HTMLButtonElement>('[data-library-item-details]')!
+  first.focus(); await settle()
+  first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); await settle()
+  expect(document.activeElement).toBe(next)
+  expect(rows[1]!.getAttribute('aria-selected')).toBe('true')
+  expect(host!.querySelector('[data-node-library-preview] header code')!.textContent).toBe(rows[1]!.dataset.addKind)
+  for (const key of ['Enter', ' ']) { const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }); next.dispatchEvent(event); expect(event.defaultPrevented).toBe(false) }
+  expect(add).not.toHaveBeenCalled()
+})
+it('restores focus after the narrow back button is removed and retains still-visible focus on resize', async () => {
+  const { media, search } = await mount({ narrow: true })
+  const change = media.addEventListener.mock.calls.find(call => call[0] === 'change')![1] as (event: MediaQueryListEvent) => void
+  host!.querySelector<HTMLButtonElement>('[data-add-kind=llm_model] [data-library-item-details]')!.click(); await settle()
+  expect(document.activeElement).toBe(host!.querySelector('.node-library-details-back'))
+  change({ matches: false } as MediaQueryListEvent); await settle()
+  expect(host!.querySelector('.node-library-details-back')).toBeNull(); expect(document.activeElement).toBe(search)
+  const input = host!.querySelector<HTMLSelectElement>('[data-library-input-type]')!; input.focus()
+  change({ matches: true } as MediaQueryListEvent); await settle(); expect(document.activeElement).toBe(input)
+})

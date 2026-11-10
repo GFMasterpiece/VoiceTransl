@@ -523,8 +523,8 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 .node-library-results-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); }
 .node-library-results { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
 .node-library-results [role="option"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 12px; border: 1px solid transparent; border-radius: 10px; cursor: pointer; color: var(--ink); font: 12px/1.5 var(--sans); overflow-wrap: anywhere; }
-.node-library-results [role="option"] > span { font-weight: 600; }
-.node-library-results [role="option"] > small { grid-column: 1; color: var(--muted); }
+.node-library-results [role="option"] > span { font-size: 14px; font-weight: 600; }
+.node-library-results [role="option"] > small { grid-column: 1; color: var(--muted); font-size: 13px; }
 .node-library-results [role="option"] > button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
 .node-library-results [aria-selected="true"] { border-color: var(--line); background: var(--teal-soft); }
 .node-library-results [aria-disabled="true"] > span, .node-library-reason { opacity: .55; }
@@ -563,7 +563,7 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 
 .node-library-dialog { padding: 16px; }
 .node-library-name { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; min-width: 0; }
-.node-library-name code { padding: 1px 5px; border-radius: 5px; background: var(--paper); color: var(--muted); font: 10px/1.5 var(--mono, monospace); overflow-wrap: anywhere; }
+.node-library-name code { padding: 1px 5px; border-radius: 5px; background: var(--paper); color: var(--muted); font: 11px/1.5 var(--mono, monospace); overflow-wrap: anywhere; }
 .node-library-preview-action { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 14px; background: var(--paper); }
 .node-library-preview-action small { color: var(--muted); font-size: 11px; }
 @media (max-width: 700px) { .node-library-dialog { padding: 10px; } }
@@ -573,3 +573,5 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 .node-library-filters label { flex: 0 1 180px; min-width: 0; }
 .node-library-filters select { height: 32px; padding: 4px 10px; font-size: 11px; }
 @media (max-width: 700px) { .node-library-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; } }
+
+.node-library-action-error { margin: 0; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }

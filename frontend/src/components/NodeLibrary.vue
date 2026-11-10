@@ -6,7 +6,7 @@ import type { CapabilityNode } from '../workflow/capabilities'
 import type { NodeRegistry } from '../workflow/nodeRegistry'
 import { groupNodeKinds, nodeCategoryLabel } from '../workflow/nodeCategories'
 import { libraryTypeLabel, nodeLibraryDefaults, nodeLibrarySearch } from '../workflow/nodeLibrary'
-const props = defineProps<{ registry: NodeRegistry; kinds: readonly CapabilityNode[]; disabledReason: (type: string) => string }>()
+const props = defineProps<{ registry: NodeRegistry; kinds: readonly CapabilityNode[]; disabledReason: (type: string) => string; actionError?: string }>()
 const emit = defineEmits<{ close: []; add: [type: string] }>()
 const query = ref(''), category = ref<string | null | undefined>(undefined), inputType = ref(''), outputType = ref(''), selected = ref(''), details = ref(false)
 const media = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 700px)') : null
@@ -14,7 +14,15 @@ const narrow = ref(media?.matches || false)
 const backButton = ref<HTMLButtonElement | null>(null), searchInput = ref<HTMLInputElement | null>(null)
 let detailsTrigger: HTMLElement | null = null
 function mediaChanged(event: MediaQueryListEvent) { narrow.value = event.matches }
-watch([narrow, details], () => { void nextTick(() => { if (document.activeElement instanceof Element && document.activeElement.closest('.node-library [hidden], .node-library [inert]')) (narrow.value && details.value ? backButton.value : searchInput.value)?.focus() }) })
+watch([narrow, details], () => {
+  const previous = document.activeElement
+  const wasInLibrary = previous instanceof Element && !!previous.closest('.node-library')
+  void nextTick(() => {
+    const active = document.activeElement
+    if (active instanceof Element && active.closest('.node-library-dialog [role="dialog"]') && !active.closest('[hidden], [inert]')) return
+    if (wasInLibrary && (previous && !previous.isConnected || active instanceof Element && active.closest('.node-library [hidden], .node-library [inert]'))) (narrow.value && details.value ? backButton.value : searchInput.value)?.focus()
+  })
+})
 onMounted(() => media?.addEventListener?.('change', mediaChanged))
 onUnmounted(() => media?.removeEventListener?.('change', mediaChanged))
 function showDetails(type: string, trigger?: EventTarget | null) { selected.value = type; details.value = true; detailsTrigger = trigger instanceof HTMLElement ? trigger : null; if (narrow.value) void nextTick(() => backButton.value?.focus()) }
@@ -56,7 +64,9 @@ function portLabel(port: string) { return preview.value?.fields.find(field => fi
 function add(type: string) { selected.value = type; if (!props.disabledReason(type)) emit('add', type) }
 function keydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229 || composing.value) return
-  if (!(event.target instanceof Element) || !event.target.closest('.canvas-node-search, .node-library-results') || event.target.closest('[data-library-item-details]')) return
+  if (!(event.target instanceof Element) || !event.target.closest('.canvas-node-search, .node-library-results')) return
+  const fromDetailsButton = !!event.target.closest('[data-library-item-details]')
+  if (fromDetailsButton && ['Enter', ' '].includes(event.key)) return
   if (event.target instanceof HTMLInputElement && ['Home', 'End'].includes(event.key)) return
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter'].includes(event.key)) return
   event.preventDefault(); event.stopPropagation()
@@ -65,7 +75,11 @@ function keydown(event: KeyboardEvent) {
   const index = entries.findIndex(kind => kind.type === selected.value)
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? entries.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + entries.length) % entries.length
   selected.value = entries[next]!.type
-  void nextTick(() => resultsElement.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }))
+  void nextTick(() => {
+    const row = resultsElement.value?.querySelector<HTMLElement>('[aria-selected="true"]')
+    row?.scrollIntoView?.({ block: 'nearest' })
+    if (fromDetailsButton) row?.querySelector<HTMLButtonElement>('[data-library-item-details]')?.focus()
+  })
 }
 </script>
 <template>
@@ -77,6 +91,7 @@ function keydown(event: KeyboardEvent) {
         <label><span>{{ t('workflow.libraryInputType') }}</span><select v-model="inputType" data-library-input-type><option value="">{{ t('workflow.libraryAllTypes') }}</option><option v-for="type in inputTypes" :key="type.id" :value="type.id">{{ type.label }}</option></select></label>
         <label><span>{{ t('workflow.libraryOutputType') }}</span><select v-model="outputType" data-library-output-type><option value="">{{ t('workflow.libraryAllTypes') }}</option><option v-for="type in outputTypes" :key="type.id" :value="type.id">{{ type.label }}</option></select></label>
         </div>
+        <p v-if="actionError" class="node-library-action-error" role="alert">{{ actionError }}</p>
       </div>
       <div class="node-library-columns">
         <nav class="node-library-categories" :aria-label="t('workflow.libraryCategories')">

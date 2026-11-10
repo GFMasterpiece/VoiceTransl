@@ -38,7 +38,13 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, aid = await create_project(client)
         root = f"/api/v1/projects/{pid}"
+        path = app.state.store.project_dir(pid) / "workflow-v4.json"
+        assert not path.exists()
         workflow = (await client.get(root + "/workflow")).json()
+        assert workflow["nodes"][0]["position"] == {"x": 80, "y": 120}
+        assert workflow["nodes"][1]["position"] == {"x": 720, "y": 120}
+        assert not path.exists()
+        workflow["nodes"][1]["position"] = {"x": 420, "y": 260}
         # An old graph does not need size and remains untouched on disk when read.
         for node in workflow["nodes"]:
             node.pop("size", None)
@@ -48,7 +54,6 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
         )
         assert initial.status_code == 200
         initial = initial.json()
-        path = app.state.store.project_dir(pid) / "workflow-v4.json"
         legacy = json.loads(path.read_text(encoding="utf-8"))
         for node in legacy["nodes"]:
             node.pop("size", None)
@@ -73,6 +78,7 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
         reopened = FileSystemProjectStore(tmp_path).load_workflow(pid)
         assert reopened.nodes[0].size == WorkflowSize(width=420, height=275.5)
         assert reopened.nodes[1].size is None
+        assert reopened.nodes[1].position.model_dump() == {"x": 420, "y": 260}
         started = await client.post(
             root + f"/audios/{aid}/workflow-runs",
             json={"workflow_revision": saved["workflow_revision"]},
@@ -86,6 +92,7 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
             await asyncio.sleep(0.02)
         assert run["status"] == "completed"
         assert run["workflow"]["nodes"][0]["size"] == {"width": 420, "height": 275.5}
+        assert run["workflow"]["nodes"][1]["position"] == {"x": 420, "y": 260}
         saved["nodes"][0]["size"] = None
         edited = await client.put(
             root + "/workflow",
