@@ -4,11 +4,12 @@ import os
 import re
 import tempfile
 from pathlib import Path, PurePosixPath
+from typing import Annotated, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..application.workflow_connections import ConnectionSnapshotError
 from ..domain.batch import BatchDetail, BatchItemList, BatchList, BatchSummary
@@ -20,24 +21,55 @@ from .workflow import _error, _project
 router = APIRouter(prefix="/api/v1/projects/{pid}/batches")
 
 
+class SourceTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["source"]
+    node_id: str = Field(min_length=1, max_length=64)
+
+
+class CanvasTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["canvas"]
+
+
 class BatchCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     workflow_revision: int = Field(ge=0)
-    audio_ids: list[str] = Field(min_length=1, max_length=MAX_BATCH_AUDIO_ITEMS)
+    audio_ids: list[str] | None = Field(
+        default=None, min_length=1, max_length=MAX_BATCH_AUDIO_ITEMS
+    )
+    target: Annotated[SourceTarget | CanvasTarget, Field(discriminator="kind")] | None = None
+    context_audio_id: str | None = None
+    expected_group_revisions: (
+        dict[
+            Annotated[str, Field(pattern=r"^grp_[0-9a-f]{32}$")],
+            Annotated[int, Field(ge=1, strict=True)],
+        ]
+        | None
+    ) = None
     request_id: str = Field(min_length=1, max_length=128)
 
     @field_validator("audio_ids")
     @classmethod
     def unique(cls, value):
+        if value is None:
+            return value
         if len(value) != len(set(value)):
             raise ValueError("audio_ids must be unique")
         return value
+
+    @model_validator(mode="after")
+    def selection(self):
+        if (self.target is None) == (self.audio_ids is None):
+            raise ValueError("Choose target or audio_ids")
+        return self
 
 
 class BatchRetryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: str = Field(min_length=1, max_length=128)
     include_cancelled: bool = False
+    include_partial: bool = False
 
 
 def _batch(request, pid, bid, *, persisted=False):
@@ -67,11 +99,20 @@ def _creation_error(error):
         "AUDIO_NOT_FOUND": "所选音频不存在",
         "INPUT_AUDIO_COLLECTION_EMPTY": "输入节点尚未选择音频，请先添加音频",
         "BATCH_AUDIO_COLLECTION_MISMATCH": "批次音频清单及顺序必须与输入节点保存的清单一致",
+        "SOURCE_NODE_REQUIRED": "多输入图必须指定执行输入",
+        "SOURCE_NODE_NOT_FOUND": "指定音频输入不存在",
+        "GROUP_REVISION_CONFLICT": "音频组已修改，请刷新后重试",
+        "INPUT_GROUP_REQUIRED": "请选择音频组",
+        "INPUT_GROUP_NOT_FOUND": "音频组不存在或不属于当前项目",
+        "BATCH_ITEM_LIMIT": "执行音频数量超出限制",
+        "BATCH_DEPENDENCY_NOT_COMPLETED": "连续组前项尚未完成，请显式选择重试相应未完成项",
     }
     status = 409 if isinstance(error, RuntimeError) else 422
     if code not in messages:
         code = "INVALID_WORKFLOW"
-    return HTTPException(status, detail=_error(code, messages[code]))
+    return HTTPException(
+        status, detail=_error(code, messages[code], getattr(error, "details", None))
+    )
 
 
 @router.post("", status_code=202, response_model=BatchSummary)
@@ -79,11 +120,17 @@ async def create_batch(pid: str, body: BatchCreateRequest, request: Request):
     _project(request, pid)
     try:
         batch = await request.app.state.batches.create(
-            pid, body.workflow_revision, body.audio_ids, body.request_id
+            pid,
+            body.workflow_revision,
+            body.audio_ids,
+            body.request_id,
+            target=body.target.model_dump() if body.target else None,
+            context_audio_id=body.context_audio_id,
+            expected_group_revisions=body.expected_group_revisions,
         )
     except SchemaVersionError:
         raise
-    except (RuntimeError, ValueError) as error:
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
         raise _creation_error(error) from error
     return batch.summary()
 
@@ -141,10 +188,11 @@ async def retry_batch(pid: str, bid: str, body: BatchRetryRequest, request: Requ
             body.request_id,
             retry=original,
             cancelled=body.include_cancelled,
+            partial=body.include_partial,
         )
     except SchemaVersionError:
         raise
-    except (RuntimeError, ValueError) as error:
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
         raise _creation_error(error) from error
     return batch.summary()
 

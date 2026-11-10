@@ -63,7 +63,7 @@ export interface CapabilityNode {
   configKind: string
   fields: readonly CapabilityField[]
   positionX: number | null
-  resourceInput?: { resourceType: string; configKey: string; collectionKey?: string | null } | null
+  resourceInput?: { resourceType: string; configKey: string; collectionKey?: string | null; groupKey?: string | null } | null
   preview?: { renderer: string } | null
 }
 export interface InlineConnectionInput {
@@ -80,6 +80,7 @@ export interface CapabilityExport {
   namingModes: readonly CapabilityOption[]
 }
 export interface Capabilities {
+  execution?: { scope: string; targetKinds: string[]; crossSourceMerge: boolean }
   languages?: readonly CapabilityLanguage[]
   schemaVersion: string
   nodeTypes: readonly string[]
@@ -251,13 +252,14 @@ function node(value: unknown): CapabilityNode {
     inlineConnectionInput = { serviceFamily: inline.service_family as 'llm' | 'asr' | null, fixedProtocol: inline.fixed_protocol as string | null, protocolKey: inline.protocol_key as string | null, baseUrlKey: String(inline.base_url_key), timeoutKey: inline.timeout_key as string | null, regionKey: inline.region_key as string | null,
       credentialRefKey: String(inline.credential_ref_key), providerType: String(inline.provider_type), label: inline.label, dataHandling: handling(inline.data_handling, true) }
   }
-  if (resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key'].includes(key))
+  if (resource && (Object.keys(resource).some((key) => !['resource_type', 'config_key', 'collection_key', 'group_key'].includes(key))
     || (resource.collection_key !== null && (!safeIdentifier(resource.collection_key) || resource.collection_key === resource.config_key
       || !parsedFields.some((field) => field.key === resource.collection_key && field.type === 'json'))))) fail('workflow.capPresentation')
   const preview = presentation.preview == null ? null : object(presentation.preview, 'workflow.capPresentation')
+  if (resource?.group_key != null && (!safeIdentifier(resource.group_key) || !parsedFields.some(field => field.key === resource.group_key && field.type === 'string') || [resource.config_key, resource.collection_key].includes(resource.group_key))) fail('workflow.capPresentation')
   if (resource && (typeof resource.resource_type !== 'string' || !safeIdentifier(resource.config_key) || !parsedFields.some((field) => field.key === resource.config_key && field.type === 'string'))) fail('workflow.capPresentation')
   if (preview && (typeof preview.renderer !== 'string' || !preview.renderer)) fail('workflow.capPresentation')
-  if (resource && parsedFields.some((field) => (field.key === resource.config_key || (field.key === resource.collection_key)) && field.inputPort !== null)) fail('workflow.capParameter')
+  if (resource && parsedFields.some((field) => (field.key === resource.config_key || (field.key === resource.collection_key) || field.key === resource.group_key) && field.inputPort !== null)) fail('workflow.capParameter')
   if (item.is_parameter_source && (item.is_source === true || item.terminal === true || resource || !outputPorts.length)) fail('workflow.capParameter')
   let dynamicInputs: CapabilityNode['dynamicInputs'] = null
   if (item.dynamic_inputs != null) {
@@ -277,7 +279,7 @@ function node(value: unknown): CapabilityNode {
     evaluationKind: item.evaluation_kind as 'configuration' | 'processing',
     canStartWithoutInputs: item.can_start_without_inputs as boolean,
     category,
-    resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), collectionKey: resource.collection_key as string | null } : null,
+    resourceInput: resource ? { resourceType: String(resource.resource_type), configKey: String(resource.config_key), collectionKey: resource.collection_key as string | null, groupKey: resource.group_key as string | null | undefined } : null,
     preview: preview ? { renderer: String(preview.renderer) } : null,
     type: item.type,
     label: item.label,
@@ -324,7 +326,11 @@ export function readCapabilities(value: unknown): Capabilities {
   const root = object(value, 'workflow.capIncomplete')
   if (root.schema_version !== '1.0') fail('workflow.capSchema')
   const workflow = object(root.workflow, 'workflow.capWorkflowMissing')
-  if (workflow.schema_version !== '1.18') fail('workflow.capWorkflowSchema')
+  if (!['1.18', '1.19'].includes(String(workflow.schema_version))) fail('workflow.capWorkflowSchema')
+  if (workflow.schema_version === '1.19') {
+    const execution = object(workflow.execution, 'workflow.capConstraints')
+    if (execution.scope !== 'source_branch' || execution.cross_source_merge !== false || !Array.isArray(execution.target_kinds) || !execution.target_kinds.includes('source') || !execution.target_kinds.includes('canvas')) fail('workflow.capConstraints')
+  }
   if (!Array.isArray(workflow.nodes) || !workflow.nodes.length) fail('workflow.capNoNodes')
   const nodes = workflow.nodes.map((entry) => node(entry))
   const categoryLabels = new Map<string, string>()
@@ -387,6 +393,7 @@ export function readCapabilities(value: unknown): Capabilities {
   const exported = root.export === undefined ? {} : object(root.export, 'workflow.capExport')
   return {
     schemaVersion: String(workflow.schema_version),
+    ...(workflow.execution ? { execution: { scope: String((workflow.execution as Record<string, unknown>).scope), targetKinds: ((workflow.execution as Record<string, unknown>).target_kinds as string[]), crossSourceMerge: (workflow.execution as Record<string, unknown>).cross_source_merge === true } } : {}),
     languages: languages(root.languages),
     nodeTypes: nodes.map((entry) => entry.type),
     nodes,

@@ -154,10 +154,11 @@ async def test_invalid_resource_collection_cannot_be_saved(tmp_path, selection):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _, document = await setup(client, 1)
+        before = (app.state.store.project_dir(pid) / "workflow-v4.json").read_bytes()
         response = await save_input(client, pid, document, {"audio_ids": selection})
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_WORKFLOW"
-        assert not (app.state.store.project_dir(pid) / "workflow-v4.json").exists()
+        assert (app.state.store.project_dir(pid) / "workflow-v4.json").read_bytes() == before
 
 
 @pytest.mark.asyncio

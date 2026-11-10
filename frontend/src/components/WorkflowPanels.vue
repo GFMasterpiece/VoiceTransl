@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { hasMessage, locale, message, t } from '../i18n'
-import { resolveArtifactUrl, useWorkflowStore, workflowErrorLabel, type WorkflowNodeRun } from '../stores/workflow'
+import { resolveArtifactUrl, useWorkflowStore, sourceScopeLabel, frozenSourceGroup, workflowErrorLabel, type WorkflowNodeRun } from '../stores/workflow'
 import { runRecords } from '../workflow/runRecords'
 import CanvasDialog from './CanvasDialog.vue'
 import { useWorkflowExecution } from '../composables/workflowExecution'
@@ -32,10 +32,16 @@ function sizeLabel(bytes: number) {
   const value = megabytes ? bytes / 1024 / 1024 : Math.max(1, Math.round(bytes / 1024))
   return `${new Intl.NumberFormat(locale.value, { maximumFractionDigits: megabytes ? 1 : 0 }).format(value)} ${megabytes ? 'MB' : 'KB'}`
 }
+const provenance = computed(() => {
+  const run = store.run
+  if (!run?.source_node_id) return ''
+  const group = frozenSourceGroup(run.workflow, run.source_node_id, store.registry)
+  return ` · ${sourceScopeLabel(run.source_node_id, group?.name)}${group ? ` r${group.revision}` : ''}`
+})
 const summary = computed(() => store.run ? t('workflow.runSummary', {
   id: store.run.id, version: numberLabel(store.run.workflow_revision), date: dateLabel(store.run.created_at),
   snapshot: store.runMatchesDraft ? t('workflow.snapshotMatches') : t('workflow.snapshotHistorical'),
-}) : t('workflow.noRuns'))
+}) + provenance.value : t('workflow.noRuns'))
 async function startRun() {
   if (store.dirty) { store.setError(message('workflow.saveFirst')); return }
   if (!canRun.value) return
@@ -95,7 +101,7 @@ async function retryOutputs() {
             <div class="workflow-history-heading"><h4>{{ t('workflow.history') }}</h4><button class="text-button" type="button" :disabled="store.historyLoading" @click="store.loadHistory()">{{ store.historyLoading ? t('workflow.refreshing') : t('workflow.refresh') }}</button></div>
             <p v-if="store.historyError" class="workflow-run-error" role="alert">{{ store.historyError }}</p>
             <div v-if="!store.history.length && !store.historyLoading" class="workflow-history-empty">{{ t('workflow.historyEmpty') }}</div>
-            <button v-for="item in store.history" :key="item.id" class="workflow-history-row" :class="{ 'is-active': store.run?.id === item.id }" type="button" :disabled="store.runLoading || !!store.activeRun" @click="store.loadRun(item.id)"><span><strong>{{ item.id }}</strong><small>{{ dateLabel(item.created_at) }} · {{ t('workflow.version', { version: numberLabel(item.workflow_revision) }) }}</small></span><span class="run-status" :class="`is-${item.status}`">{{ statusLabel(item.status) }}</span></button>
+            <button v-for="item in store.history" :key="item.id" class="workflow-history-row" :class="{ 'is-active': store.run?.id === item.id }" type="button" :disabled="store.runLoading || !!store.activeRun" @click="store.loadRun(item.id)"><span><strong>{{ item.id }}</strong><small v-if="item.source_node_id || item.source_group_name" :title="item.source_node_id || undefined" data-history-source>{{ sourceScopeLabel(item.source_node_id, item.source_group_name) }}</small><small>{{ dateLabel(item.created_at) }} · {{ t('workflow.version', { version: numberLabel(item.workflow_revision) }) }}</small></span><span class="run-status" :class="`is-${item.status}`">{{ statusLabel(item.status) }}</span></button>
           </div>
         </section>
       </template>

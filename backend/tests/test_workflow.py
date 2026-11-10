@@ -39,10 +39,16 @@ async def create_project(client: AsyncClient, payload: bytes | None = None) -> t
     return project["id"], project["audios"][0]["id"]
 
 
-async def get_default_workflow(client: AsyncClient, pid: str) -> dict:
+async def get_default_workflow(client: AsyncClient, pid: str, *, legacy=True) -> dict:
     response = await client.get(f"/api/v1/projects/{pid}/workflow")
     assert response.status_code == 200, response.text
-    return response.json()
+    document = response.json()
+    if legacy and document["nodes"][0]["config"] == {"group_id": ""}:
+        # These existing regression cases exercise a saved 4.0 current-audio graph.
+        document["nodes"][0]["config"] = {}
+        path = client._transport.app.state.store.project_dir(pid) / "workflow-v4.json"
+        path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    return document
 
 
 async def save_graph(client: AsyncClient, pid: str, revision: int, graph: dict) -> dict:
@@ -100,7 +106,8 @@ async def test_default_workflow_and_validation_contract(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _ = await create_project(client)
-        document = await get_default_workflow(client, pid)
+        document = await get_default_workflow(client, pid, legacy=False)
+        assert document["nodes"][0]["config"] == {"group_id": ""}
         assert document["revision"] == document["workflow_revision"] == 0
         assert document["nodes"][1]["config"] == {
             "filename_stem": "audio-copy",
@@ -198,7 +205,7 @@ async def test_first_save_of_default_graph_persists_revision_one(tmp_path):
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _ = await create_project(client)
-        default = await get_default_workflow(client, pid)
+        default = await get_default_workflow(client, pid, legacy=False)
         saved = await save_graph(
             client,
             pid,

@@ -79,10 +79,12 @@ async def test_historical_legacy_provider_fields_are_readable_but_never_executab
 
         project = (await client.get(f"/api/v1/projects/{project_id}")).json()
         audio_id = project["audios"][0]["id"]
-        default = await client.get(f"/api/v1/projects/{project_id}/workflow")
+        from test_workflow import get_default_workflow
+
+        default = await get_default_workflow(client, project_id)
         run = await client.post(
             f"/api/v1/projects/{project_id}/audios/{audio_id}/workflow-runs",
-            json={"workflow_revision": default.json()["workflow_revision"]},
+            json={"workflow_revision": default["workflow_revision"]},
         )
         assert run.status_code == 202
         await asyncio.gather(*app.state.jobs.tasks.values())

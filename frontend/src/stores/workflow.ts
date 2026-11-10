@@ -47,20 +47,23 @@ export const WORKFLOW_RESOURCE_HEIGHT = 236
 export const WORKFLOW_PREVIEW_HEIGHT = 190
 export function workflowVisibleFields(node: { type: NodeType; id?: string; config?: Record<string, unknown> }, registry: NodeRegistry, edges: readonly WorkflowEdge[] = []) {
   const kind = registry.kind(node.type)
-  return registry.fieldsForNode(node.type, node.config).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey
+  return registry.fieldsForNode(node.type, node.config).filter((field) => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey && field.key !== kind?.resourceInput?.groupKey
     && !inlineConnectionKeys(kind).includes(field.key)
     && !(field.inputPort && edges.some((edge) => edge.target === node.id && edge.target_port === field.inputPort)))
 }
 export function workflowFieldsHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
   const kind = registry.kind(type)
-  return registry.fieldsForNode(type, config).filter(field => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey && !inlineConnectionKeys(kind).includes(field.key))
+  const connection = kind?.inlineConnectionInput
+  const connectionFields = connection ? [connection.baseUrlKey, connection.timeoutKey, connection.regionKey].filter((key): key is string => key != null).map(key => kind!.fields.find(field => field.key === key)).filter(Boolean) : []
+  const connectionHeight = connection ? connectionFields.reduce((height, field) => height + workflowFieldHeight(field!), 0) + 112 : 0
+  return connectionHeight + registry.fieldsForNode(type, config).filter(field => field.key !== kind?.resourceInput?.configKey && field.key !== kind?.resourceInput?.collectionKey && field.key !== kind?.resourceInput?.groupKey && !inlineConnectionKeys(kind).includes(field.key))
     .reduce((height, field) => height + (field.inputPort && edges.some(edge => edge.target === nodeId && edge.target_port === field.inputPort) ? 32 : workflowFieldHeight(field)), 0)
 }
 export function workflowNodeHeight(type: NodeType, registry: NodeRegistry, nodeId?: string, edges: readonly WorkflowEdge[] = [], config: Record<string, unknown> = {}): number {
   const kind = registry.kind(type)
   const bodyY = workflowNodeFieldsY(type, registry, config)
   return Math.max(WORKFLOW_NODE_HEIGHT + bodyY - WORKFLOW_NODE_FIELDS_Y, bodyY + workflowFieldsHeight(type, registry, nodeId, edges, config)
-    + (kind?.resourceInput ? kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + WORKFLOW_NODE_BODY_BOTTOM)
+    + (kind?.resourceInput ? kind.resourceInput.groupKey || kind.resourceInput.resourceType === 'audio_group' ? 140 : kind.resourceInput.collectionKey ? WORKFLOW_RESOURCE_HEIGHT + 80 : WORKFLOW_RESOURCE_HEIGHT : 0) + (kind?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0) + WORKFLOW_NODE_BODY_BOTTOM)
 }
 export const WORKFLOW_NODE_ROW_GAP = 28
 export interface WorkflowNodeSize {
@@ -79,7 +82,7 @@ export interface WorkflowNode {
 export function workflowNodeSize(node: Pick<WorkflowNode, 'type' | 'size'> & { id?: string; config?: Record<string, unknown> }, registry?: NodeRegistry | null, measuredMin?: WorkflowNodeSize, edges: readonly WorkflowEdge[] = []): WorkflowNodeSize {
   const dimension = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
   return {
-    width: Math.max(registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
+    width: Math.max(registry?.kind(node.type)?.resourceInput?.groupKey ? 316 : registry?.kind(node.type)?.resourceInput?.collectionKey ? 440 : registry?.kind(node.type)?.preview?.renderer === 'audio' ? 316 : WORKFLOW_NODE_WIDTH,
       registry?.fieldsForNode(node.type, node.config).length ? WORKFLOW_NODE_FORM_WIDTH : 0,
       registry?.kind(node.type)?.inlineConnectionInput ? WORKFLOW_NODE_CONNECTION_WIDTH : 0,
       dimension(node.size?.width), dimension(measuredMin?.width)),
@@ -100,7 +103,7 @@ export interface WorkflowDocumentInput {
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
 }
-export interface WorkflowSnapshot extends WorkflowDocumentInput { schema_version?: string }
+export interface WorkflowSnapshot extends WorkflowDocumentInput { schema_version?: string; group_snapshots?: Record<string, { id: string; revision: number; name: string; mode: string; audio_ids: string[]; background: string }> }
 
 export interface WorkflowDocument extends WorkflowDocumentInput {
   schema_version: string
@@ -163,6 +166,7 @@ export interface WorkflowNodeRun {
 }
 
 export interface WorkflowRun {
+  source_node_id?: string | null
   schema_version?: string
   rerun?: { source_run_id: string; from_node_id: string; execute_node_ids: string[]; reuse_node_ids: string[]; skipped_node_ids: string[] } | null
   id: string
@@ -189,12 +193,27 @@ export interface WorkflowRunList {
 }
 
 export interface WorkflowRunSummary {
+  source_group_name?: string | null
+  source_node_id?: string | null
   id: string
   workflow_revision: number
   status: RunStatus
   created_at: string
   finished_at: string | null
   error: WorkflowError | null
+}
+
+export function frozenSourceGroup(workflow: WorkflowSnapshot, sourceId: string | null | undefined, registry?: NodeRegistry | null) {
+  if (!sourceId) return null
+  const node = workflow.nodes.find(node => node.id === sourceId)
+  const key = node && registry?.kind(node.type)?.resourceInput?.groupKey
+  const id = node && key ? node.config[key] : null
+  return typeof id === 'string' ? workflow.group_snapshots?.[id] || null : null
+}
+export function sourceScopeLabel(sourceId: string | null | undefined, groupName?: string | null) {
+  if (!sourceId && !groupName) return ''
+  const short = sourceId && sourceId.length > 20 ? sourceId.slice(0, 10) + '…' + sourceId.slice(-6) : sourceId
+  return [groupName, short ? `${t('media.source')} ${short}` : ''].filter(Boolean).join(' · ')
 }
 
 const readApiError = parseApiError
@@ -230,7 +249,7 @@ export function cloneDocument(value: WorkflowDocumentInput): WorkflowDocumentInp
 function canonicalNodeConfig(node: WorkflowNode, registry?: NodeRegistry): Record<string, unknown> {
   const defaults = registry?.createDefaultConfig(node.type) || {}
   const resource = registry?.kind(node.type)?.resourceInput
-  for (const key of [resource?.configKey, resource?.collectionKey]) if (key && !Object.prototype.hasOwnProperty.call(node.config, key)) delete defaults[key]
+  for (const key of [resource?.configKey, resource?.collectionKey, resource?.groupKey]) if (key && !Object.prototype.hasOwnProperty.call(node.config, key)) delete defaults[key]
   return { ...defaults, ...(node.config || {}) }
 }
 
@@ -413,9 +432,11 @@ export function nextNodePosition(type: NodeType, nodes: WorkflowNode[], registry
   return { x: columnX, y: candidateY }
 }
 
-function summarizeRun(value: WorkflowRun): WorkflowRunSummary {
+function summarizeRun(value: WorkflowRun, registry?: NodeRegistry | null): WorkflowRunSummary {
   return {
     id: value.id,
+    ...(value.source_node_id ? { source_node_id: value.source_node_id } : {}),
+    ...(frozenSourceGroup(value.workflow, value.source_node_id, registry)?.name ? { source_group_name: frozenSourceGroup(value.workflow, value.source_node_id, registry)!.name } : {}),
     workflow_revision: value.workflow_revision,
     status: value.status,
     created_at: value.created_at,
@@ -806,7 +827,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await loadCapabilities()
       if (!isCurrent(id, aid, token)) return
       if (!capabilities.value || !registry.value) throw capabilitiesFailure || message('workflow.capStopLoad')
-      if (['1.18'].includes(capabilities.value.schemaVersion)) await loadSettings()
+      if (['1.18', '1.19'].includes(capabilities.value.schemaVersion)) await loadSettings()
       if (!isCurrent(id, aid, token)) return
       const response = await fetch(endpoint(projectPath(id)))
       if (!response.ok) throw await readApiError(response)
@@ -958,7 +979,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       outputChecks.value = {}
       run.value = value
       activeRunId.value = value.id
-      history.value = [summarizeRun(value), ...history.value.filter((item) => item.id !== value.id)]
+      history.value = [summarizeRun(value, registry.value), ...history.value.filter((item) => item.id !== value.id)]
       await loadOutputs(id, aid, value.id, token)
       if (isActiveRunStatus(value.status)) schedulePoll()
       return value
@@ -999,7 +1020,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function applyRun(value: WorkflowRun) {
     run.value = value
     activeRunId.value = value.id
-    const summary = summarizeRun(value)
+    const summary = summarizeRun(value, registry.value)
     const index = history.value.findIndex((item) => item.id === value.id)
     if (index >= 0) history.value[index] = summary
     else history.value = [summary, ...history.value]
@@ -1171,7 +1192,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   function addNode(type: NodeType, position?: WorkflowNode['position']) {
     if (editLocked.value || !registry.value) return
     if (position && (!Number.isFinite(position.x) || !Number.isFinite(position.y))) { errorState.set(message('workflow.nodePlacementFailed')); return }
-    if (['1.18'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
+    if (['1.18', '1.19'].includes(capabilities.value?.schemaVersion || '') && !settingsCache.value) { errorState.set(message('settings.unavailable')); return }
     const nodes = draft.value.nodes
     const definition = registry.value.kind(type)
     if (!definition) { errorState.set(message('workflow.unregisteredType', { p0: type })); return }
@@ -1189,14 +1210,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const node: WorkflowNode = {
       id,
       type,
-      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.18'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
+      config: { ...registry.value.createDefaultConfig(type, true), ...(['1.18', '1.19'].includes(capabilities.value?.schemaVersion || '') ? JSON.parse(JSON.stringify(settingsCache.value?.node_defaults[type]?.config || {})) : {}) },
       position: placed,
     }
     const before = editorSnapshot()
     draft.value.nodes = [...nodes, node]
     draft.value.edges = [...draft.value.edges]
     selectNode(id)
-    const defaultToken = ['1.18'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
+    const defaultToken = ['1.18', '1.19'].includes(capabilities.value?.schemaVersion || '') ? settingsCache.value?.node_defaults[type]?.credential_version : null
     if (defaultToken) credentials.useDefault(id, defaultToken)
     recordEdit(before, undefined, id)
   }
@@ -1231,7 +1252,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         .filter((field) => JSON.stringify(stableObject(node.config[field])) !== JSON.stringify(stableObject(patch.config![field])))
       const fieldType = registry.value?.kind(node.type)?.fields.find((field) => field.key === fields[0])?.type
       const resource = registry.value?.kind(node.type)?.resourceInput
-      if (fields.length === 1 && fields[0] !== resource?.configKey && fields[0] !== resource?.collectionKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
+      if (fields.length === 1 && fields[0] !== resource?.configKey && fields[0] !== resource?.collectionKey && fields[0] !== resource?.groupKey && fieldType && ['string', 'number', 'integer', 'json'].includes(fieldType)) key = JSON.stringify([id, fields[0]])
     }
     if (patch.config !== undefined) {
       node.config = JSON.parse(JSON.stringify(patch.config))

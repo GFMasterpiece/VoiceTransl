@@ -9,6 +9,7 @@
 - 新增音频 ID 由服务端生成，不用用户文件名作路径。不同同名文件可以独立保存。
 - `SourceAsset.origin` 可空；目录导入保存 `{root_id,root_name,relative_path}`，仅作来源和导出组织元数据，不改变实际路径。根名及相对路径必须可跨平台使用，相对路径 basename 与上传文件名一致；旧音频缺失时不补写。
 - 项目级 `workflow-v4.json` 由各音频共用；每次运行捕获不可变快照，修改图不改动其他音频及历史运行。
+- 项目素材库复用全部 AudioAsset。音频组独立引用资源，保存有序成员、背景和模式；跨组不复制音频。组 revision 与图独立，上传不自动改组或图。
 
 ```text
 data/projects/<project-id>/
@@ -16,6 +17,7 @@ data/projects/<project-id>/
   source/original.<ext>                    # 主音频
   workflow-v4.json                           # 首次保存后存在
   workflow-revisions-v4/<revision>.json
+  audio-groups/<group-id>.json              # 组资源1.0，独立revision
   batches-v4/<batch-id>.json                 # 固定图、文件清单与逐项状态
   workflow-runs-v4/<run-id>/                  # 主音频运行
     run.json
@@ -45,37 +47,46 @@ data/projects/<project-id>/
 | `POST /projects/empty` | JSON 仅必填 `name`（去除首尾空白后长度 1–200）；201 返回 `{project,job:null}`。可选 `source_language/target_language` 为旧客户端保留，省略或 `null` 时不猜测默认值 |
 | `GET /projects/{pid}` | 项目与音频成员元数据 |
 | `POST /projects/{pid}/audios` | multipart 必填 `file/source_language`，可选 `name` 及全有或全无的 `origin_root_id/origin_root_name/origin_relative_path`；201 返回 `{audio,job}`，只追加不运行 |
-| `GET /projects/{pid}/audios` | `{items:[{id,source,name,job}]}`，Job 是旧格式只读摘要，不是当前节点运行状态 |
+| `GET /projects/{pid}/audios` | 提供 limit(1–200)/offset 时返回 `{items,total,limit,offset}`；无 limit 保留 `{items}`，offset 须为0。item为 `{id,source,name,job}`，Job 非节点状态 |
+| `GET /projects/{pid}/audio-groups` | 分页摘要 `{items,total,limit,offset}`，默认20、最大100，含 audio_count、不含成员/背景 |
+| `POST /projects/{pid}/audio-groups` | name 必填，audio_ids/background/mode 可选，201返回完整组 |
+| `GET /projects/{pid}/audio-groups/{gid}` | schema_version/id/revision/name/audio_ids/background/mode/created_at/updated_at |
+| `PUT /projects/{pid}/audio-groups/{gid}` | 完整 `{expected_revision,name,audio_ids,background,mode}`，成功revision+1 |
+| `DELETE /projects/{pid}/audio-groups/{gid}?expected_revision=N` | 204；保存图引用或revision冲突返回409，不删除素材 |
 | `GET /projects/{pid}/audios/{aid}/source` | 按项目资源归属安全读取原音频，inline 响应支持 Range，使用可信 MIME 和 `nosniff` |
 | `DELETE /projects/{pid}` | 删除整个项目，任一音频运行/排队时返回 `409 PROJECT_BUSY` |
 | `GET /projects/{pid}/workflow` | 项目工作流，无已保存图时返回默认音频直通图 |
 | `PUT /projects/{pid}/workflow` | `{expected_revision,nodes,edges,request_id?,credential_updates?}`，保存有效图并返回新修订；密钥更新为只写，附稳定请求 ID |
 | `POST /projects/{pid}/workflow/validate` | `{nodes,edges}`，返回 `{valid,errors}`，错误关联节点/边 |
-| `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision}` 全图运行；可加 `rerun:{source_run_id,from_node_id}` 和必填稳定 `request_id` 创建节点重跑；202 返回新运行 |
+| `POST /projects/{pid}/audios/{aid}/workflow-runs` | `{workflow_revision,source_node_id?}` 运行此来源，多来源须显式指定；可加 `rerun:{source_run_id,from_node_id}` 和必填稳定 request_id 创建节点重跑；202返回新运行 |
 | `POST /projects/{pid}/audios/{aid}/workflow-runs/plan` | `{workflow_revision,rerun}`，只读预检返回 `valid/execute_node_ids/reuse_node_ids/skipped_node_ids/issues` |
-| `GET /projects/{pid}/audios/{aid}/workflow-runs` | 分页历史摘要 `{items,total,limit,offset}`，默认 20、最大 100 |
+| `GET /projects/{pid}/audios/{aid}/workflow-runs` | 分页历史摘要 `{items,total,limit,offset}`，默认20、最大100；source_node_id/source_group_name可省略，名称来自冻结图而非当前组 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}` | 不可变图快照、节点状态及 artifact |
 | `POST /projects/{pid}/audios/{aid}/workflow-runs/{rid}/cancel` | 提交活动运行取消；终态幂等返回已有记录 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}` | 校验文件存在后返回结构化 artifact |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/download` | 下载该节点的独立文件 |
 | `GET /projects/{pid}/audios/{aid}/workflow-runs/{rid}/outputs/{node_id}/content` | 校验归属与文件存在后 inline 读取该节点缓存，供文本或音频预览，支持 Range 和 `nosniff` |
-| `POST /projects/{pid}/batches` | `{workflow_revision,audio_ids,request_id}`，202 返回固定工作流的新批次摘要；相同 key/载荷返回原批次 |
+| `POST /projects/{pid}/batches` | 新 `{workflow_revision,request_id,target:{kind:"canvas"}}` 或 `target:{kind:"source",node_id}`，可附 context_audio_id/expected_group_revisions；一次冻结展开，始终返回批次。与旧 audio_ids 互斥，相同key/载荷返回原批次 |
 | `GET /projects/{pid}/batches` | 分页批次历史，默认 20、最大 100 |
 | `GET /projects/{pid}/batches/{bid}` | 批次详情及固定工作流快照 |
 | `GET /projects/{pid}/batches/{bid}/items` | 分页文件任务、状态、运行 ID 及来源 |
 | `POST /projects/{pid}/batches/{bid}/cancel` | 停止派发并请求取消活动运行；终态幂等 |
-| `POST /projects/{pid}/batches/{bid}/retry` | `{request_id,include_cancelled:false}`，以原快照为失败/中断项新建批次，可明确包含取消项 |
+| `POST /projects/{pid}/batches/{bid}/retry` | `{request_id,include_cancelled:false,include_partial:false}`，原快照重试失败/中断/blocked项，可明确包含取消/部分完成；缺未完成前驱时拒绝提交 |
 | `GET /projects/{pid}/batches/{bid}/download` | ZIP 及结构化结果清单，按来源/文件任务/节点隔离命名 |
 
 空项目创建不要求语言；旧客户端显式提供的语言字符串仍不能空白、有首尾空白或控制字符，长度最多 32，两者均提供时大小写不敏感不能相同。旧上传创建接口仍必填两种语言；追加音频只要求该资源的源语言，不要求项目目标语言。区域语言代码可用，不猜测默认语言。`preset` 不再是创建参数或执行选择。
 
 上传规则来自 `GET /upload-policy`。文件先进入临时目录，文件与元数据完整后发布；追加失败不删除成功音频或父项目。追加和删除在项目锁下串行化。
 
-批次使用已上传的项目资源，清单 1–10000 个不同音频，首版同项目只有一个活动批次。输入可为 `{}` 上下文或显式 `audio_ids` 清单，后者要求首次请求与图内完整清单完全同序，否则 `BATCH_AUDIO_COLLECTION_MISMATCH`；固定 `audio_id` 仍返回 `BATCH_EXPLICIT_AUDIO_BINDING`。批次预留全部排队音频，冲突单运行返回 `AUDIO_BUSY`，删除项目仍返回 `PROJECT_BUSY`。批次快照不随公共图变化，失败重试创建新批次，保留完整图并运行失败子集；服务重启标记中断，不自动重发。新文件任务保存 1-based `sequence`，子运行保存可空 `batch_item_sequence`，重试保留原序号。完整字段、错误及状态见[批处理规格](../spec/batch-processing.md)和[输入清单规格](../spec/node-batch-input.md)。
+新批次按画布来源顺序及组成员顺序展开，最多10000项；同素材跨来源保留各条路径且音频互斥，最后一个相关条目结束才释放预约。同项目最多一个活动批次，其他运行仍遵守 AUDIO_BUSY/PROJECT_BUSY。组内容、背景、顺序及连接凭据冻结，编辑当前组或图不影响队列；重启将未完成记录标中断，不自动重发。Item含 source_node_id/source_sequence 和全局固定 sequence，子运行带来源和 batch_item_sequence，重试保留原序号及成功前驱。continuous 前项须 completed，否则后项 blocked；部分完成或取消项仅显式选择才重试，不能绕过未完成前驱。
+
+旧4.0 audio_ids 批次请求保留唯一清单及原校验：必须与图内清单完整同序，固定 audio_id 仍不接受该旧请求。新target与audio_ids互斥，不借旧路径推断多个来源。详情见[素材与组规格](../spec/project-audio-groups.md)。
 
 图校验业务错误由 validate 返回 200/`valid=false`；无效请求或保存图返回 422，版本冲突返回 `409 WORKFLOW_REVISION_CONFLICT`，音频重复运行返回 `409 AUDIO_BUSY`。统一错误结构为 `{error:{code,message,details?}}`。
 
-`audio_input.config.audio_id` 固定单资源，互斥的 `audio_ids` 保存有序唯一清单（最多 10000，允许空图编辑）。校验及保存拒绝外部或不存在的资源（`INPUT_AUDIO_NOT_FOUND`）。普通运行遇空清单返回 `INPUT_AUDIO_COLLECTION_EMPTY`、多项返回 `INPUT_AUDIO_COLLECTION`；单项或固定绑定与路由 `{aid}` 不一致返回 `INPUT_AUDIO_MISMATCH`。`{}` 使用该次运行的音频上下文。绑定或顺序改变生成新执行版本，不修改旧快照。
+新 `audio_input.config={group_id:""}` 可保存未绑定草稿，执行必须选择有效非空组；group_id 与 audio_id/audio_ids 互斥。每组成员同项目、有序且唯一，允许空组草稿，background 为最多64 KiB的普通UTF-8文本；mode 为 independent/shared/continuous。组资源错误为 GROUP_NOT_FOUND/GROUP_REVISION_CONFLICT/GROUP_REFERENCED/GROUP_INVALID/GROUP_AUDIO_NOT_FOUND/GROUP_STORAGE_ERROR。
+
+旧4.0 `{}`、audio_id、audio_ids 继续原义，不补写。旧清单运行的 EMPTY/COLLECTION/MISMATCH 校验保留；多来源不得省略 source_node_id 或隐式汇合。组背景通过 group_info 的字符串输出显式接到翻译，组引用和冻结字段由目录与通用scope解析。
 
 工作流节点可带可选布局字段 `size: {width, height}`；缺失或 `null` 使用内容默认值，宽高为有限正数且不超过 1,000,000。保存与快照保留此字段；仅修改尺寸影响文档 `revision`，不提升执行 `workflow_revision`。显示时仍由前端按当前内容的最小尺寸约束，不能据此缩小到遮挡控件。
 
@@ -83,7 +94,7 @@ data/projects/<project-id>/
 
 ## 配置节点与冻结
 
-图、运行、批次及全局设置为schema 4.0；项目/音频/Transcript仍1.0，API路径不变，能力目录为1.18。工作流保存/校验请求及带版本的设置请求提交当前版本；各自嵌套快照严格校验。业务JSON内的schema_version不当文档版本解析。
+图、运行、批次及全局设置为schema 4.0；项目/音频/音频组/Transcript为1.0，能力目录为1.19。工作流保存/校验请求及带版本的设置请求提交当前版本；各自嵌套快照严格校验。业务JSON内的schema_version不当文档版本解析。
 
 llm_service/asr_service 分别拥有 endpoint/credential_ref，ASR 另有识别 protocol，无 region；llm_model/asr_model 仅接对应族连接，提供自由 model_name 及有界 additional_parameters。typed端口只传公开描述和不透明引用，真实Key在调用边界解密，不能直接写入config。
 
@@ -105,10 +116,10 @@ GET /capabilities的languages及suggestion_source只为搜索编辑，传输保�
 
 ## 不变量与限制
 
-同一音频最多一个运行/排队任务，其他音频独立排队并共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等执行资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
+同一音频最多一个执行中的任务，单批次内跨来源可以多次预约并串行派发，其他提交不能插入预约；不同音频共享全局并发。任一成员忙碌使整个项目不可删除。产物保存原子化，取消/关闭必须等资源回收。源文件、人工字幕、旧记录和其他运行不得被静默覆盖。
 
 节点重跑创建独立运行，保存 `rerun` 来源及执行/复用/未参与列表；节点新增可省略的 `execution_kind/reused_from/checkpoint`，源身份保存实际哈希及相关元数据。checkpoint 文件位于自身运行 `.checkpoints/{node_id}/`，完整输出不塞进运行 JSON，当前4.0记录的可省略字段不自动补写。多项输入清单允许目标音频属于清单的单项重跑；原批次的条目、计数、运行 ID 和 ZIP 不变，新运行 `batch_id=null` 且保留原 `batch_item_sequence`。请求 ID 相同且内容相同返回原运行，内容不同返回 `WORKFLOW_REQUEST_CONFLICT`；必要上游缺失、变化或损坏通过 `RERUN_*` issue 拒绝并指出前移节点，见[重跑规格](../spec/node-rerun-reuse.md)。
 
 服务关闭后拒绝新的调度，返回 `503 WORKFLOW_STOPPING`，原请求仍可返回已发布记录。关闭准备中的提交会回收读取/复制任务；已经发布的记录落为中断，不能留下无执行任务的排队记录。
 
-当前没有音频删除/重排、跨音频上下文、合并时间轴、整批节点重跑、自动缓存调度或历史清理。验证覆盖多音频上传与重试、固定快照批次、运行隔离、忙碌删除、版本冲突、产物下载、取消与重启状态，以及旧记录原字节保留且不读取或迁移；目录规模的性能限制见批处理规格。
+当前支持组内排序及显式静态背景，没有音频物理删除、源语言修改、前序译文记忆、Agent分析、合并时间轴、整批节点重跑、自动缓存调度或历史清理。资源/来源范围及连续调度见[音频组规格](../spec/project-audio-groups.md)，目录规模性能限制见批处理规格。

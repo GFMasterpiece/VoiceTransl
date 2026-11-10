@@ -184,17 +184,21 @@ async def test_batch_workers_shrink_after_current_item_and_grow_immediately(tmp_
 @pytest.mark.asyncio
 async def test_batch_resize_dispatches_new_workers_without_waiting(tmp_path, monkeypatch):
     from app.main import create_app
+    from httpx import ASGITransport, AsyncClient
+
+    from test_batches import setup, submit
 
     app = create_app(tmp_path)
     batches, jobs = app.state.batches, app.state.jobs
     stop = asyncio.Event()
 
-    async def worker():
+    async def worker(bid, index):
         await stop.wait()
 
     monkeypatch.setattr(batches, "_worker", worker)
-    batches.pending.extend([("pending", i) for i in range(4)])
-    batches.resize()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        pid, aids, document = await setup(client, 4)
+        await submit(client, pid, aids, document)
     assert len(batches.workers) == 1
     jobs.set_max_concurrent(3)
     batches.resize()
@@ -204,3 +208,5 @@ async def test_batch_resize_dispatches_new_workers_without_waiting(tmp_path, mon
     await asyncio.gather(*batches.workers)
     await asyncio.sleep(0)
     assert not batches.workers
+    await batches.shutdown()
+    await jobs.shutdown()

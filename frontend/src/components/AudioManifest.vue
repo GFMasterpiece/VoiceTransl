@@ -5,7 +5,7 @@ import type { Audio } from '../stores/projects'
 import type { BatchManifest } from '../composables/useBatchManifest'
 import LanguageCombobox from './LanguageCombobox.vue'
 import { batchStatus } from '../composables/useBatches'
-const props = defineProps<{ manifest: BatchManifest; audios: readonly Audio[]; locked: boolean }>()
+const props = defineProps<{ manifest: BatchManifest; audios: readonly Audio[]; locked: boolean; libraryOnly?: boolean }>()
 const manifest = reactive(props.manifest)
 const fileInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
@@ -44,8 +44,8 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
         <div class="batch-fields">
           <label>{{ t('batch.defaultLanguage') }}<LanguageCombobox v-model="manifest.language" :disabled="locked" data-batch-language allow-empty :aria-label="t('batch.defaultLanguage')" :placeholder="t('app.create.sourcePlaceholder')" @searching="defaultSearching = $event" /></label>
           <button type="button" class="secondary-button" data-manifest-apply-language :disabled="locked || languageSearching" @click="applyLanguage">{{ t('batch.applyLanguage') }}</button>
-          <label>{{ t('batch.chooseExisting') }}<select data-manifest-existing v-model="existing" :disabled="locked"><option value="">{{ t('batch.choose') }}</option><option v-for="audio in audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }} · {{ audio.source.language }}</option></select></label>
-          <button type="button" class="secondary-button" :disabled="locked || !existing" data-manifest-add-existing @click="addExisting">{{ t('batch.addExisting') }}</button>
+          <label v-if="!libraryOnly">{{ t('batch.chooseExisting') }}<select data-manifest-existing v-model="existing" :disabled="locked"><option value="">{{ t('batch.choose') }}</option><option v-for="audio in audios" :key="audio.id" :value="audio.id">{{ audio.source.original_name }} · {{ audio.source.language }}</option></select></label>
+          <button v-if="!libraryOnly" type="button" class="secondary-button" :disabled="locked || !existing" data-manifest-add-existing @click="addExisting">{{ t('batch.addExisting') }}</button>
         </div>
         <p v-if="manifest.policyLoading" role="status">{{ t('batch.policyLoading') }}</p>
         <p v-if="manifest.error.text" role="alert" class="workflow-run-error">{{ manifest.error.text }}</p>

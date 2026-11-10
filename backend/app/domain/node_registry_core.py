@@ -284,7 +284,7 @@ def _resource_binding(definition: NodeDefinition):
         return None
     if (
         not isinstance(binding, dict)
-        or set(binding) - {"resource_type", "config_key", "collection_key"}
+        or set(binding) - {"resource_type", "config_key", "collection_key", "group_key"}
         or any(
             not isinstance(binding.get(key), str) or not binding[key]
             for key in ("resource_type", "config_key")
@@ -307,6 +307,13 @@ def _resource_binding(definition: NodeDefinition):
         or (collection_key is not None and (collection is None or collection.type != "json"))
     ):
         raise ValueError("resource bindings require declared string/json fields")
+    group_key = binding.get("group_key")
+    if group_key is not None and (
+        group_key not in fields
+        or fields[group_key].type != "string"
+        or group_key in {binding["config_key"], collection_key}
+    ):
+        raise ValueError("invalid group resource field")
     return {**binding, "collection_key": collection_key}
 
 
@@ -548,6 +555,7 @@ def validate_node_definition(definition: NodeDefinition) -> None:
         if resource_input and item.key in {
             resource_input["config_key"],
             resource_input["collection_key"],
+            resource_input.get("group_key"),
         }:
             raise ValueError("resource bindings cannot be connected parameters")
         if item.input_port not in definition.input_ports:

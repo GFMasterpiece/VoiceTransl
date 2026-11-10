@@ -537,14 +537,14 @@ async def test_shutdown_cancels_preflight_and_prevents_new_publication(
         original = jobs_module.prepare_reuse
         entered, cleaned = asyncio.Event(), asyncio.Event()
 
-        async def preflight(*args):
+        async def preflight(*args, **kwargs):
             entered.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 if not suppress_cancel:
                     raise
-                return await original(*args)
+                return await original(*args, **kwargs)
             finally:
                 cleaned.set()
 

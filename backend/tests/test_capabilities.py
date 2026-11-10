@@ -28,7 +28,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     body = response.json()
     assert set(body) == {"schema_version", "workflow", "asr", "export", "languages"}
     assert body["schema_version"] == "1.0"
-    assert body["workflow"]["schema_version"] == "1.18"
+    assert body["workflow"]["schema_version"] == "1.19"
     assert [
         port for port in body["workflow"]["ports"] if port["id"] in {"audio", "transcript", "text"}
     ] == [
@@ -72,6 +72,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
     assert set(nodes) == set(NODE_DEFINITIONS)
     assert set(nodes) == {
         "audio_input",
+        "group_info",
         "preprocess",
         "asr",
         "text_output",
@@ -100,7 +101,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         category: {node["type"] for node in nodes.values() if node["category"]["id"] == category}
         for category in {node["category"]["id"] for node in nodes.values()}
     } == {
-        "input": {"audio_input", "source_info"},
+        "input": {"audio_input", "source_info", "group_info"},
         "preprocessing": {"preprocess"},
         "speech_recognition": {
             "asr",
@@ -167,6 +168,7 @@ async def test_capabilities_publish_registered_nodes_and_no_discovery_runtime(tm
         "resource_type": "audio",
         "config_key": "audio_id",
         "collection_key": "audio_ids",
+        "group_key": "group_id",
     }
     assert "translation_context" not in nodes and "asr_context" not in nodes
     assert all(

@@ -22,7 +22,7 @@ from ..domain.workflow import (
 )
 
 router = APIRouter(prefix="/api/v1")
-WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.18"
+WORKFLOW_CAPABILITY_SCHEMA_VERSION = "1.19"
 
 
 class WorkflowGraphConstraints(BaseModel):
@@ -48,6 +48,7 @@ class CapabilitiesWorkflow(BaseModel):
     nodes: list[dict[str, object]]
     constraints: WorkflowGraphConstraints
     default_graph: WorkflowDefaultGraph
+    execution: dict[str, object]
 
 
 class ASRCapabilities(BaseModel):
@@ -104,6 +105,11 @@ async def capabilities():
             "data_types": type_catalog(),
             "nodes": nodes,
             "constraints": WORKFLOW_GRAPH_CONSTRAINTS,
+            "execution": {
+                "scope": "source_branch",
+                "target_kinds": ["source", "canvas"],
+                "cross_source_merge": False,
+            },
             "default_graph": {
                 "nodes": default_graph.nodes,
                 "edges": default_graph.edges,

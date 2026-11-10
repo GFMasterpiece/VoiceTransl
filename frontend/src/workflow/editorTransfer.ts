@@ -175,7 +175,11 @@ function portable(graph: WorkflowDocumentInput, registry: NodeRegistry): Workflo
   const result = validateTransferGraph({ nodes: graph.nodes, edges: graph.edges }, registry)
   for (const node of result.nodes) {
     const resource = registry.kind(node.type)?.resourceInput
-    if (resource) { delete node.config[resource.configKey]; if (resource.collectionKey) delete node.config[resource.collectionKey] }
+    if (resource) { delete node.config[resource.configKey]; if (resource.collectionKey) delete node.config[resource.collectionKey]; if (resource.groupKey) {
+      const defaults = registry.createDefaultConfig(node.type, true)
+      if (Object.prototype.hasOwnProperty.call(defaults, resource.groupKey)) node.config[resource.groupKey] = defaults[resource.groupKey]
+      else delete node.config[resource.groupKey]
+    } }
     const connection = registry.kind(node.type)?.inlineConnectionInput
     if (connection) delete node.config[connection.credentialRefKey]
   }

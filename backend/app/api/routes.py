@@ -427,15 +427,28 @@ async def events(ws: WebSocket, pid: str, audio_id: str | None = None):
 
 
 @router.get("/projects/{pid}/audios")
-async def audios(pid: str, request: Request):
+async def audios(
+    pid: str,
+    request: Request,
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     state = deps(request)
     project = get_project(state, pid)
-    return {
+    if limit is None and offset:
+        raise HTTPException(
+            422, detail={"error": {"code": "VALIDATION_ERROR", "message": "分页偏移需要指定 limit"}}
+        )
+    selected = project.audios if limit is None else project.audios[offset : offset + limit]
+    result = {
         "items": [
             {**audio.model_dump(mode="json"), "job": state.jobs.job(pid, audio.id)}
-            for audio in project.audios
+            for audio in selected
         ]
     }
+    if limit is not None:
+        result.update(total=len(project.audios), limit=limit, offset=offset)
+    return result
 
 
 @router.post("/projects/{pid}/audios", status_code=201)

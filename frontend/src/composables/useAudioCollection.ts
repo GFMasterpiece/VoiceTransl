@@ -4,9 +4,9 @@ import { useWorkflowStore } from '../stores/workflow'
 import { randomRequestId, type BatchManifest, type ManifestItem } from './useBatchManifest'
 
 /** The graph owns uploaded selection/order; this session additionally owns local Files. */
-export function useAudioCollection(manifest: BatchManifest, audios: () => readonly Audio[], projectId: string) {
+export function useAudioCollection(manifest: BatchManifest, audios: () => readonly Audio[], projectId: string, active: () => boolean = () => true) {
   const store = useWorkflowStore()
-  const node = computed(() => store.projectId === projectId && store.document?.project_id === projectId ? store.draft.nodes.find((node) => {
+  const node = computed(() => active() && store.projectId === projectId && store.document?.project_id === projectId ? store.draft.nodes.find((node) => {
     const resource = store.registry?.kind(node.type)?.resourceInput
     return resource?.resourceType === 'audio' && resource.collectionKey
   }) : undefined)

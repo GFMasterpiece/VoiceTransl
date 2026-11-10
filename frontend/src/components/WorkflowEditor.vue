@@ -5,7 +5,7 @@ import {
   workflowIssueLabel,
   WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_FIELDS_Y, WORKFLOW_NODE_PORT_ROW_HEIGHT, WORKFLOW_NODE_BODY_BOTTOM, workflowNodeFieldsY, workflowHeaderInputPorts, workflowPortY, workflowNodeHeight, workflowNodeSize,
   WORKFLOW_NODE_WIDTH, WORKFLOW_NODE_ROW_GAP, WORKFLOW_RESOURCE_HEIGHT, WORKFLOW_PREVIEW_HEIGHT, workflowFieldsHeight, workflowVisibleFields,
-  executionSignature,
+  executionSignature, sourceScopeLabel, frozenSourceGroup,
   nodeLabel as registeredNodeLabel,
   useWorkflowStore,
   type WorkflowNode, type WorkflowEdge,
@@ -19,7 +19,10 @@ import NodeLibrary from './NodeLibrary.vue'
 import BatchPanel from './BatchPanel.vue'
 import { useBatchSession } from '../composables/useBatchSession'
 import { workflowExecutionKey } from '../composables/workflowExecution'
+import ProjectMediaDialog from './ProjectMediaDialog.vue'
 import NodeAudioCollection from './NodeAudioCollection.vue'
+import NodeGroupInput from './NodeGroupInput.vue'
+import { useProjectMedia } from '../composables/useProjectMedia'
 import WorkflowPanels from './WorkflowPanels.vue'
 import NodeResourceInput from './NodeResourceInput.vue'
 import NodePreview from './NodePreview.vue'
@@ -39,7 +42,9 @@ const libraryAddError = ref('')
 const retryingLoad = ref(false)
 const initialLoadFailed = computed(() => !store.document && !store.loading && !!(store.capabilitiesError || store.error))
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
-const batch = useBatchSession(props.projectId, (audio) => emit('batchUploaded', audio), () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value)
+const mediaOpen = ref(false)
+const media = useProjectMedia(props.projectId)
+const batch = useBatchSession(props.projectId, (audio) => { emit('batchUploaded', audio); void media.loadAudios(0) }, () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value || mediaOpen.value, media)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
@@ -58,7 +63,8 @@ const connectionStart = ref<{ nodeId: string; port: string; direction: PortDirec
 const gesturePointerId = ref<number | null>(null)
 const activePanel = ref<'run' | 'artifacts' | 'logs' | 'batch' | null>(null)
 watch(activePanel, (panel) => { batch.batches.setVisible(panel === 'batch') })
-watch(batch.collection.mode, (mode) => { if (mode === 'collection' && !batch.manifest.policy.value) void batch.manifest.loadPolicy() })
+watch(batch.collection.mode, mode => { if (mode === 'collection' && !batch.manifest.policy.value) void batch.manifest.loadPolicy() })
+
 const contextMenu = ref<{ x: number; y: number; world: { x: number; y: number }; nodeId?: string } | null>(null)
 const menuElement = ref<HTMLElement | null>(null)
 let menuTrigger: Element | null = null
@@ -74,19 +80,20 @@ const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value &
 const commands = useEditorCommands(store, {
   stage,
   context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
-  blocked: () => !!libraryWorld.value || controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value || rerunModalOpen.value,
+  blocked: () => !!libraryWorld.value || controlsLocked.value || store.loading || !!activePanel.value || mediaOpen.value || discardPrompt.value || rerunModalOpen.value,
   pastePoint: () => {
     const viewport = availableViewport()
     return viewport ? canvasPoint({ clientX: viewport.bounds.left + viewport.x + viewport.width / 2, clientY: viewport.bounds.top + viewport.y + viewport.height / 2 } as PointerEvent) : undefined
   },
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
-const rerun = useNodeRerun({ context: () => JSON.stringify([props.projectId, props.audioId]), blocked: () => !!libraryWorld.value || !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || batch.manifest.uploading.value || batch.collection.incomplete.value || !!batch.batches.pending.value })
+const rerun = useNodeRerun({ context: () => JSON.stringify([props.projectId, props.audioId]), blocked: () => !!libraryWorld.value || !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || mediaOpen.value || media.dirty.value || media.uncertain.value || batch.manifest.uploading.value || batch.collection.incomplete.value || !!batch.batches.pending.value })
 watch(rerun.target, target => { rerunModalOpen.value = !!target }, { flush: 'sync' })
+const rerunSourceLabel = computed(() => store.run ? sourceScopeLabel(store.run.source_node_id, frozenSourceGroup(store.run.workflow, store.run.source_node_id, store.registry)?.name) : '')
 const rerunAudioName = computed(() => props.audios?.find(audio => audio.id === rerun.target.value?.audioId)?.source.original_name || rerun.target.value?.audioId || t('workflow.rerunChooseSource'))
 function rerunFromMenu() { const id = contextMenu.value?.nodeId; closeMenu(true); if (id) void rerun.open(id) }
 function locateRerunNode(id: string) { if (rerun.submitting.value) return; store.selectNode(id); rerun.close(); commands.focusCanvas() }
-const editingBlockedBase = computed(() => controlsLocked.value || !store.document || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || rerunModalOpen.value)
+const editingBlockedBase = computed(() => controlsLocked.value || !store.document || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || mediaOpen.value || discardPrompt.value || rerunModalOpen.value)
 const editingBlocked = computed(() => editingBlockedBase.value || !!libraryWorld.value)
 provide(languageSuggestionsKey, { languages: computed(() => store.capabilities?.languages),
   suspended: computed(() => editingBlocked.value || !!contextMenu.value || editMenuOpen.value || !!drag.value || !!resizing.value || !!panning.value || !!connectionStart.value || !!marquee.value),
@@ -162,7 +169,7 @@ const runByNode = computed(() => new Map((store.run?.nodes || []).map((node) => 
 
 function kind(node: WorkflowNode) { return registry.value?.kind(node.type) }
 function fieldsHeight(node: WorkflowNode) { return registry.value ? workflowFieldsHeight(node.type, registry.value, node.id, store.draft.edges, node.config) : 0 }
-function hasConfigFields(node: WorkflowNode) { return registry.value?.fieldsForNode(node.type, node.config).some((field) => field.key !== kind(node)?.resourceInput?.configKey && field.key !== kind(node)?.resourceInput?.collectionKey) }
+function hasConfigFields(node: WorkflowNode) { return !!kind(node)?.inlineConnectionInput || registry.value?.fieldsForNode(node.type, node.config).some((field) => field.key !== kind(node)?.resourceInput?.configKey && field.key !== kind(node)?.resourceInput?.collectionKey && field.key !== kind(node)?.resourceInput?.groupKey) }
 function inputPortLabel(node: WorkflowNode, port: string) {
   const field = registry.value?.fieldsForNode(node.type, node.config).find((field) => field.inputPort === port)
   const typeId = registry.value?.port(port, node)?.typeId
@@ -199,7 +206,7 @@ async function uploadedResource(node: WorkflowNode, audio: Audio) {
 watch(() => props.audioId, (id) => { void store.setAudioContext(id) })
 watch(() => store.audioId, (id) => { if (id && id !== props.audioId) emit('selectAudio', id) })
 function guardUnload(event: BeforeUnloadEvent) {
-  if (rerun.submitting.value || resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
+  if (rerun.submitting.value || resourceBusy.value || batch.manifest.uploading.value || batch.batches.submitting.value || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || media.saving.value || batch.batches.pending.value || store.dirty) { event.preventDefault(); event.returnValue = '' }
 }
 
 function addDisabledReason(type: string) {
@@ -468,7 +475,7 @@ function contentMinimum(node: WorkflowNode): NodeContentMinimum {
   return contentMinimums.value[node.id] || {
     bodyY: fieldsY(node), width: registry.value ? workflowNodeSize({ type: node.type, config: node.config }, registry.value).width : WORKFLOW_NODE_WIDTH,
     height: registry.value ? workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges, node.config) : WORKFLOW_NODE_HEIGHT,
-    fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
+    fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? groupKey(node) ? 140 : WORKFLOW_RESOURCE_HEIGHT : 0,
     preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
   }
 }
@@ -492,7 +499,7 @@ function measureContent() {
     // Start from catalog minima every time, never from a previous user size or measurement.
     const minimum = measureNodeContent(group, {
       bodyY: fieldsY(node), width: workflowNodeSize({ type: node.type, config: node.config }, registry.value).width, height: workflowNodeHeight(node.type, registry.value, node.id, store.draft.edges, node.config),
-      fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? WORKFLOW_RESOURCE_HEIGHT : 0,
+      fields: fieldsHeight(node), resource: kind(node)?.resourceInput ? groupKey(node) ? 140 : WORKFLOW_RESOURCE_HEIGHT : 0,
       preview: kind(node)?.preview ? WORKFLOW_PREVIEW_HEIGHT : 0,
     })
     const anchors = measureFieldAnchors(group)
@@ -760,13 +767,41 @@ async function validateAndSave() {
   }
 }
 
-async function runWorkflow() {
-  if (batch.startReason.value) return
-  const multiple = (store.boundAudioIds?.length || 0) > 1
-  const result = await batch.start()
-  if (multiple) activePanel.value = 'batch'
-  else if (result) activePanel.value = 'run'
+async function runWorkflow(nodeId?: string) {
+  if (batch.reason(nodeId)) return
+  const result = await batch.start(nodeId)
+  if (!result && batch.batches.pending.value) activePanel.value = 'batch'
+  if (result) activePanel.value = store.registry?.capabilities.schemaVersion === '1.18' && (store.boundAudioIds?.length || 0) < 2 ? 'run' : 'batch'
   return result
+}
+function openMedia() { if (controlsLocked.value) return; mediaOpen.value = true; void media.refresh(); if (!batch.manifest.policy.value) void batch.manifest.loadPolicy() }
+function groupKey(node: WorkflowNode) { const resource = kind(node)?.resourceInput; return resource?.resourceType === 'audio_group' ? resource.configKey : resource?.groupKey }
+function bindGroup(node: WorkflowNode, id: string) {
+  if (controlsLocked.value) return
+  const resource = kind(node)?.resourceInput, key = groupKey(node)
+  if (!resource || !key) return
+  const config = { ...node.config }
+  delete config[resource.configKey]
+  if (resource.collectionKey) delete config[resource.collectionKey]
+  config[key] = id
+  store.updateNode(node.id, { config })
+  if (id) void media.loadGroup(id)
+}
+function legacyResource(node: WorkflowNode) {
+  const resource = kind(node)?.resourceInput
+  if (!resource || (resource.groupKey && Object.prototype.hasOwnProperty.call(node.config, resource.groupKey))) return ''
+  const ids = resource.collectionKey ? node.config[resource.collectionKey] : undefined
+  if (Array.isArray(ids)) return t('media.groupMembers', { count: ids.length, mode: t('media.mode_independent') })
+  const id = node.config[resource.configKey]
+  return typeof id === 'string' && id ? props.audios?.find(audio => audio.id === id)?.source.original_name || id : t('workflow.resourceContext')
+}
+watch(() => JSON.stringify(store.draft.nodes.map(node => { const key = groupKey(node); return key ? node.config[key] : null })), () => {
+  for (const node of store.draft.nodes) { const key = groupKey(node), id = key ? node.config[key] : null; if (typeof id === 'string' && id && !media.groups.value[id]) void media.loadGroup(id) }
+})
+async function openBatchRun(audioId: string, runId: string) {
+  await store.setAudioContext(audioId)
+  await store.loadRun(runId)
+  activePanel.value = 'run'
 }
 
 async function retryWorkflowLoad() {
@@ -786,7 +821,7 @@ export type CloseRequestResult = 'completed' | 'pending' | 'blocked'
 function requestClose(action: () => void): CloseRequestResult {
   if (rerun.submitting.value) { store.setError(message('workflow.leaveSaving')); return 'blocked' }
   if (rerun.target.value) rerun.close()
-  if (batch.manifest.uploading.value || batch.batches.submitting.value) { store.setError(message('batch.uploadBusy')); return 'blocked' }
+  if (batch.manifest.uploading.value || media.saving.value || batch.batches.submitting.value) { store.setError(message('batch.uploadBusy')); return 'blocked' }
   if (readingImport.value || pendingImport.value || clipboardBusy.value) { store.setError(message('workflow.editorImportPending')); return 'blocked' }
   if (resourceBusy.value) { store.setError(message('workflow.resourceUploading')); return 'blocked' }
   if (store.activeSingleRun) {
@@ -798,9 +833,9 @@ function requestClose(action: () => void): CloseRequestResult {
     return 'blocked'
   }
   closeLibrary()
-  if (store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation()) {
+  if (store.dirty || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || pendingNeedsConfirmation()) {
     pendingClose = action
-    if (activePanel.value) { activePanel.value = null; void nextTick(() => { discardPrompt.value = true }) }
+    if (activePanel.value || mediaOpen.value) { activePanel.value = null; mediaOpen.value = false; void nextTick(() => { discardPrompt.value = true }) }
     else discardPrompt.value = true
     return 'pending'
   }
@@ -813,6 +848,8 @@ function discardAndClose() {
   discardPrompt.value = false
   store.discardDraft()
   batch.manifest.discardLocal()
+  media.discard()
+  mediaOpen.value = false
   acknowledgedPending = batch.batches.pending.value
   const action = pendingClose
   pendingClose = null
@@ -857,11 +894,12 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!libraryWorld.value || !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || !!rerun.target.value })
+defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || pendingNeedsConfirmation(), hasOpenDialog: () => mediaOpen.value || !!libraryWorld.value || !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || !!rerun.target.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
   void batch.batches.refreshActivity()
+  void media.loadGroups(0)
   void document.fonts?.ready.then(scheduleMeasurement)
   document.fonts?.addEventListener?.('loadingdone', scheduleMeasurement)
   window.addEventListener('pointerdown', outsideMenu, true)
@@ -873,6 +911,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   batch.dispose()
+  media.dispose()
   measurementDisposed = true
   document.fonts?.removeEventListener?.('loadingdone', scheduleMeasurement)
   if (measurementFrame !== null) cancelAnimationFrame(measurementFrame)
@@ -896,6 +935,7 @@ onUnmounted(() => {
     <div ref="toolbar" class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
       <div class="workflow-workspace-header"><slot name="workspace-header" /></div>
       <div class="workflow-toolbar-actions">
+        <button type="button" class="secondary-button compact-button" data-project-media-open :disabled="controlsLocked || !store.document" @click="openMedia">{{ t('media.title') }}</button>
         <div class="editor-menu-anchor">
           <button ref="editMenuButton" class="secondary-button compact-button" type="button" data-editor-menu aria-haspopup="menu" :aria-expanded="editMenuOpen" :disabled="editingBlocked" @click="toggleEditMenu">{{ t('workflow.editorMenu') }} ▾</button>
           <div v-if="editMenuOpen" ref="editMenuElement" class="editor-command-menu" role="menu" :aria-label="t('workflow.editorMenu')" @keydown="editorMenuKey" @pointerdown.stop>
@@ -906,7 +946,7 @@ onUnmounted(() => {
         <button class="secondary-button compact-button" type="button" data-add-node :disabled="editingBlocked" @click="openAddMenu">＋ {{ t('workflow.addNode') }}</button>
         <button class="secondary-button compact-button" type="button" :disabled="!canValidateAndSave" @click="validateAndSave">{{ store.saving ? t('workflow.saving') : store.validating ? t('workflow.validating') : t('workflow.validateAndSave') }}</button>
         <span class="workflow-save-state" role="status">{{ !store.document ? t(initialLoadFailed ? 'workflow.loadFailed' : 'workflow.loading') : store.dirty ? t('workflow.unsaved') : t('workflow.synced') }}</span>
-        <button class="primary-button compact-button" type="button" data-run-workflow :disabled="!!batch.startReason.value" :title="batch.startReason.value || t('workflow.runWorkflow')" @click="runWorkflow">{{ t('workflow.runWorkflow') }}</button>
+        <button class="primary-button compact-button" type="button" data-run-workflow :disabled="!!batch.startReason.value" :title="batch.startReason.value || t('media.runCanvas')" @click="runWorkflow()">{{ t('media.runCanvas') }}</button>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomOut')" :disabled="store.zoom <= minZoom" @click="setZoom(store.zoom - .1)">−</button>
         <span class="zoom-value" aria-live="polite">{{ percentLabel(store.zoom) }}</span>
         <button class="secondary-button compact-button" type="button" :aria-label="t('workflow.zoomIn')" :disabled="store.zoom >= 1.8" @click="setZoom(store.zoom + .1)">+</button>
@@ -964,7 +1004,8 @@ onUnmounted(() => {
                   <div class="node-body" :style="bodyStyle(node)">
                     <div v-if="hasConfigFields(node)" v-show="fieldsHeight(node)" class="node-body-fields" @focusout="store.closeHistoryGroup"><NodeConfigFields :node="node" :registry="registry" :edges="store.draft.edges" :port-description="port => inputPortDescription(node, port)" :locked="editingBlocked" @update="editNode(node, $event)" @socket-start="(port, event) => startConnection(node, 'input', port, event)" @socket-end="finishConnection" @socket-cancel="cancelConnection" /></div>
                     <div v-if="kind(node)?.resourceInput" class="node-body-resource">
-                      <NodeAudioCollection v-if="kind(node)!.resourceInput!.collectionKey && kind(node)!.resourceInput!.resourceType === 'audio'" :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" :manifest="batch.manifest" :mode="batch.collection.mode.value" @mode="batch.collection.setMode($event)" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
+                      <NodeGroupInput v-if="groupKey(node)" :value="node.config[groupKey(node)!]" :groups="media.summaries.value" :details="media.groups.value" :error="media.groupErrors.value[String(node.config[groupKey(node)!] || '')]" :legacy="legacyResource(node)" :source="!!kind(node)?.isSource" :locked="controlsLocked" :run-reason="batch.reason(node.id)" @bind="bindGroup(node, $event)" @manage="openMedia" @run="runWorkflow(node.id)" />
+                      <NodeAudioCollection v-else-if="batch.collection.node.value?.id === node.id" :project-id="projectId" :audios="audios || []" :source-language="project?.source_language || project?.source?.language || ''" :value="node.config[kind(node)!.resourceInput!.configKey]" :locked="controlsLocked" :resource-type="kind(node)!.resourceInput!.resourceType" :manifest="batch.manifest" :mode="batch.collection.mode.value" @mode="batch.collection.setMode($event)" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                       <NodeResourceInput v-else :project-id="projectId" :audios="audios || []" :value="node.config[kind(node)!.resourceInput!.configKey]" :source-language="project?.source_language || project?.source?.language || ''" :resource-type="kind(node)!.resourceInput!.resourceType" :locked="controlsLocked" @bind="bindResource(node, $event)" @uploaded="uploadedResource(node, $event)" @busy="resourceUploads[node.id] = $event" />
                     </div>
                     <div v-if="kind(node)?.preview" class="node-body-preview"><NodePreview :renderer="kind(node)!.preview!.renderer" :record="previewRecord(node)" :run-id="store.run?.id" :audio-id="store.run?.audio_id" :historical="!store.runMatchesDraft" /></div>
@@ -1000,13 +1041,13 @@ onUnmounted(() => {
     </template>
 
     <div v-if="contextMenu" ref="menuElement" class="canvas-context-menu" role="menu" tabindex="-1" :aria-label="t('workflow.canvasMenu')" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @pointerdown.stop @contextmenu.prevent @keydown="menuKey">
-      <button v-if="contextMenu.nodeId && ['1.18'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
+      <button v-if="contextMenu.nodeId && ['1.18', '1.19'].includes(store.capabilities?.schemaVersion || '')" role="menuitem" type="button" data-rerun-node :disabled="editingBlocked" @click="rerunFromMenu">{{ t('workflow.rerunFromNode') }}</button>
       <template v-if="contextMenu.nodeId"><button v-for="command in (['copy', 'cut', 'paste', 'duplicate'] as const)" :key="command" role="menuitem" type="button" :data-context-command="command" :disabled="commandDisabled(command)" @click="runContextCommand(command)">{{ t(`workflow.editorCommand_${command}`) }}</button></template>
       <button v-if="contextMenu.nodeId" role="menuitem" type="button" data-delete-node :disabled="editingBlocked || !store.draft.nodes.some(node => store.selectedNodeIds.includes(node.id) && registry?.kind(node.type)?.removable !== false)" :title="registry?.kind(store.selectedNode?.type || '')?.removable === false ? t('workflow.nodeRequired') : t('workflow.deleteNode')" @click="deleteFromMenu">{{ t('workflow.deleteNode') }}<small v-if="registry?.kind(store.selectedNode?.type || '')?.removable === false">{{ t('workflow.nodeRequired') }}</small></button>
     </div>
     <NodeLibrary v-if="libraryWorld && registry" :registry="registry" :kinds="nodeKinds" :disabled-reason="addDisabledReason" :action-error="libraryAddError" @add="addFromLibrary" @close="closeLibrary" />
     <CanvasDialog class="node-rerun-dialog" :open="!!rerun.target.value" :title="t('workflow.rerunTitle')" :close-disabled="rerun.submitting.value" @close="rerun.close">
-      <p class="workflow-panel-meta" data-rerun-audio>{{ rerunAudioName }}</p>
+      <p class="workflow-panel-meta" data-rerun-audio>{{ rerunAudioName }}<span v-if="rerunSourceLabel" data-rerun-source> · {{ rerunSourceLabel }}</span></p>
       <p v-if="rerun.planning.value" role="status">{{ t('workflow.rerunPlanning') }}</p>
       <p v-if="rerun.error.value" class="workflow-run-error" role="alert">{{ rerun.error.value }}</p>
       <template v-if="rerun.plan.value">
@@ -1016,6 +1057,7 @@ onUnmounted(() => {
       <div class="settings-actions"><button v-if="!rerun.plan.value && !rerun.planning.value" class="secondary-button" type="button" :disabled="rerun.submitting.value" @click="rerun.open(rerun.target.value!.fromNodeId)">{{ t('workflow.rerunRetry') }}</button><button class="primary-button" type="button" data-rerun-submit :disabled="!rerun.plan.value?.valid || rerun.planning.value || rerun.submitting.value" @click="rerun.submit">{{ rerun.submitting.value ? t('workflow.starting') : t('workflow.rerunStart') }}</button></div>
     </CanvasDialog>
     <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
-    <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" :locked="batch.locked.value" @close="activePanel = null" />
+    <ProjectMediaDialog v-if="mediaOpen" :media="media" :manifest="batch.manifest" :audios="audios || []" :locked="batch.locked.value" @close="mediaOpen = false" />
+    <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" @open-run="openBatchRun" :locked="batch.locked.value" @close="activePanel = null" />
   </section>
 </template>

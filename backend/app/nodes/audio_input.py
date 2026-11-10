@@ -30,6 +30,7 @@ def definition() -> NodeDefinition:
         normalize_config=normalize_input_config,
         validate_config=normalize_input_config,
         fields=(
+            CapabilityField(key="group_id", type="string", creation_default=""),
             CapabilityField(key="audio_id", type="string"),
             CapabilityField(key="audio_ids", type="json"),
         ),
@@ -38,11 +39,12 @@ def definition() -> NodeDefinition:
                 "resource_type": "audio",
                 "config_key": "audio_id",
                 "collection_key": "audio_ids",
+                "group_key": "group_id",
             }
         },
         execute=execute,
-        max_instances=1,
+        max_instances=None,
         required_inbound=0,
         is_source=True,
-        removable=False,
+        removable=True,
     )

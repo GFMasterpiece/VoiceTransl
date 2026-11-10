@@ -112,12 +112,13 @@ async def capture_source_identity(store, run, cancel_event):
     size, digest = await _hash_file(source, cancel_event)
     if size != audio.source.size_bytes:
         raise CheckpointUnavailable("SOURCE_CHANGED", "源音频已变化，请重新上传")
-    return {
+    identity = {
         "audio_id": run.audio_id,
         "source": audio.source.model_dump(mode="json"),
         "size_bytes": size,
         "sha256": digest,
     }
+    return identity
 
 
 async def _copy_file(source, target, cancel_event, *, expected_size):

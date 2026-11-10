@@ -47,7 +47,7 @@ WORKFLOW_GRAPH_CONSTRAINTS = {
     "max_nodes": MAX_WORKFLOW_NODES,
     "max_edges": MAX_WORKFLOW_EDGES,
     "min_sources": 1,
-    "max_sources": 1,
+    "max_sources": MAX_WORKFLOW_NODES,
     "min_terminals": 1,
 }
 NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -154,6 +154,25 @@ class WorkflowSnapshot(BaseModel):
     workflow_revision: int = Field(ge=0)
     nodes: list[WorkflowNode] = Field(default_factory=list, max_length=MAX_WORKFLOW_NODES)
     edges: list[WorkflowEdge] = Field(default_factory=list, max_length=MAX_WORKFLOW_EDGES)
+    group_snapshots: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+    @field_validator("group_snapshots")
+    @classmethod
+    def validate_groups(cls, value):
+        from .audio_group import AudioGroup
+
+        for key, raw in value.items():
+            group = AudioGroup.model_validate(raw)
+            if key != group.id:
+                raise ValueError("group snapshot identifier mismatch")
+        return value
+
+    @model_serializer(mode="wrap")
+    def serialize_snapshot(self, handler):
+        data = handler(self)
+        if not self.group_snapshots:
+            data.pop("group_snapshots", None)
+        return data
 
     @field_validator("schema_version")
     @classmethod
@@ -272,6 +291,7 @@ class WorkflowRun(BaseModel):
     id: str
     project_id: str
     audio_id: str
+    source_node_id: str | None = None
     batch_id: str | None = None
     batch_item_sequence: int | None = Field(
         default=None, ge=1, le=MAX_BATCH_AUDIO_ITEMS, strict=True
@@ -294,7 +314,7 @@ class WorkflowRun(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_run(self, handler):
         data = handler(self)
-        for key in ("rerun", "source_identity", "request_id", "request_digest"):
+        for key in ("rerun", "source_identity", "request_id", "request_digest", "source_node_id"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
@@ -319,6 +339,16 @@ class WorkflowRunSummary(BaseModel):
     created_at: datetime
     finished_at: datetime | None
     error: WorkflowRunError | None = None
+    source_node_id: str | None = None
+    source_group_name: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_source(self, handler):
+        data = handler(self)
+        for key in ("source_node_id", "source_group_name"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class WorkflowRunList(BaseModel):
@@ -369,7 +399,7 @@ def default_workflow(project_id: str, updated_at: datetime | None = None) -> Wor
             WorkflowNode(
                 id="input",
                 type="audio_input",
-                config={},
+                config={"group_id": ""},
                 position=WorkflowPosition(x=80, y=120),
             ),
             WorkflowNode(
@@ -553,7 +583,7 @@ def validate_workflow_graph(
         <= len(input_nodes)
         <= WORKFLOW_GRAPH_CONSTRAINTS["max_sources"]
     ):
-        issues.append(_issue("INVALID_INPUT_COUNT", "工作流必须恰好包含一个源节点"))
+        issues.append(_issue("INVALID_INPUT_COUNT", "工作流音频输入数量超出允许范围"))
     if len(output_nodes) < WORKFLOW_GRAPH_CONSTRAINTS["min_terminals"]:
         issues.append(
             _issue(
@@ -692,7 +722,15 @@ def validate_workflow_graph(
         if not already_reported:
             issues.append(_issue("CYCLE", "工作流不能包含环"))
 
-    if len(input_nodes) != 1 or not output_nodes or graph_has_cycle:
+    if not graph_has_cycle and len(input_nodes) > 1:
+        from .workflow_scope import source_origins
+
+        for node_id, origins in source_origins(nodes, edges).items():
+            if len(origins) > 1:
+                issues.append(
+                    _issue("SOURCE_SCOPE_MERGE", "不同音频输入分支不能汇合", node_id=node_id)
+                )
+    if not input_nodes or not output_nodes or graph_has_cycle:
         return issues
 
     reachable_from_input: set[str] = set()
@@ -804,6 +842,8 @@ def validate_workflow_audio_selection(
 ):
     """Bind one execution or a submitted batch to its frozen resource manifest."""
     for node, binding in workflow_resource_inputs(nodes):
+        if binding["resource_type"] != "audio":
+            continue
         single_key = binding["config_key"]
         collection_key = binding.get("collection_key")
         if single_key in node.config:
@@ -833,11 +873,13 @@ def validate_workflow_audio_selection(
                 raise ValueError("INPUT_AUDIO_MISMATCH")
 
 
-def validate_workflow_resources(project, nodes) -> list[WorkflowValidationIssue]:
+def validate_workflow_resources(project, nodes, store=None) -> list[WorkflowValidationIssue]:
     """Check project-owned resources using registered input metadata."""
     ids = {audio.id for audio in project.audios}
     issues = []
     for node, binding in workflow_resource_inputs(nodes):
+        if binding["resource_type"] == "audio_group":
+            continue
         collection_key = binding.get("collection_key")
         if (
             collection_key is not None
@@ -867,5 +909,17 @@ def validate_workflow_resources(project, nodes) -> list[WorkflowValidationIssue]
                     _issue(
                         "INPUT_AUDIO_NOT_FOUND", "输入清单中的音频不属于当前项目", node_id=node.id
                     )
+                )
+    if store is not None:
+        from ..storage.audio_group_store import AudioGroupStore
+        from .workflow_scope import workflow_group_references
+
+        groups = AudioGroupStore(store)
+        for node_id, group_id in workflow_group_references(nodes):
+            try:
+                groups.load(project.id, group_id)
+            except (OSError, ValueError):
+                issues.append(
+                    _issue("INPUT_GROUP_NOT_FOUND", "音频组不属于当前项目或已删除", node_id=node_id)
                 )
     return issues

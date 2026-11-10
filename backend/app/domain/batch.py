@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from .limits import MAX_BATCH_AUDIO_ITEMS
 from .project import AudioAsset, SourceOrigin
@@ -11,14 +11,23 @@ from .schema import require_schema_version
 from .workflow import WorkflowRunError, WorkflowSnapshot
 
 ItemStatus = Literal[
-    "queued", "running", "completed", "partial", "failed", "cancelled", "interrupted"
+    "queued", "running", "completed", "partial", "failed", "cancelled", "interrupted", "blocked"
 ]
 BatchStatus = Literal[
     "queued", "running", "cancelling", "completed", "partial", "failed", "cancelled", "interrupted"
 ]
 ACTIVE_BATCH_STATUSES = {"queued", "running", "cancelling"}
 ACTIVE_ITEM_STATUSES = {"queued", "running"}
-ITEM_STATUSES = ("queued", "running", "completed", "partial", "failed", "cancelled", "interrupted")
+ITEM_STATUSES = (
+    "queued",
+    "running",
+    "completed",
+    "partial",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "blocked",
+)
 
 
 def item_counts(items):
@@ -36,6 +45,17 @@ class BatchItem(BaseModel):
     index: int = Field(ge=0)
     sequence: int = Field(ge=1, le=MAX_BATCH_AUDIO_ITEMS, strict=True)
     audio_id: str
+    source_node_id: str | None = None
+    source_sequence: int | None = Field(default=None, ge=1, strict=True)
+
+    @model_serializer(mode="wrap")
+    def serialize_item(self, handler):
+        data = handler(self)
+        for key in ("source_node_id", "source_sequence"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
     audio_name: str
     source_language: str
     origin: SourceOrigin | None = None
@@ -90,6 +110,14 @@ class BatchRecord(BatchDetail):
     request_id: str
     request_digest: str
     items: list[BatchItem]
+    completed_predecessors: dict[str, list[int]] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def serialize_batch(self, handler):
+        data = handler(self)
+        if not self.completed_predecessors:
+            data.pop("completed_predecessors", None)
+        return data
 
     @field_validator("schema_version")
     @classmethod
@@ -102,11 +130,14 @@ class BatchRecord(BatchDetail):
             raise ValueError("invalid batch total")
         if [item.index for item in self.items] != list(range(self.total)):
             raise ValueError("invalid batch indexes")
-        if len({item.audio_id for item in self.items}) != self.total:
+        if len({(item.source_node_id, item.audio_id) for item in self.items}) != self.total:
             raise ValueError("duplicate batch audio")
         if len({item.sequence for item in self.items}) != self.total:
             raise ValueError("duplicate batch sequence")
-        if self.counts != item_counts(self.items):
+        expected = item_counts(self.items)
+        if "blocked" not in self.counts and not expected["blocked"]:
+            expected.pop("blocked")
+        if self.counts != expected:
             raise ValueError("invalid batch counts")
         if self.workflow_revision != self.workflow.workflow_revision:
             raise ValueError("invalid batch workflow revision")

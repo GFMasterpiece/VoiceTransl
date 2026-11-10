@@ -118,7 +118,20 @@ def node_fingerprint(node, effective_config, incoming, checkpoints, source_ident
     )
 
 
-def graph_sets(snapshot, from_node_id):
+def graph_sets(snapshot, from_node_id, source_node_id=None):
+    from ..domain.workflow_scope import plan_source_scope
+
+    scope = plan_source_scope(snapshot, source_node_id)
+    snapshot = snapshot.model_copy(
+        update={
+            "nodes": [node for node in snapshot.nodes if node.id in scope.node_ids],
+            "edges": [
+                edge
+                for edge in snapshot.edges
+                if edge.source in scope.node_ids and edge.target in scope.node_ids
+            ],
+        }
+    )
     ids = [node.id for node in snapshot.nodes]
     if from_node_id not in ids:
         raise ValueError("RERUN_NODE_NOT_FOUND")
@@ -184,19 +197,30 @@ class PreparedReuse:
         )
 
 
-async def prepare_reuse(store, project_id, audio_id, snapshot, request):
+async def prepare_reuse(store, project_id, audio_id, snapshot, request, source_node_id=None):
     from ..domain.checkpoint import CheckpointDescriptor
     from ..domain.node_execution import NodeData
     from .workflow_runner import _dependency_edges
 
     try:
-        plan = graph_sets(snapshot, request.from_node_id)
+        plan = graph_sets(snapshot, request.from_node_id, source_node_id)
     except ValueError:
         reject(ReusePlan(), "RERUN_NODE_NOT_FOUND", "所选节点不存在", request.from_node_id)
     try:
         source = store.load_workflow_run(project_id, audio_id, request.source_run_id)
     except (OSError, ValueError, FileNotFoundError):
         reject(plan, "RERUN_SOURCE_NOT_FOUND", "来源运行不存在或不属于当前音频")
+    from ..domain.workflow_scope import plan_source_scope
+
+    selected_scope = plan_source_scope(snapshot, source_node_id)
+    previous_scope = plan_source_scope(source.workflow, source.source_node_id)
+    if previous_scope.source_node_id != selected_scope.source_node_id:
+        reject(plan, "RERUN_SOURCE_SCOPE_MISMATCH", "来源运行属于不同音频输入分支")
+    plan.skipped_node_ids = [
+        node.id
+        for node in snapshot.nodes
+        if node.id not in set(plan.execute_node_ids) | set(plan.reuse_node_ids)
+    ]
     if source.status in {
         WorkflowRunStatus.PENDING,
         WorkflowRunStatus.RUNNING,
@@ -206,7 +230,9 @@ async def prepare_reuse(store, project_id, audio_id, snapshot, request):
     source_ids = [node.id for node in snapshot.nodes if NODE_DEFINITIONS[node.type].is_source]
     event = asyncio.Event()
     try:
-        identity = await capture_source_identity(store, source, event)
+        identity = await capture_source_identity(
+            store, source.model_copy(update={"workflow": snapshot}), event
+        )
     except (OSError, ValueError):
         reject(
             plan,

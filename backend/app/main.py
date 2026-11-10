@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
+from .api.audio_groups import router as audio_groups_router
 from .api.batches import router as batches_router
 from .api.capabilities import router as capabilities_router
 from .api.routes import router
@@ -158,6 +159,7 @@ def create_app(data_dir=None):
     app.include_router(workflow_router)
     app.include_router(batches_router)
     app.include_router(settings_router)
+    app.include_router(audio_groups_router)
     return app
 
 

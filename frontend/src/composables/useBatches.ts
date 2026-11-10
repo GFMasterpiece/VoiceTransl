@@ -7,7 +7,7 @@ import { providerErrorLabel } from '../workflow/providerErrors'
 import type { WorkflowSnapshot } from '../stores/workflow'
 import { randomRequestId } from './useBatchManifest'
 
-export interface BatchCounts { queued: number; running: number; completed: number; partial: number; failed: number; cancelled: number; interrupted: number }
+export interface BatchCounts { queued: number; running: number; completed: number; partial: number; failed: number; cancelled: number; interrupted: number; blocked?: number }
 export interface BatchSummary {
   id: string; project_id: string; status: string; workflow_revision: number; created_at: string
   started_at: string | null; finished_at: string | null; cancel_requested: boolean; retry_of: string | null
@@ -16,6 +16,7 @@ export interface BatchSummary {
 export interface BatchDetail extends BatchSummary { workflow: WorkflowSnapshot }
 export interface BatchItem {
   sequence: number
+  source_node_id?: string; source_sequence?: number
   index: number; audio_id: string; audio_name: string; source_language: string; origin: SourceOrigin | null
   status: string; run_id: string | null; started_at: string | null; finished_at: string | null; error: { type: string; message: string } | null
 }
@@ -27,6 +28,10 @@ export function batchStatus(status: string) { return hasMessage(`batch.status_${
 export function batchError(reason: unknown) {
   const value = reason as { code?: string; type?: string; message?: unknown }
   const code = value?.code || value?.type
+  if (code === 'BATCH_DEPENDENCY_NOT_COMPLETED') {
+    const details = (reason as ApiError)?.details as { source_node_id?: string; predecessor_sequence?: number; status?: string } | undefined
+    return t('batch.error_BATCH_DEPENDENCY_NOT_COMPLETED', { source: details?.source_node_id || '—', sequence: details?.predecessor_sequence || 0, status: batchStatus(details?.status || 'unknown') })
+  }
   return code && hasMessage(`batch.error_${code}`) ? t(`batch.error_${code}`)
     : value && typeof value.message === 'string' ? providerErrorLabel({ ...value, message: value.message }) || (reason instanceof Error ? displayError(reason) : value.message) : displayError(reason)
 }
@@ -35,9 +40,10 @@ function readSummary(value: unknown): BatchSummary {
   if (!batch || typeof batch.id !== 'string' || typeof batch.project_id !== 'string' || typeof batch.status !== 'string'
     || !Number.isInteger(batch.workflow_revision) || !Number.isInteger(batch.total) || batch.total < 1
     || typeof batch.created_at !== 'string' || !batch.counts
-    || !['queued', 'running', 'completed', 'partial', 'failed', 'cancelled', 'interrupted'].every((key) => Number.isInteger(batch.counts[key as keyof BatchCounts]) && batch.counts[key as keyof BatchCounts] >= 0)
-    || Object.values(batch.counts).reduce((sum, count) => sum + count, 0) !== batch.total
+    || !['queued', 'running', 'completed', 'partial', 'failed', 'cancelled', 'interrupted'].every((key) => Number.isInteger(batch.counts[key as keyof BatchCounts]) && Number(batch.counts[key as keyof BatchCounts]) >= 0)
+    || Object.values(batch.counts).reduce((sum, count) => sum + Number(count), 0) !== batch.total
     || !validError(batch.error)) throw message('batch.invalidResponse')
+  if (batch.counts.blocked !== undefined && (!Number.isInteger(batch.counts.blocked) || batch.counts.blocked < 0)) throw message('batch.invalidResponse')
   return batch
 }
 function validError(value: unknown) { return value === null || (!!value && typeof (value as { type: unknown }).type === 'string' && typeof (value as { message: unknown }).message === 'string') }
@@ -61,9 +67,12 @@ function validPending(value: unknown): value is PendingRequest {
   const request = value as PendingRequest
   if (!request || typeof request.path !== 'string' || !request.body || typeof request.body.request_id !== 'string'
     || !request.body.request_id.length || request.body.request_id.length > 128) return false
-  if (request.path === '') return Number.isInteger(request.body.workflow_revision) && Number(request.body.workflow_revision) >= 0
-    && Array.isArray(request.body.audio_ids) && request.body.audio_ids.length > 0
-    && request.body.audio_ids.every((id) => typeof id === 'string' && !!id) && new Set(request.body.audio_ids).size === request.body.audio_ids.length
+  if (request.path === '') {
+    if (!Number.isInteger(request.body.workflow_revision) || Number(request.body.workflow_revision) < 0) return false
+    const target = request.body.target as { kind?: string; node_id?: string } | undefined
+    if (target) return !('audio_ids' in request.body) && (target.kind === 'canvas' || (target.kind === 'source' && typeof target.node_id === 'string' && !!target.node_id))
+    return Array.isArray(request.body.audio_ids) && request.body.audio_ids.length > 0 && request.body.audio_ids.every((id) => typeof id === 'string' && !!id) && new Set(request.body.audio_ids).size === request.body.audio_ids.length
+  }
   return /^\/[A-Za-z0-9_-]+\/retry$/.test(request.path) && typeof request.body.include_cancelled === 'boolean'
 }
 
@@ -202,15 +211,18 @@ export function useBatches(projectId: string) {
     const body = { workflow_revision: revision, audio_ids: [...audioIds], request_id: randomRequestId() }
     return mutate('', body, true)
   }
-  function retry(batchId: string, includeCancelled: boolean) {
-    if (pending.value?.path === `/${encodeURIComponent(batchId)}/retry` && pending.value.body.include_cancelled === includeCancelled) return retryPending()
-    return mutate(`/${encodeURIComponent(batchId)}/retry`, { request_id: randomRequestId(), include_cancelled: includeCancelled }, true)
+  function createTarget(revision: number, target: { kind: 'canvas' } | { kind: 'source'; node_id: string }, contextAudioId?: string | null, groupRevisions?: Record<string, number>) {
+    return mutate('', { workflow_revision: revision, target, request_id: randomRequestId(), ...(contextAudioId ? { context_audio_id: contextAudioId } : {}), ...(groupRevisions && Object.keys(groupRevisions).length ? { expected_group_revisions: groupRevisions } : {}) }, true)
+  }
+  function retry(batchId: string, includeCancelled: boolean, includePartial = false) {
+    if (pending.value?.path === `/${encodeURIComponent(batchId)}/retry` && pending.value.body.include_cancelled === includeCancelled && !!pending.value.body.include_partial === includePartial) return retryPending()
+    return mutate(`/${encodeURIComponent(batchId)}/retry`, { request_id: randomRequestId(), include_cancelled: includeCancelled, ...(includePartial ? { include_partial: true } : {}) }, true)
   }
   function retryPending() { return pending.value ? mutate(pending.value.path, pending.value.body, true) : Promise.resolve(null) }
   function cancel(batchId: string) { return mutate(`/${encodeURIComponent(batchId)}/cancel`) }
   function download(batchId: string) { return `${base}/${encodeURIComponent(batchId)}/download` }
   function setVisible(value: boolean) { visible = value; if (timer) clearTimeout(timer); if (value) void refresh(); else schedule() }
   function dispose() { alive = false; visible = false; if (timer) clearTimeout(timer); for (const controller of controllers) controller.abort(); controllers.clear(); historySequence++; detailSequence++ }
-  return { history, detail, items, loading, detailLoading, submitting, error, pending, pendingStored, active, loadHistory, select, refresh, refreshActivity, create, retry, retryPending, cancel, download, setVisible, dispose }
+  return { history, detail, items, loading, detailLoading, submitting, error, pending, pendingStored, active, loadHistory, select, refresh, refreshActivity, create, createTarget, retry, retryPending, cancel, download, setVisible, dispose }
 }
 export type Batches = ReturnType<typeof useBatches>

@@ -45,6 +45,7 @@ async def test_size_layout_revision_persistence_and_snapshot(tmp_path):
         assert workflow["nodes"][1]["position"] == {"x": 720, "y": 120}
         assert not path.exists()
         workflow["nodes"][1]["position"] = {"x": 420, "y": 260}
+        workflow["nodes"][0]["config"] = {}
         # An old graph does not need size and remains untouched on disk when read.
         for node in workflow["nodes"]:
             node.pop("size", None)

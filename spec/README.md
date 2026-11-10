@@ -16,6 +16,7 @@
 
 | 规格 | 状态 | 主题 |
 | --- | --- | --- |
+| [项目素材库、音频组与多输入执行](project-audio-groups.md) | Implemented | 素材复用、有序分组、共享背景、多源分支、统一运行与连续组调度 |
 | [节点库面板](node-library-panel.md) | Implemented | 分类搜索、输入输出类型筛选、节点预览及添加入口统一 |
 | [服务分类与字段旁连线](service-families-field-inputs.md) | Implemented | LLM/ASR 服务分开、移除 ASR 上下文及控件左侧参数插口 |
 | [普通文本上下文与多输入拼接](plain-text-context.md) | Implemented | 普通字符串上下文、动态输入拼接、可选地域及可空字段声明 |

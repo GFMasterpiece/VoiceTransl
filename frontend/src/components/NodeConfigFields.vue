@@ -11,7 +11,7 @@ const props = defineProps<{ node: WorkflowNode; registry: NodeRegistry; locked: 
 const emit = defineEmits<{ update: [config: Record<string, unknown>]; socketStart: [port: string, event: PointerEvent]; socketEnd: [event: PointerEvent]; socketCancel: [] }>()
 const inlineDescriptor = computed(() => props.registry.kind(props.node.type)?.inlineConnectionInput)
 const raw = ref<Record<string, { text: string; value: unknown }>>({})
-const fields = computed(() => props.registry.fieldsForNode(props.node.type, props.node.config).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey
+const fields = computed(() => props.registry.fieldsForNode(props.node.type, props.node.config).filter((field) => field.key !== props.registry.kind(props.node.type)?.resourceInput?.configKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.collectionKey && field.key !== props.registry.kind(props.node.type)?.resourceInput?.groupKey
   && !inlineConnectionKeys(props.registry.kind(props.node.type)).includes(field.key)))
 const visibleKeys = computed(() => new Set(workflowVisibleFields(props.node, props.registry, props.edges).map((field) => field.key)))
 const parameterFields = fields

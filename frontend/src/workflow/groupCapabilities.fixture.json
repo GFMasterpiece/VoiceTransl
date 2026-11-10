@@ -1,0 +1,2380 @@
+{
+  "schema_version": "1.0",
+  "languages": [
+    {
+      "code": "zh",
+      "names": {
+        "zh-CN": "中文",
+        "en": "Chinese"
+      },
+      "native_name": "中文",
+      "aliases": [
+        "普通话",
+        "汉语",
+        "Mandarin",
+        "zho",
+        "chi"
+      ]
+    },
+    {
+      "code": "en",
+      "names": {
+        "zh-CN": "英语",
+        "en": "English"
+      },
+      "native_name": "English",
+      "aliases": [
+        "eng"
+      ]
+    },
+    {
+      "code": "ja",
+      "names": {
+        "zh-CN": "日语",
+        "en": "Japanese"
+      },
+      "native_name": "日本語",
+      "aliases": [
+        "日文",
+        "jpn"
+      ]
+    },
+    {
+      "code": "ko",
+      "names": {
+        "zh-CN": "韩语",
+        "en": "Korean"
+      },
+      "native_name": "한국어",
+      "aliases": [
+        "朝鲜语",
+        "kor"
+      ]
+    },
+    {
+      "code": "yue",
+      "names": {
+        "zh-CN": "粤语",
+        "en": "Cantonese"
+      },
+      "native_name": "粵語",
+      "aliases": [
+        "广东话"
+      ]
+    },
+    {
+      "code": "fr",
+      "names": {
+        "zh-CN": "法语",
+        "en": "French"
+      },
+      "native_name": "Français",
+      "aliases": [
+        "fra",
+        "fre"
+      ]
+    },
+    {
+      "code": "de",
+      "names": {
+        "zh-CN": "德语",
+        "en": "German"
+      },
+      "native_name": "Deutsch",
+      "aliases": [
+        "deu",
+        "ger"
+      ]
+    },
+    {
+      "code": "es",
+      "names": {
+        "zh-CN": "西班牙语",
+        "en": "Spanish"
+      },
+      "native_name": "Español",
+      "aliases": [
+        "西语",
+        "spa"
+      ]
+    },
+    {
+      "code": "pt",
+      "names": {
+        "zh-CN": "葡萄牙语",
+        "en": "Portuguese"
+      },
+      "native_name": "Português",
+      "aliases": [
+        "葡语",
+        "por"
+      ]
+    },
+    {
+      "code": "it",
+      "names": {
+        "zh-CN": "意大利语",
+        "en": "Italian"
+      },
+      "native_name": "Italiano",
+      "aliases": [
+        "ita"
+      ]
+    },
+    {
+      "code": "ru",
+      "names": {
+        "zh-CN": "俄语",
+        "en": "Russian"
+      },
+      "native_name": "Русский",
+      "aliases": [
+        "rus"
+      ]
+    },
+    {
+      "code": "ar",
+      "names": {
+        "zh-CN": "阿拉伯语",
+        "en": "Arabic"
+      },
+      "native_name": "العربية",
+      "aliases": [
+        "ara"
+      ]
+    },
+    {
+      "code": "hi",
+      "names": {
+        "zh-CN": "印地语",
+        "en": "Hindi"
+      },
+      "native_name": "हिन्दी",
+      "aliases": [
+        "hin"
+      ]
+    },
+    {
+      "code": "th",
+      "names": {
+        "zh-CN": "泰语",
+        "en": "Thai"
+      },
+      "native_name": "ไทย",
+      "aliases": [
+        "tha"
+      ]
+    },
+    {
+      "code": "vi",
+      "names": {
+        "zh-CN": "越南语",
+        "en": "Vietnamese"
+      },
+      "native_name": "Tiếng Việt",
+      "aliases": [
+        "vie"
+      ]
+    },
+    {
+      "code": "id",
+      "names": {
+        "zh-CN": "印度尼西亚语",
+        "en": "Indonesian"
+      },
+      "native_name": "Bahasa Indonesia",
+      "aliases": [
+        "印尼语",
+        "ind"
+      ]
+    },
+    {
+      "code": "ms",
+      "names": {
+        "zh-CN": "马来语",
+        "en": "Malay"
+      },
+      "native_name": "Bahasa Melayu",
+      "aliases": [
+        "msa",
+        "may"
+      ]
+    },
+    {
+      "code": "tr",
+      "names": {
+        "zh-CN": "土耳其语",
+        "en": "Turkish"
+      },
+      "native_name": "Türkçe",
+      "aliases": [
+        "tur"
+      ]
+    },
+    {
+      "code": "nl",
+      "names": {
+        "zh-CN": "荷兰语",
+        "en": "Dutch"
+      },
+      "native_name": "Nederlands",
+      "aliases": [
+        "nld",
+        "dut"
+      ]
+    },
+    {
+      "code": "pl",
+      "names": {
+        "zh-CN": "波兰语",
+        "en": "Polish"
+      },
+      "native_name": "Polski",
+      "aliases": [
+        "pol"
+      ]
+    },
+    {
+      "code": "uk",
+      "names": {
+        "zh-CN": "乌克兰语",
+        "en": "Ukrainian"
+      },
+      "native_name": "Українська",
+      "aliases": [
+        "ukr"
+      ]
+    },
+    {
+      "code": "sv",
+      "names": {
+        "zh-CN": "瑞典语",
+        "en": "Swedish"
+      },
+      "native_name": "Svenska",
+      "aliases": [
+        "swe"
+      ]
+    },
+    {
+      "code": "da",
+      "names": {
+        "zh-CN": "丹麦语",
+        "en": "Danish"
+      },
+      "native_name": "Dansk",
+      "aliases": [
+        "dan"
+      ]
+    },
+    {
+      "code": "fi",
+      "names": {
+        "zh-CN": "芬兰语",
+        "en": "Finnish"
+      },
+      "native_name": "Suomi",
+      "aliases": [
+        "fin"
+      ]
+    },
+    {
+      "code": "el",
+      "names": {
+        "zh-CN": "希腊语",
+        "en": "Greek"
+      },
+      "native_name": "Ελληνικά",
+      "aliases": [
+        "ell",
+        "gre"
+      ]
+    },
+    {
+      "code": "he",
+      "names": {
+        "zh-CN": "希伯来语",
+        "en": "Hebrew"
+      },
+      "native_name": "עברית",
+      "aliases": [
+        "heb"
+      ]
+    },
+    {
+      "code": "cs",
+      "names": {
+        "zh-CN": "捷克语",
+        "en": "Czech"
+      },
+      "native_name": "Čeština",
+      "aliases": [
+        "ces",
+        "cze"
+      ]
+    },
+    {
+      "code": "ro",
+      "names": {
+        "zh-CN": "罗马尼亚语",
+        "en": "Romanian"
+      },
+      "native_name": "Română",
+      "aliases": [
+        "ron",
+        "rum"
+      ]
+    },
+    {
+      "code": "hu",
+      "names": {
+        "zh-CN": "匈牙利语",
+        "en": "Hungarian"
+      },
+      "native_name": "Magyar",
+      "aliases": [
+        "hun"
+      ]
+    },
+    {
+      "code": "fa",
+      "names": {
+        "zh-CN": "波斯语",
+        "en": "Persian"
+      },
+      "native_name": "فارسی",
+      "aliases": [
+        "fas",
+        "per"
+      ]
+    }
+  ],
+  "workflow": {
+    "schema_version": "1.19",
+    "ports": [
+      {
+        "id": "llm_connection",
+        "type_id": "llm_connection",
+        "label": "llm connection",
+        "capability_requirements": []
+      },
+      {
+        "id": "llm_model",
+        "type_id": "llm_model",
+        "label": "llm model",
+        "capability_requirements": []
+      },
+      {
+        "id": "asr_connection",
+        "type_id": "asr_connection",
+        "label": "asr connection",
+        "capability_requirements": []
+      },
+      {
+        "id": "asr_model",
+        "type_id": "asr_model",
+        "label": "asr model",
+        "capability_requirements": []
+      },
+      {
+        "id": "audio",
+        "type_id": "audio",
+        "label": "音频",
+        "capability_requirements": []
+      },
+      {
+        "id": "transcript",
+        "type_id": "transcript",
+        "label": "转写结果",
+        "capability_requirements": []
+      },
+      {
+        "id": "text",
+        "type_id": "text",
+        "label": "文本产物",
+        "capability_requirements": []
+      },
+      {
+        "id": "string",
+        "type_id": "string",
+        "label": "字符串",
+        "capability_requirements": []
+      },
+      {
+        "id": "number",
+        "type_id": "number",
+        "label": "数字",
+        "capability_requirements": []
+      },
+      {
+        "id": "integer",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "boolean",
+        "type_id": "boolean",
+        "label": "布尔值",
+        "capability_requirements": []
+      },
+      {
+        "id": "filename_stem",
+        "type_id": "string",
+        "label": "字符串",
+        "capability_requirements": []
+      },
+      {
+        "id": "text_format",
+        "type_id": "string",
+        "label": "字符串",
+        "capability_requirements": []
+      },
+      {
+        "id": "model_name",
+        "type_id": "string",
+        "label": "字符串",
+        "capability_requirements": []
+      },
+      {
+        "id": "background",
+        "type_id": "string",
+        "label": "背景文本",
+        "capability_requirements": []
+      },
+      {
+        "id": "name",
+        "type_id": "string",
+        "label": "组名称",
+        "capability_requirements": []
+      },
+      {
+        "id": "group_id",
+        "type_id": "string",
+        "label": "音频组",
+        "capability_requirements": []
+      },
+      {
+        "id": "mode",
+        "type_id": "string",
+        "label": "关系模式",
+        "capability_requirements": []
+      },
+      {
+        "id": "json",
+        "type_id": "json_object",
+        "label": "json_object",
+        "capability_requirements": []
+      },
+      {
+        "id": "json_left",
+        "type_id": "json_object",
+        "label": "json_object",
+        "capability_requirements": []
+      },
+      {
+        "id": "json_right",
+        "type_id": "json_object",
+        "label": "json_object",
+        "capability_requirements": []
+      },
+      {
+        "id": "translation_options",
+        "type_id": "translation_options",
+        "label": "translation_options",
+        "capability_requirements": []
+      },
+      {
+        "id": "asr_options",
+        "type_id": "asr_options",
+        "label": "asr_options",
+        "capability_requirements": []
+      },
+      {
+        "id": "context",
+        "type_id": "string",
+        "label": "上下文",
+        "capability_requirements": []
+      },
+      {
+        "id": "timeout_seconds",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "batch_size",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "max_batch_characters",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "context_segments",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "max_attempts",
+        "type_id": "integer",
+        "label": "整数",
+        "capability_requirements": []
+      },
+      {
+        "id": "additional_parameters",
+        "type_id": "json_object",
+        "label": "模型请求参数",
+        "capability_requirements": []
+      },
+      {
+        "id": "filename",
+        "type_id": "string",
+        "label": "文件名",
+        "capability_requirements": []
+      },
+      {
+        "id": "stem",
+        "type_id": "string",
+        "label": "不含扩展名的文件名",
+        "capability_requirements": []
+      },
+      {
+        "id": "source_language",
+        "type_id": "string",
+        "label": "源语言",
+        "capability_requirements": []
+      },
+      {
+        "id": "relative_path",
+        "type_id": "string",
+        "label": "相对路径",
+        "capability_requirements": []
+      },
+      {
+        "id": "root_name",
+        "type_id": "string",
+        "label": "来源目录名",
+        "capability_requirements": []
+      }
+    ],
+    "data_types": [
+      {
+        "id": "llm_connection",
+        "label": "llm connection",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#A78BFA"
+        }
+      },
+      {
+        "id": "llm_model",
+        "label": "llm model",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#C084FC"
+        }
+      },
+      {
+        "id": "asr_connection",
+        "label": "asr connection",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#A78BFA"
+        }
+      },
+      {
+        "id": "asr_model",
+        "label": "asr model",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": {
+          "color": "#C084FC"
+        }
+      },
+      {
+        "id": "audio",
+        "label": "音频",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "transcript",
+        "label": "转写结果",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "text",
+        "label": "文本产物",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "string",
+        "label": "字符串",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "number",
+        "label": "数字",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "integer",
+        "label": "整数",
+        "parent_type_id": "number",
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "boolean",
+        "label": "布尔值",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "json_object",
+        "label": "json_object",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "translation_options",
+        "label": "translation_options",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      },
+      {
+        "id": "asr_options",
+        "label": "asr_options",
+        "parent_type_id": null,
+        "capabilities": [],
+        "presentation": null
+      }
+    ],
+    "nodes": [
+      {
+        "type": "audio_input",
+        "label": "音频输入",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "input",
+          "label": "输入"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "audio"
+        ],
+        "terminal": false,
+        "is_source": true,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": {
+          "resource_input": {
+            "resource_type": "audio",
+            "config_key": "audio_id",
+            "collection_key": "audio_ids",
+            "group_key": "group_id"
+          }
+        },
+        "config": {
+          "kind": "none",
+          "fields": [
+            {
+              "key": "group_id",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": "",
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "audio_id",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "audio_ids",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "json_value",
+        "label": "JSON对象",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "json"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "json_value",
+          "fields": [
+            {
+              "key": "value",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "text_join",
+        "label": "文本拼接",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": {
+          "config_key": "items",
+          "port_prefix": "text_",
+          "type_id": "string",
+          "min_items": 1,
+          "max_items": 32,
+          "default_items": [
+            {
+              "id": "a1",
+              "value": ""
+            },
+            {
+              "id": "a2",
+              "value": ""
+            }
+          ],
+          "field": {
+            "key": "value",
+            "type": "string",
+            "required": false,
+            "nullable": false,
+            "default": "",
+            "creation_default": null,
+            "minimum": null,
+            "maximum": null,
+            "min_length": null,
+            "max_length": null,
+            "pattern": null,
+            "description": null,
+            "validator": null,
+            "suggestion_source": null,
+            "input_port": null,
+            "input_type_id": null,
+            "widget": "multiline",
+            "options": []
+          }
+        },
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "string"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "text_join",
+          "fields": []
+        }
+      },
+      {
+        "type": "json_merge",
+        "label": "JSON合并",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [
+          "json_left",
+          "json_right"
+        ],
+        "output_ports": [
+          "json"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "json_merge",
+          "fields": [
+            {
+              "key": "left",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "json_left",
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "right",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "json_right",
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "conflict_policy",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "error",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "error",
+                  "label": "ERROR"
+                },
+                {
+                  "value": "left_wins",
+                  "label": "LEFT_WINS"
+                },
+                {
+                  "value": "right_wins",
+                  "label": "RIGHT_WINS"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "translation_options",
+        "label": "翻译执行参数",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "translation",
+          "label": "翻译"
+        },
+        "input_ports": [
+          "timeout_seconds",
+          "batch_size",
+          "max_batch_characters",
+          "context_segments",
+          "max_attempts"
+        ],
+        "output_ports": [
+          "translation_options"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "translation_options",
+          "fields": [
+            {
+              "key": "timeout_seconds",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 120,
+              "creation_default": null,
+              "minimum": 1,
+              "maximum": 3600,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "timeout_seconds",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "batch_size",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 20,
+              "creation_default": null,
+              "minimum": 1,
+              "maximum": 100,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "batch_size",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "max_batch_characters",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 6000,
+              "creation_default": null,
+              "minimum": 256,
+              "maximum": 30000,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "max_batch_characters",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "context_segments",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 2,
+              "creation_default": null,
+              "minimum": 0,
+              "maximum": 10,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "context_segments",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "max_attempts",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 2,
+              "creation_default": null,
+              "minimum": 1,
+              "maximum": 5,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "max_attempts",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr_options",
+        "label": "识别执行参数",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "timeout_seconds"
+        ],
+        "output_ports": [
+          "asr_options"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "asr_options",
+          "fields": [
+            {
+              "key": "timeout_seconds",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 3600,
+              "creation_default": null,
+              "minimum": 1,
+              "maximum": 3600,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "timeout_seconds",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "llm_service",
+        "label": "LLM服务",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "llm",
+          "label": "语言模型"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "llm_connection"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": {
+          "inline_connection_input": {
+            "provider_type": "llm_service",
+            "label": "LLM服务",
+            "base_url_key": "endpoint",
+            "timeout_key": null,
+            "region_key": null,
+            "credential_ref_key": "credential_ref",
+            "service_family": "llm",
+            "fixed_protocol": "openai_chat",
+            "protocol_key": null
+          }
+        },
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "endpoint",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 2048,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "credential_ref",
+              "type": "string",
+              "required": false,
+              "nullable": true,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "llm_model",
+        "label": "LLM模型",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "llm",
+          "label": "语言模型"
+        },
+        "input_ports": [
+          "llm_connection",
+          "model_name",
+          "additional_parameters"
+        ],
+        "output_ports": [
+          "llm_model"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "llm_connection"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "model_name",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "model_name",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "additional_parameters",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "additional_parameters",
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr_service",
+        "label": "ASR服务",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "asr_connection"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": {
+          "inline_connection_input": {
+            "provider_type": "asr_service",
+            "label": "ASR服务",
+            "base_url_key": "endpoint",
+            "timeout_key": null,
+            "region_key": null,
+            "credential_ref_key": "credential_ref",
+            "service_family": "asr",
+            "fixed_protocol": null,
+            "protocol_key": "protocol"
+          }
+        },
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "endpoint",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 2048,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "credential_ref",
+              "type": "string",
+              "required": false,
+              "nullable": true,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "protocol",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "qwen_filetrans",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "qwen_filetrans",
+                  "label": "Qwen Filetrans"
+                },
+                {
+                  "value": "qwen_streaming",
+                  "label": "Qwen Streaming"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr_model",
+        "label": "ASR模型",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "asr_connection",
+          "model_name",
+          "additional_parameters"
+        ],
+        "output_ports": [
+          "asr_model"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "asr_connection"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "model_name",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": 128,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "model_name",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "additional_parameters",
+              "type": "json",
+              "required": false,
+              "nullable": false,
+              "default": null,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "additional_parameters",
+              "input_type_id": "json_object",
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "preprocess",
+        "label": "预处理",
+        "debug_only": true,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "preprocessing",
+          "label": "预处理"
+        },
+        "input_ports": [
+          "audio"
+        ],
+        "output_ports": [
+          "audio"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "audio"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "preprocess",
+          "fields": [
+            {
+              "key": "provider",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "mock",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "mock",
+                  "label": "Mock"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "asr",
+        "label": "语音识别（Mock）",
+        "debug_only": true,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "audio"
+        ],
+        "output_ports": [
+          "transcript"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "audio"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "qwen_asr",
+        "label": "Qwen语音识别",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "audio",
+          "asr_model",
+          "asr_options"
+        ],
+        "output_ports": [
+          "transcript"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 2,
+        "required_input_ports": [
+          "audio",
+          "asr_model"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "qwen_asr_streaming",
+        "label": "Qwen Streaming语音识别",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "speech_recognition",
+          "label": "语音识别"
+        },
+        "input_ports": [
+          "audio",
+          "asr_model",
+          "asr_options"
+        ],
+        "output_ports": [
+          "transcript"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 2,
+        "required_input_ports": [
+          "audio",
+          "asr_model"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "llm_translate",
+        "label": "LLM翻译",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "translation",
+          "label": "翻译"
+        },
+        "input_ports": [
+          "transcript",
+          "llm_model",
+          "context",
+          "translation_options"
+        ],
+        "output_ports": [
+          "transcript"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 2,
+        "required_input_ports": [
+          "transcript",
+          "llm_model"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "context",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "context",
+              "input_type_id": null,
+              "widget": "multiline",
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "text_output",
+        "label": "文本输出",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "output",
+          "label": "输出"
+        },
+        "input_ports": [
+          "transcript",
+          "filename_stem",
+          "text_format"
+        ],
+        "output_ports": [],
+        "terminal": true,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "transcript"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "text_output",
+          "fields": [
+            {
+              "key": "filename_stem",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "transcript",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": 1,
+              "max_length": 128,
+              "pattern": null,
+              "description": "名称 / 前缀",
+              "validator": "safe_filename_stem",
+              "suggestion_source": null,
+              "input_port": "filename_stem",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "naming_mode",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "prefix_sequence",
+              "creation_default": "prefix_sequence",
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": "前缀模式附加固定文件序号，例如 prefix_00001；完整名称模式不附加序号",
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "exact",
+                  "label": "EXACT"
+                },
+                {
+                  "value": "prefix_sequence",
+                  "label": "PREFIX_SEQUENCE"
+                }
+              ]
+            },
+            {
+              "key": "format",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "txt",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": "text_format",
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "txt",
+                  "label": "TXT"
+                },
+                {
+                  "value": "srt",
+                  "label": "SRT"
+                },
+                {
+                  "value": "vtt",
+                  "label": "VTT"
+                },
+                {
+                  "value": "lrc",
+                  "label": "LRC"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "audio_output",
+        "label": "音频输出",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "output",
+          "label": "输出"
+        },
+        "input_ports": [
+          "audio",
+          "filename_stem"
+        ],
+        "output_ports": [],
+        "terminal": true,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "audio"
+        ],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "audio_output",
+          "fields": [
+            {
+              "key": "filename_stem",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "audio-copy",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": 1,
+              "max_length": 128,
+              "pattern": null,
+              "description": "名称 / 前缀",
+              "validator": "safe_filename_stem",
+              "suggestion_source": null,
+              "input_port": "filename_stem",
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            },
+            {
+              "key": "naming_mode",
+              "type": "select",
+              "required": false,
+              "nullable": false,
+              "default": "prefix_sequence",
+              "creation_default": "prefix_sequence",
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": "前缀模式附加固定文件序号，例如 prefix_00001；完整名称模式不附加序号",
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": [
+                {
+                  "value": "exact",
+                  "label": "EXACT"
+                },
+                {
+                  "value": "prefix_sequence",
+                  "label": "PREFIX_SEQUENCE"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "source_info",
+        "label": "当前文件信息",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "input",
+          "label": "输入"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "filename",
+          "stem",
+          "source_language",
+          "relative_path",
+          "root_name"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": true,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "group_info",
+        "label": "组资料",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "input",
+          "label": "输入"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "background",
+          "name",
+          "group_id",
+          "mode"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": {
+          "resource_input": {
+            "resource_type": "audio_group",
+            "config_key": "group_id",
+            "collection_key": null
+          }
+        },
+        "config": {
+          "kind": "group_info",
+          "fields": [
+            {
+              "key": "group_id",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "audio_preview",
+        "label": "音频预览",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "preview",
+          "label": "预览"
+        },
+        "input_ports": [
+          "audio"
+        ],
+        "output_ports": [],
+        "terminal": true,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "audio"
+        ],
+        "removable": true,
+        "presentation": {
+          "preview": {
+            "renderer": "audio"
+          }
+        },
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "text_preview",
+        "label": "文本预览",
+        "debug_only": false,
+        "evaluation_kind": "processing",
+        "can_start_without_inputs": false,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "preview",
+          "label": "预览"
+        },
+        "input_ports": [
+          "transcript"
+        ],
+        "output_ports": [],
+        "terminal": true,
+        "is_source": false,
+        "is_parameter_source": false,
+        "max_instances": null,
+        "required_inbound": 1,
+        "required_input_ports": [
+          "transcript"
+        ],
+        "removable": true,
+        "presentation": {
+          "preview": {
+            "renderer": "text"
+          }
+        },
+        "config": {
+          "kind": "none",
+          "fields": []
+        }
+      },
+      {
+        "type": "string_value",
+        "label": "字符串",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "string"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": true,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "value",
+              "type": "string",
+              "required": false,
+              "nullable": false,
+              "default": "",
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": "multiline",
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "integer_value",
+        "label": "整数",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "integer"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": true,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "value",
+              "type": "integer",
+              "required": false,
+              "nullable": false,
+              "default": 0,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "number_value",
+        "label": "数字",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "number"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": true,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "value",
+              "type": "number",
+              "required": false,
+              "nullable": false,
+              "default": 0.0,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      },
+      {
+        "type": "boolean_value",
+        "label": "布尔值",
+        "debug_only": false,
+        "evaluation_kind": "configuration",
+        "can_start_without_inputs": true,
+        "dynamic_inputs": null,
+        "category": {
+          "id": "parameters",
+          "label": "参数"
+        },
+        "input_ports": [],
+        "output_ports": [
+          "boolean"
+        ],
+        "terminal": false,
+        "is_source": false,
+        "is_parameter_source": true,
+        "max_instances": null,
+        "required_inbound": 0,
+        "required_input_ports": [],
+        "removable": true,
+        "presentation": null,
+        "config": {
+          "kind": "object",
+          "fields": [
+            {
+              "key": "value",
+              "type": "boolean",
+              "required": false,
+              "nullable": false,
+              "default": false,
+              "creation_default": null,
+              "minimum": null,
+              "maximum": null,
+              "min_length": null,
+              "max_length": null,
+              "pattern": null,
+              "description": null,
+              "validator": null,
+              "suggestion_source": null,
+              "input_port": null,
+              "input_type_id": null,
+              "widget": null,
+              "options": []
+            }
+          ]
+        }
+      }
+    ],
+    "constraints": {
+      "max_nodes": 64,
+      "max_edges": 64,
+      "min_sources": 1,
+      "max_sources": 64,
+      "min_terminals": 1
+    },
+    "default_graph": {
+      "nodes": [
+        {
+          "id": "input",
+          "type": "audio_input",
+          "config": {
+            "group_id": ""
+          },
+          "position": {
+            "x": 80.0,
+            "y": 120.0
+          },
+          "size": null
+        },
+        {
+          "id": "output",
+          "type": "audio_output",
+          "config": {
+            "filename_stem": "audio-copy",
+            "naming_mode": "prefix_sequence"
+          },
+          "position": {
+            "x": 720.0,
+            "y": 120.0
+          },
+          "size": null
+        }
+      ],
+      "edges": [
+        {
+          "id": "input-output",
+          "source": "input",
+          "source_port": "audio",
+          "target": "output",
+          "target_port": "audio"
+        }
+      ]
+    },
+    "execution": {
+      "scope": "source_branch",
+      "target_kinds": [
+        "source",
+        "canvas"
+      ],
+      "cross_source_merge": false
+    }
+  },
+  "asr": {
+    "providers": [
+      {
+        "id": "mock",
+        "label": "Mock"
+      }
+    ]
+  },
+  "export": {
+    "formats": [
+      {
+        "id": "txt",
+        "label": "TXT"
+      },
+      {
+        "id": "srt",
+        "label": "SRT"
+      },
+      {
+        "id": "vtt",
+        "label": "VTT"
+      },
+      {
+        "id": "lrc",
+        "label": "LRC"
+      }
+    ],
+    "naming_modes": [
+      {
+        "id": "exact",
+        "label": "EXACT"
+      },
+      {
+        "id": "prefix_sequence",
+        "label": "PREFIX_SEQUENCE"
+      }
+    ]
+  }
+}

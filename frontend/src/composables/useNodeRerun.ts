@@ -24,6 +24,8 @@ export function useNodeRerun(options: { blocked: () => boolean; context: () => s
     const source = store.run
     if (!source) return t('workflow.rerunChooseSource')
     if (['pending', 'running', 'cancelling'].includes(source.status)) return t('workflow.rerunSourceActive')
+    const sourceNode = source.source_node_id && store.draft.nodes.find(node => node.id === source.source_node_id && store.registry?.kind(node.type)?.isSource)
+    if (source.source_node_id) return sourceNode ? '' : t('workflow.rerunAudioUnbound')
     const bound = store.boundAudioIds
     if (bound !== null ? !bound.includes(source.audio_id) : (store.boundAudioId || store.audioId) !== source.audio_id) return t('workflow.rerunAudioUnbound')
     return ''

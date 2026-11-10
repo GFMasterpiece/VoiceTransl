@@ -166,7 +166,13 @@ async def execute_workflow_run(
 
     records = {node.node_id: node for node in run.nodes}
     node_by_id = {node.id: node for node in run.workflow.nodes}
-    execution_ids = set(run.rerun.execute_node_ids) if run.rerun else set(node_by_id)
+    from ..domain.workflow_scope import plan_source_scope
+
+    scope = plan_source_scope(run.workflow, run.source_node_id)
+    execution_ids = set(run.rerun.execute_node_ids) if run.rerun else set(scope.node_ids)
+    for record in run.nodes:
+        if record.node_id not in scope.node_ids:
+            record.status = WorkflowNodeStatus.SKIPPED
     output_ids = [
         node.id
         for node in run.workflow.nodes
@@ -176,12 +182,7 @@ async def execute_workflow_run(
     ]
     if not output_ids:
         output_ids = list(execution_ids)
-    input_nodes = [
-        node
-        for node in run.workflow.nodes
-        if NODE_DEFINITIONS.get(node.type) is not None and NODE_DEFINITIONS[node.type].is_source
-    ]
-    input_record = records.get(input_nodes[0].id) if input_nodes else None
+    input_record = records.get(scope.source_node_id)
     incoming, order = _dependency_edges(run)
 
     try:

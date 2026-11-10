@@ -86,7 +86,7 @@ class JobManager:
         return self.workflow_runs.get((project_id, audio_id))
 
     async def start_workflow_from_snapshot(
-        self, project_id, audio_id, snapshot, owner, sequence=None
+        self, project_id, audio_id, snapshot, owner, sequence=None, source_node_id=None
     ):
         return await self.start_workflow(
             project_id,
@@ -95,6 +95,7 @@ class JobManager:
             _snapshot=snapshot,
             _owner=owner,
             _sequence=sequence,
+            source_node_id=source_node_id,
         )
 
     def audio_busy(self, project_id, audio_id, owner=None):
@@ -129,6 +130,8 @@ class JobManager:
         _sequence=None,
         rerun=None,
         request_id=None,
+        source_node_id=None,
+        expected_group_revisions=None,
     ):
         async with self.store.mutation_lock(project_id):
             async with self._lock(project_id, audio_id):
@@ -138,6 +141,16 @@ class JobManager:
                         {
                             "workflow_revision": workflow_revision,
                             "rerun": rerun.model_dump() if rerun else None,
+                            **(
+                                {"expected_group_revisions": expected_group_revisions}
+                                if expected_group_revisions is not None
+                                else {}
+                            ),
+                            **(
+                                {"source_node_id": source_node_id}
+                                if source_node_id is not None
+                                else {}
+                            ),
                         }
                     )
                     if request_id
@@ -165,19 +178,52 @@ class JobManager:
                 )
                 if issues:
                     raise ValueError("invalid workflow")
-                validate_workflow_audio_selection(
-                    document.nodes,
-                    audio_id=audio_id,
-                    allow_collection_subset=rerun is not None
-                    or (_snapshot is not None and _owner is not None),
+                from ..domain.workflow_scope import plan_source_scope
+                from .workflow_groups import (
+                    freeze_group_snapshots,
+                    source_group_id,
+                    validate_source_audio,
                 )
+
+                scope = plan_source_scope(document, source_node_id)
+                selected_source = next(
+                    node for node in document.nodes if node.id == scope.source_node_id
+                )
+                if source_group_id(document, scope.source_node_id) is None:
+                    validate_workflow_audio_selection(
+                        [selected_source],
+                        audio_id=audio_id,
+                        allow_collection_subset=rerun is not None
+                        or (_snapshot is not None and _owner is not None),
+                    )
                 snapshot = (
                     _snapshot.model_copy(deep=True)
                     if _snapshot is not None
                     else workflow_snapshot(document)
                 )
+                if _snapshot is None:
+                    snapshot = freeze_group_snapshots(
+                        store, snapshot, project_id, scope.node_ids, expected_group_revisions
+                    )
+                validate_source_audio(snapshot, scope.source_node_id, audio_id)
+                if (
+                    source_group_id(snapshot, scope.source_node_id) is not None
+                    and _snapshot is None
+                    and rerun is None
+                ):
+                    from .workflow_groups import selected_audio_ids
+
+                    if len(selected_audio_ids(snapshot, scope.source_node_id)) > 1:
+                        raise ValueError("INPUT_AUDIO_COLLECTION")
                 reuse = (
-                    await prepare_reuse(self.store, project_id, audio_id, snapshot, rerun)
+                    await prepare_reuse(
+                        self.store,
+                        project_id,
+                        audio_id,
+                        snapshot,
+                        rerun,
+                        source_node_id=scope.source_node_id,
+                    )
                     if rerun
                     else None
                 )
@@ -188,10 +234,12 @@ class JobManager:
                         self.store,
                         snapshot,
                         project_id,
-                        node_ids=set(reuse.plan.execute_node_ids) if reuse else None,
+                        node_ids=set(reuse.plan.execute_node_ids) if reuse else set(scope.node_ids),
                     )
                 else:
-                    validate_frozen_workflow_connections(snapshot, self.store, project_id)
+                    validate_frozen_workflow_connections(
+                        snapshot, self.store, project_id, node_ids=set(scope.node_ids)
+                    )
                 from .configuration_evaluator import validate_configuration_snapshot
 
                 await validate_configuration_snapshot(
@@ -199,13 +247,15 @@ class JobManager:
                     snapshot,
                     project_id,
                     audio_id,
-                    node_ids=set(reuse.plan.execute_node_ids) if reuse else None,
+                    node_ids=set(reuse.plan.execute_node_ids) if reuse else set(scope.node_ids),
+                    source_node_id=source_node_id,
                 )
                 queued_mock_delay_ms = self.delay_ms
                 run = WorkflowRun(
                     id=f"wfr_{uuid4().hex}",
                     project_id=project_id,
                     audio_id=audio_id,
+                    source_node_id=source_node_id,
                     batch_id=_owner if _snapshot is not None else None,
                     batch_item_sequence=reuse.source.batch_item_sequence
                     if reuse

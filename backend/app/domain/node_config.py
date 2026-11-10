@@ -110,10 +110,17 @@ def normalize_input_config(config: dict[str, object]) -> dict[str, object]:
     from .limits import MAX_BATCH_AUDIO_ITEMS
     from .project import AudioAsset
 
-    if set(config) - {"audio_id", "audio_ids"}:
+    if set(config) - {"audio_id", "audio_ids", "group_id"}:
         raise ValueError("audio_input 仅接受 audio_id 或 audio_ids")
-    if "audio_id" in config and "audio_ids" in config:
+    if len(set(config) & {"audio_id", "audio_ids", "group_id"}) > 1:
         raise ValueError("audio_id 与 audio_ids 不能同时设置")
+    if "group_id" in config:
+        import re
+
+        if not isinstance(config["group_id"], str) or not re.fullmatch(
+            r"(?:|grp_[0-9a-f]{32})", config["group_id"]
+        ):
+            raise ValueError("Invalid audio group ID")
     if "audio_id" in config:
         value = config["audio_id"]
         if not isinstance(value, str):

@@ -124,11 +124,15 @@ async def configuration_descriptor(result, fingerprint):
     }
 
 
-async def validate_configuration_snapshot(store, snapshot, project_id, audio_id, node_ids=None):
+async def validate_configuration_snapshot(
+    store, snapshot, project_id, audio_id, node_ids=None, source_node_id=None
+):
     import asyncio
     from types import SimpleNamespace
 
-    run = SimpleNamespace(project_id=project_id, audio_id=audio_id, workflow=snapshot)
+    run = SimpleNamespace(
+        project_id=project_id, audio_id=audio_id, workflow=snapshot, source_node_id=source_node_id
+    )
     try:
         return await evaluate_configuration_graph(
             store, run, store.load_project(project_id), asyncio.Event(), required_ids=node_ids

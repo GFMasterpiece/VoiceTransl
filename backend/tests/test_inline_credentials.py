@@ -284,6 +284,7 @@ async def test_malformed_write_only_updates_never_echo_input(tmp_path, update, c
     app = create_app(tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         pid, _, document = await setup(client, 1)
+        before = app.state.store._workflow_path(pid).read_bytes()
         payload = graph(document)
         response = await client.put(
             f"/api/v1/projects/{pid}/workflow",
@@ -292,7 +293,7 @@ async def test_malformed_write_only_updates_never_echo_input(tmp_path, update, c
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "VALIDATION_ERROR"
         assert KEY_A not in response.text and KEY_A not in caplog.text
-        assert not app.state.store._workflow_path(pid).exists()
+        assert app.state.store._workflow_path(pid).read_bytes() == before
 
 
 @pytest.mark.asyncio

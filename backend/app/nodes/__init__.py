@@ -5,6 +5,7 @@ from . import (
     audio_input,
     audio_output,
     configuration_values,
+    group_info,
     llm_translate,
     model_configuration,
     preprocess,
@@ -33,6 +34,7 @@ def builtin_definitions():
         text_output.definition(),
         audio_output.definition(),
         source_info.definition(),
+        group_info.definition(),
         *preview.definitions(),
         *values.definitions(),
     )

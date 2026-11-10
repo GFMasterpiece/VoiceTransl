@@ -575,3 +575,14 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 @media (max-width: 700px) { .node-library-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; } }
 
 .node-library-action-error { margin: 0; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+
+.project-media-dialog .canvas-dialog { width: min(1000px, calc(100vw - 32px)); }
+.project-media { display: grid; gap: 14px; min-width: 0; }
+.media-asset, .media-member, .media-group-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 0; }
+.media-member span { flex: 1; overflow-wrap: anywhere; }
+.media-group-form, .media-group-form label, .node-group-input, .node-group-input label { display: grid; gap: 8px; min-width: 0; }
+.media-group-form input, .media-group-form select, .media-group-form textarea, .node-group-input select { width: 100%; box-sizing: border-box; min-width: 0; }
+.media-group-form textarea { resize: vertical; min-height: 96px; }
+.node-group-input button { font-size: 12px; padding: 6px 8px; }
+
+.media-confirmation { min-height: 120px; padding: 12px 0; display: grid; align-content: start; gap: 12px; }

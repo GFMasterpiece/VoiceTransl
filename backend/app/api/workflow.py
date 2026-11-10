@@ -24,7 +24,6 @@ from ..domain.schema import SchemaVersionError, require_schema_version
 from ..domain.workflow import (
     WorkflowRerunRequest,
     normalize_workflow_graph,
-    validate_workflow_audio_selection,
     validate_workflow_resources,
     workflow_snapshot,
 )
@@ -118,6 +117,14 @@ class WorkflowRunRequest(BaseModel):
     workflow_revision: int = Field(ge=0)
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
     rerun: WorkflowRerunRequest | None = None
+    source_node_id: str | None = Field(default=None, min_length=1, max_length=64)
+    expected_group_revisions: (
+        dict[
+            Annotated[str, Field(pattern=r"^grp_[0-9a-f]{32}$")],
+            Annotated[int, Field(ge=1, strict=True)],
+        ]
+        | None
+    ) = None
 
 
 @router.get("/projects/{pid}/workflow", response_model=WorkflowDocument)
@@ -136,7 +143,9 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
     _project(request, pid)
     store = request.app.state.store
     issues = validate_workflow_graph(body.nodes, body.edges)
-    issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
+    issues.extend(
+        validate_workflow_resources(_project(request, pid), body.nodes, request.app.state.store)
+    )
     if issues:
         raise HTTPException(
             422,
@@ -222,7 +231,9 @@ async def put_workflow(pid: str, body: WorkflowSaveRequest, request: Request):
 async def validate_workflow(pid: str, body: WorkflowValidateRequest, request: Request):
     _project(request, pid)
     issues = validate_workflow_graph(body.nodes, body.edges, body.schema_version)
-    issues.extend(validate_workflow_resources(_project(request, pid), body.nodes))
+    issues.extend(
+        validate_workflow_resources(_project(request, pid), body.nodes, request.app.state.store)
+    )
     return WorkflowValidationResponse(valid=not issues, errors=issues)
 
 
@@ -245,15 +256,26 @@ async def plan_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reques
                 valid=False, issues=[ReuseIssue(code="INVALID_WORKFLOW", message="当前保存图无效")]
             )
         try:
-            validate_workflow_audio_selection(
-                document.nodes, audio_id=aid, allow_collection_subset=True
+            from ..application.workflow_groups import freeze_group_snapshots, validate_source_audio
+            from ..domain.workflow_scope import plan_source_scope
+
+            scope = plan_source_scope(document, body.source_node_id)
+            frozen = freeze_group_snapshots(
+                store,
+                workflow_snapshot(document),
+                pid,
+                scope.node_ids,
+                body.expected_group_revisions,
             )
-            prepared = await prepare_reuse(store, pid, aid, workflow_snapshot(document), body.rerun)
+            validate_source_audio(frozen, scope.source_node_id, aid)
+            prepared = await prepare_reuse(
+                store, pid, aid, frozen, body.rerun, source_node_id=scope.source_node_id
+            )
             from ..application.workflow_connections import freeze_workflow_connections
 
             freeze_workflow_connections(
                 store,
-                workflow_snapshot(document),
+                frozen,
                 pid,
                 node_ids=set(prepared.plan.execute_node_ids),
             )
@@ -261,17 +283,34 @@ async def plan_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reques
 
             await validate_configuration_snapshot(
                 store,
-                workflow_snapshot(document),
+                frozen,
                 pid,
                 aid,
                 node_ids=set(prepared.plan.execute_node_ids),
+                source_node_id=body.source_node_id,
             )
             return prepared.plan
         except ReuseError as error:
             return error.plan
         except ConnectionSnapshotError as error:
             return ReusePlan(valid=False, issues=[ReuseIssue(code=error.code, message=str(error))])
-        except ValueError:
+        except RuntimeError as error:
+            if str(error) == "GROUP_REVISION_CONFLICT":
+                raise HTTPException(
+                    409, detail=_error(str(error), "音频组已修改，请刷新后重试")
+                ) from error
+            raise
+        except ValueError as error:
+            if str(error) in {
+                "SOURCE_NODE_REQUIRED",
+                "SOURCE_NODE_NOT_FOUND",
+                "INPUT_GROUP_NOT_FOUND",
+                "INPUT_GROUP_REQUIRED",
+            }:
+                return ReusePlan(
+                    valid=False,
+                    issues=[ReuseIssue(code=str(error), message="请选择有效音频输入及音频组")],
+                )
             return ReusePlan(
                 valid=False,
                 issues=[
@@ -291,7 +330,13 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
         raise HTTPException(422, detail=_error("WORKFLOW_REQUEST_ID_REQUIRED", "重跑需要请求标识"))
     try:
         return await request.app.state.jobs.start_workflow(
-            pid, aid, body.workflow_revision, rerun=body.rerun, request_id=body.request_id
+            pid,
+            aid,
+            body.workflow_revision,
+            rerun=body.rerun,
+            request_id=body.request_id,
+            source_node_id=body.source_node_id,
+            expected_group_revisions=body.expected_group_revisions,
         )
     except ReuseError as error:
         issue = error.plan.issues[0]
@@ -301,6 +346,10 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
     except ConnectionSnapshotError as error:
         raise HTTPException(422, detail=_error(error.code, str(error))) from error
     except RuntimeError as error:
+        if str(error) == "GROUP_REVISION_CONFLICT":
+            raise HTTPException(
+                409, detail=_error(str(error), "音频组已修改，请刷新后重试")
+            ) from error
         if str(error) == "WORKFLOW_STOPPING":
             raise HTTPException(
                 503, detail=_error("WORKFLOW_STOPPING", "服务正在关闭，请稍后重试")
@@ -321,6 +370,14 @@ async def start_workflow_run(pid: str, aid: str, body: WorkflowRunRequest, reque
             )
         raise HTTPException(500, detail=_error("INTERNAL_ERROR", "工作流启动失败")) from error
     except ValueError as error:
+        if str(error) in {
+            "SOURCE_NODE_REQUIRED",
+            "SOURCE_NODE_NOT_FOUND",
+            "GROUP_SNAPSHOT_REQUIRED",
+            "INPUT_GROUP_NOT_FOUND",
+            "INPUT_GROUP_REQUIRED",
+        }:
+            raise HTTPException(422, detail=_error(str(error), "请选择有效音频输入分支")) from error
         if str(error) in {"INPUT_AUDIO_COLLECTION", "INPUT_AUDIO_COLLECTION_EMPTY"}:
             raise HTTPException(
                 422,
@@ -350,6 +407,8 @@ async def list_workflow_runs(
 ):
     _audio(request, pid, aid)
     runs, total = request.app.state.store.list_workflow_runs(pid, aid, limit=limit, offset=offset)
+    from ..domain.workflow_scope import run_source_summary
+
     items = [
         WorkflowRunSummary(
             id=run.id,
@@ -358,6 +417,7 @@ async def list_workflow_runs(
             created_at=run.created_at,
             finished_at=run.finished_at,
             error=run.error,
+            **run_source_summary(run),
         )
         for run in runs
     ]

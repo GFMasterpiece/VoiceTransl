@@ -1,3 +1,4 @@
+import { mediaMessages, mediaWorkflowMessages } from './messages/media'
 import { translationMessages } from './messages/translation'
 import { backendMessages } from './messages/backend'
 import { rerunMessages } from './messages/rerun'
@@ -24,8 +25,8 @@ export const i18n = createI18n({
   missingWarn: false,
   fallbackWarn: false,
   messages: {
-    'zh-CN': { backend: backendMessages['zh-CN'], settings: settingsMessages['zh-CN'], languages: languageMessages['zh-CN'], connections: connectionMessages['zh-CN'], batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...workflowMessages['zh-CN'], ...translationMessages['zh-CN'], ...rerunMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
-    en: { backend: backendMessages.en, settings: settingsMessages.en, languages: languageMessages.en, connections: connectionMessages.en, batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...workflowMessages.en, ...translationMessages.en, ...rerunMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
+    'zh-CN': { media: mediaMessages['zh-CN'], backend: backendMessages['zh-CN'], settings: settingsMessages['zh-CN'], languages: languageMessages['zh-CN'], connections: connectionMessages['zh-CN'], batch: batchMessages['zh-CN'], common: commonMessages['zh-CN'], app: appMessages['zh-CN'], workflow: { ...mediaWorkflowMessages['zh-CN'], ...workflowMessages['zh-CN'], ...translationMessages['zh-CN'], ...rerunMessages['zh-CN'], ...workflowPanelMessages['zh-CN'], ...editorOperationMessages['zh-CN'], node_source_info_label: batchMessages['zh-CN'].node_source_info_label, node_source_info_add: batchMessages['zh-CN'].node_source_info_add } },
+    en: { media: mediaMessages.en, backend: backendMessages.en, settings: settingsMessages.en, languages: languageMessages.en, connections: connectionMessages.en, batch: batchMessages.en, common: commonMessages.en, app: appMessages.en, workflow: { ...mediaWorkflowMessages.en, ...workflowMessages.en, ...translationMessages.en, ...rerunMessages.en, ...workflowPanelMessages.en, ...editorOperationMessages.en, node_source_info_label: batchMessages.en.node_source_info_label, node_source_info_add: batchMessages.en.node_source_info_add } },
   },
 })
 

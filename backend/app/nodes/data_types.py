@@ -128,5 +128,12 @@ def register_builtin_types(register_type, register_port):
         register_port(port, type_id=port)
     for port in ("filename_stem", "text_format", "model_name"):
         register_port(port, type_id="string")
+    for port, label in {
+        "background": "背景文本",
+        "name": "组名称",
+        "group_id": "音频组",
+        "mode": "关系模式",
+    }.items():
+        register_port(port, type_id="string", label=label)
     register_configuration_types(register_type, register_port)
     register_port("additional_parameters", type_id="json_object", label="模型请求参数")
