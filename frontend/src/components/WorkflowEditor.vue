@@ -26,7 +26,7 @@ import { measureFieldAnchors, type PortAnchor, measureNodeContent, type NodeCont
 import { useNodeRerun } from '../composables/useNodeRerun'
 import { useEditorCommands } from '../composables/useEditorCommands'
 import type { Audio, Project } from '../stores/projects'
-import { debugMode } from '../composables/editorPreferences'
+import { debugMode, skipNodeDeleteConfirmation } from '../composables/editorPreferences'
 import { groupNodeKinds, isNodeVisible } from '../workflow/nodeCategories'
 
 const clipId = useId()
@@ -106,6 +106,9 @@ async function toggleEditMenu() {
   editMenuOpen.value = !editMenuOpen.value
   if (editMenuOpen.value) { await nextTick(); editMenuElement.value?.querySelector<HTMLElement>('button:not([disabled])')?.focus() }
 }
+function deleteSelectedNodes(prompt: string) {
+  if (skipNodeDeleteConfirmation.value || window.confirm(prompt)) store.deleteSelection()
+}
 function runEditorCommand(command: EditorCommand) {
   if (commandDisabled(command)) return
   closeEditMenu(true)
@@ -117,7 +120,7 @@ function runEditorCommand(command: EditorCommand) {
   else if (command === 'paste') void commands.pasteClipboard()
   else if (command === 'duplicate') commands.duplicateSelected()
   else if (command === 'delete') {
-    if (window.confirm(t('workflow.editorDeleteConfirm', { count: store.selectedNodeIds.length }))) store.deleteSelection()
+    deleteSelectedNodes(t('workflow.editorDeleteConfirm', { count: store.selectedNodeIds.length }))
   } else if (command === 'import') commands.chooseImport()
   else commands.exportWorkflow()
 }
@@ -258,7 +261,7 @@ function deleteFromMenu() {
   const selected = store.selectedNode
   closeMenu(true)
   if (store.selectedNodeIds.length === 1 && selected) {
-    if (window.confirm(t('workflow.deleteConfirm', { name: nodeLabel(selected) }))) store.deleteSelection()
+    deleteSelectedNodes(t('workflow.deleteConfirm', { name: nodeLabel(selected) }))
   } else runEditorCommand('delete')
 }
 

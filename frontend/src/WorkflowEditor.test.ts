@@ -1,6 +1,6 @@
 import { emptySettings } from './workflow/fixtures'
 import { catalogFixture, nodeFixture, fieldFixture, typeFixture, runFixture } from './workflow/fixtures'
-import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY } from './composables/editorPreferences'
+import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY, skipNodeDeleteConfirmation, setSkipNodeDeleteConfirmation, SKIP_NODE_DELETE_CONFIRMATION_STORAGE_KEY } from './composables/editorPreferences'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, type App as VueApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -2465,6 +2465,37 @@ describe('editor operations UI', () => {
     expect(pasted.position).toEqual({ x: Math.round((300 - bounds.left - store.pan.x) / store.zoom), y: Math.round((220 - bounds.top - store.pan.y) / store.zoom) })
   })
 
+  it.each(['context-single', 'context-multiple', 'editor', 'Delete', 'Backspace'])('honors the live node delete preference for %s while retaining one-step undo and protection', async mode => {
+    setup(); await settle(); const store = useWorkflowStore()
+    store.addNode('preprocess'); await settle()
+    const before = cloneDocument(store.draft)
+    const selected = mode === 'context-single' ? ['output'] : store.draft.nodes.map(node => node.id)
+    const select = () => store.setSelection(selected)
+    async function remove() {
+      select()
+      if (mode.startsWith('context')) {
+        node('audio_output').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 200 })); await settle()
+        root!.querySelector<HTMLButtonElement>('[data-delete-node]')!.click(); await settle()
+      } else if (mode === 'editor') await command('delete')
+      else { key(svg(), mode); await settle() }
+    }
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    expect(skipNodeDeleteConfirmation.value).toBe(false)
+    await remove(); expect(confirm).toHaveBeenCalledOnce(); expect(store.draft).toEqual(before)
+    setSkipNodeDeleteConfirmation(true)
+    await remove(); expect(confirm).toHaveBeenCalledOnce()
+    expect(store.draft.nodes.some(node => node.id === 'output')).toBe(false)
+    expect(store.draft.nodes.some(node => node.id === 'input')).toBe(true)
+    if (mode !== 'context-single') expect(store.draft.nodes).toHaveLength(1)
+    store.undo(); await settle(); expect(store.draft).toEqual(before)
+    setSkipNodeDeleteConfirmation(false)
+    await remove(); expect(confirm).toHaveBeenCalledTimes(2); expect(store.draft).toEqual(before)
+    setSkipNodeDeleteConfirmation(true)
+    store.run = runBody({ status: 'running' }); await settle()
+    select(); key(svg(), 'Delete'); await settle()
+    expect(store.draft).toEqual(before); expect(confirm).toHaveBeenCalledTimes(2)
+  })
+
   it('duplicates and deletes by menu or shortcut, keeps protected nodes and never captures native editing or locked commands', async () => {
     setup(); await settle(); const store = useWorkflowStore()
     store.selectNode('output')
@@ -3330,3 +3361,5 @@ describe('declarative debug node visibility', () => {
     expect(root!.querySelector('[data-rerun-node]')).not.toBeNull()
   })
 })
+
+afterEach(() => { setSkipNodeDeleteConfirmation(false); window.localStorage.removeItem(SKIP_NODE_DELETE_CONFIRMATION_STORAGE_KEY) })

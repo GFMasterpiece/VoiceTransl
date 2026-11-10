@@ -4,7 +4,7 @@ import CanvasDialog from './CanvasDialog.vue'
 import NodeConfigField from './NodeConfigField.vue'
 import { t, displayError, hasMessage, locale, setLocale } from '../i18n'
 import { loadSettings, saveSettings, type GlobalSettings } from '../composables/globalSettings'
-import { debugMode, setDebugMode } from '../composables/editorPreferences'
+import { debugMode, setDebugMode, skipNodeDeleteConfirmation, setSkipNodeDeleteConfirmation } from '../composables/editorPreferences'
 import { isNodeVisible, nodeCategoryLabel } from '../workflow/nodeCategories'
 import { createNodeRegistry } from '../workflow/nodeRegistry'
 import type { Capabilities, CapabilityField, CapabilityLanguage } from '../workflow/capabilities'
@@ -97,6 +97,7 @@ async function save() {
         <template v-if="!active">
           <label class="node-config-row"><span class="node-config-label">{{ t('app.language') }}</span><select class="locale-picker" data-settings-locale :value="locale" :aria-label="t('app.language')" @change="changeLocale"><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></label>
           <label class="settings-debug-control"><span>{{ t('settings.debugMode') }}</span><input type="checkbox" data-settings-debug :checked="debugMode" @change="changeDebugMode" /></label>
+          <label class="settings-debug-control"><span>{{ t('settings.skipNodeDeleteConfirmation') }}</span><input type="checkbox" data-settings-skip-node-delete-confirmation :checked="skipNodeDeleteConfirmation" @change="setSkipNodeDeleteConfirmation(($event.target as HTMLInputElement).checked)" /></label>
         </template>
         <label v-if="activeGroup" class="node-config-row"><span class="node-config-label">{{ t('settings.nodeType') }}</span><select data-settings-node-type :value="active" :disabled="busy" :aria-label="t('settings.nodeType')" @change="selectType(($event.target as HTMLSelectElement).value)"><option v-for="type in activeGroup.types" :key="type" :value="type">{{ nodeLabel(type, draft!.node_defaults[type]!.label) }}</option></select></label>
         <template v-if="draft">

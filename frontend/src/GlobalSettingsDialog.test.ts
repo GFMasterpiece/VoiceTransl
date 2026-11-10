@@ -1,6 +1,6 @@
 import { nodeFixture, catalogFixture, fieldFixture } from './workflow/fixtures'
 import { readCapabilities } from './workflow/capabilities'
-import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY } from './composables/editorPreferences'
+import { debugMode, setDebugMode, DEBUG_MODE_STORAGE_KEY, skipNodeDeleteConfirmation, setSkipNodeDeleteConfirmation, SKIP_NODE_DELETE_CONFIRMATION_STORAGE_KEY } from './composables/editorPreferences'
 import { locale, setLocale, LOCALE_STORAGE_KEY } from './i18n'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
@@ -43,6 +43,12 @@ describe('stable settings layout and local interface language', () => {
     expect(root!.querySelector('.canvas-dialog-header h2')!.textContent).toBe('Global settings')
     const debug = root!.querySelector<HTMLInputElement>('[data-settings-debug]')!; debug.checked = true; debug.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
     expect(debugMode.value).toBe(true); expect(window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY)).toBe('true')
+    const skip = root!.querySelector<HTMLInputElement>('[data-settings-skip-node-delete-confirmation]')!
+    expect(skip.checked).toBe(false)
+    skip.checked = true; skip.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+    expect(skipNodeDeleteConfirmation.value).toBe(true)
+    expect(window.localStorage.getItem(SKIP_NODE_DELETE_CONFIRMATION_STORAGE_KEY)).toBe('true')
+    expect(root!.textContent).toContain('Delete nodes without confirmation')
     expect(save.disabled).toBe(true); expect(fetcher).toHaveBeenCalledTimes(1)
     root!.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click()
     expect(close).toHaveBeenCalledOnce(); expect(confirm).not.toHaveBeenCalled()
@@ -60,6 +66,9 @@ describe('stable settings layout and local interface language', () => {
     change(root!.querySelector<HTMLInputElement>('[data-settings-key]')!, 'private-secret')
     root!.querySelectorAll<HTMLButtonElement>('[data-settings-tabs] button')[0]!.click(); await nextTick()
     change(root!.querySelector<HTMLSelectElement>('[data-settings-locale]')!, 'en'); await nextTick()
+    const skip = root!.querySelector<HTMLInputElement>('[data-settings-skip-node-delete-confirmation]')!
+    skip.checked = true; skip.dispatchEvent(new Event('change', { bubbles: true })); await nextTick()
+    expect(bodies).toHaveLength(0)
     expect(root!.querySelector<HTMLInputElement>('[data-field=upload_concurrency]')!.value).toBe('5')
     await open()
     expect(root!.querySelector<HTMLInputElement>('[data-field=model]')!.value).toBe('future-model')
@@ -72,6 +81,7 @@ describe('stable settings layout and local interface language', () => {
     expect(bodies[0].credential_updates).toEqual([{ node_type: 'extension', operation: 'set', api_key: 'private-secret' }])
     expect(Object.keys(bodies[0]).sort()).toEqual(['schema_version', 'expected_revision', 'request_id', 'global', 'node_defaults', 'credential_updates'].sort())
     expect(JSON.stringify(bodies[0])).not.toContain('locale')
+    expect(JSON.stringify(bodies[0])).not.toContain('skipNodeDeleteConfirmation')
   })
   it('keeps tabs and actions outside the scrolling content through loading, errors and long forms', async () => {
     let resolve!: (value: Response) => void
@@ -167,3 +177,5 @@ describe('category navigation and independent templates', () => {
     expect(Object.keys(bodies[0]).sort()).toEqual(['schema_version', 'expected_revision', 'request_id', 'global', 'node_defaults', 'credential_updates'].sort())
   })
 })
+
+afterEach(() => { setSkipNodeDeleteConfirmation(false); window.localStorage.removeItem(SKIP_NODE_DELETE_CONFIRMATION_STORAGE_KEY) })
