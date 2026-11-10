@@ -632,3 +632,32 @@ button.topbar-status:disabled { cursor: default; opacity: .6; }
 .project-media-sidebar .manifest-table td:nth-child(4) { grid-column: 3 / 5; grid-row: 2; overflow-wrap: anywhere; }
 .project-media-sidebar .manifest-table td:last-child { grid-column: 4; grid-row: 1; text-align: right; }
 .project-media-sidebar .manifest-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+.media-sidebar-enter-active, .media-sidebar-leave-active { transition: transform 180ms ease, opacity 180ms ease; }
+.media-sidebar-enter-from, .media-sidebar-leave-to { opacity: 0; transform: translateX(100%); }
+.node-workflow .workflow-canvas { transition: right 180ms ease, height 180ms ease, bottom 180ms ease; }
+.node-workflow .workflow-toolbar { transition: right 180ms ease; }
+@media (max-width: 760px) {
+  .media-sidebar-enter-from, .media-sidebar-leave-to { transform: translateY(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-sidebar-enter-active, .media-sidebar-leave-active,
+  .node-workflow .workflow-canvas, .node-workflow .workflow-toolbar { transition: none; }
+}
+.project-media .media-asset { align-items: flex-start; padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
+.project-media .media-asset.is-selected { border-color: var(--teal); background: var(--teal-soft); }
+.project-media .media-asset:focus-within { outline: 2px solid var(--teal); outline-offset: 2px; }
+.project-media .media-asset input[type="checkbox"] { margin: 3px 0 0; }
+.media-asset-content { flex: 1; min-width: 0; font-size: 12px; }
+.media-asset-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-asset-original, .media-asset-path { margin: 5px 0; color: var(--muted); overflow-wrap: anywhere; }
+.media-asset-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.media-asset .media-asset-meta span { white-space: normal; overflow-wrap: anywhere; }
+.media-asset-content details { margin-top: 6px; cursor: auto; }
+.media-asset-content summary { width: fit-content; color: var(--teal); cursor: pointer; }
+.media-asset-content dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 10px; margin: 8px 0 0; }
+.media-asset-content dt { color: var(--muted); }
+.media-asset-content dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+
+/* Modal background locking belongs to this wrapper; the sidebar owns its own leave-state inertness. */
+.project-media-sidebar-layer { display: contents; }

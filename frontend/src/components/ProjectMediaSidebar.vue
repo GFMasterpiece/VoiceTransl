@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, provide, nextTick, watch } from 'vue'
 import { languageSuggestionsKey, useLanguageSuggestions } from '../composables/languageSuggestions'
-import { t } from '../i18n'
+import { locale, t } from '../i18n'
+import { formatBytes } from '../formatBytes'
 import type { Audio } from '../stores/projects'
 import type { BatchManifest } from '../composables/useBatchManifest'
 import type { ProjectMedia } from '../composables/useProjectMedia'
 import AudioManifest from './AudioManifest.vue'
-const props = defineProps<{ media: ProjectMedia; manifest: BatchManifest; audios: readonly Audio[]; locked: boolean; suspended?: boolean }>()
+const props = withDefaults(defineProps<{ media: ProjectMedia; manifest: BatchManifest; audios: readonly Audio[]; locked: boolean; suspended?: boolean; open?: boolean }>(), { open: true })
 const emit = defineEmits<{ close: [] }>()
 const media = reactive(props.media), manifest = reactive(props.manifest)
 const tab = ref<'assets' | 'groups'>('assets'), confirming = ref(false), memberOffset = ref(0), composing = ref(false)
@@ -22,13 +23,13 @@ function keydown(event: KeyboardEvent) {
 }
 watch(confirming, async (value) => {
   await nextTick()
-  if (confirming.value !== value || props.suspended) return
+  if (confirming.value !== value || props.suspended || !props.open) return
   const body = (value ? keepEditing.value : editor.value)?.closest('.project-media-sidebar-body')
   if (body) body.scrollTop = value ? 0 : previousScroll
   if (value) keepEditing.value?.focus({ preventScroll: true })
   else if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
 })
-const busy = computed(() => props.locked || media.saving || manifest.uploading)
+const busy = computed(() => props.locked || media.saving || manifest.uploading || !props.open || !!props.suspended)
 const inheritedLanguages = useLanguageSuggestions()
 provide(languageSuggestionsKey, { languages: inheritedLanguages?.languages || computed(() => undefined), suspended: computed(() => busy.value || confirming.value || !!props.suspended), context: inheritedLanguages?.context })
 const unsaved = computed(() => media.dirty || media.uncertain || manifest.pendingLocal)
@@ -45,10 +46,21 @@ function request(actionToRun: () => void) {
 function discard() { media.discard(); manifest.discardLocal(); confirming.value = false; const next = action; action = null; next?.() }
 function name(id: string) { return props.audios.find(audio => audio.id === id)?.source.original_name || media.audioPage.items.find(audio => audio.id === id)?.source.original_name || id }
 function select(id: string, checked: boolean) { media.selected = checked ? [...new Set([...media.selected, id])] : media.selected.filter(value => value !== id) }
+function assetTitle(audio: Audio) { return audio.name?.trim() || audio.source.original_name }
+function assetFormat(audio: Audio) { return /\.([a-zA-Z0-9]{1,10})$/.exec(audio.source.original_name)?.[1]?.toUpperCase() || audio.source.media_type || '—' }
+function languageLabel(code: string) {
+  const language = inheritedLanguages?.languages.value?.find(item => item.code.toLowerCase() === code.toLowerCase())
+  return language ? `${language.names[locale.value]} · ${code}` : code || t('media.unspecified')
+}
+function selectCard(event: MouseEvent, audio: Audio) {
+  if (busy.value || (event.target instanceof Element && event.target.closest('input, button, details, a'))) return
+  select(audio.id, !media.selected.includes(audio.id))
+}
 function pagination(page: { total: number; offset: number; items: unknown[] }) { return t('batch.pagination', { from: page.total ? page.offset + 1 : 0, to: page.offset + page.items.length, total: page.total }) }
 </script>
 <template>
-  <aside v-show="!suspended" id="project-media-sidebar" class="project-media-sidebar" :aria-label="t('media.title')" data-project-media-sidebar @pointerdown.stop @click.stop @keydown.stop="keydown" @keyup.stop @compositionstart="composing = true" @compositionend="composing = false" @wheel.stop @contextmenu.stop>
+  <Transition name="media-sidebar" appear :css="!suspended">
+  <aside v-show="open && !suspended" :inert="!open || suspended || undefined" :aria-hidden="!open || suspended || undefined" id="project-media-sidebar" class="project-media-sidebar" :aria-label="t('media.title')" data-project-media-sidebar @pointerdown.stop @click.stop @keydown.stop="keydown" @keyup.stop @compositionstart="composing = true" @compositionend="composing = false" @wheel.stop @contextmenu.stop>
     <header class="project-media-sidebar-header"><h2>{{ t('media.title') }}</h2><button class="canvas-dialog-close" type="button" data-media-close :aria-label="t('workflow.closePanel')" :disabled="busy" @click="close">×</button></header>
     <div class="project-media-sidebar-body">
     <div class="project-media" data-project-media>
@@ -63,7 +75,17 @@ function pagination(page: { total: number; offset: number; items: unknown[] }) {
       <template v-if="tab === 'assets'">
         <AudioManifest :manifest="props.manifest" :audios="[]" :locked="locked || media.saving" library-only />
         <h3>{{ t('media.assets') }}</h3>
-        <label v-for="audio in media.audioPage.items" :key="audio.id" class="media-asset" :data-media-audio="audio.id"><input type="checkbox" :checked="media.selected.includes(audio.id)" :disabled="busy" @change="select(audio.id, ($event.target as HTMLInputElement).checked)" /><span :title="`${audio.source.original_name} · ${audio.source.language}`">{{ audio.source.original_name }} · {{ audio.source.language }}</span></label>
+        <article v-for="audio in media.audioPage.items" :key="audio.id" class="media-asset" :class="{ 'is-selected': media.selected.includes(audio.id) }" :data-media-audio="audio.id" @click="selectCard($event, audio)">
+          <input type="checkbox" :aria-label="t('media.selectAsset', { name: assetTitle(audio) })" :checked="media.selected.includes(audio.id)" :disabled="busy" @change="select(audio.id, ($event.target as HTMLInputElement).checked)" />
+          <div class="media-asset-content">
+            <strong class="media-asset-title" :title="assetTitle(audio)">{{ assetTitle(audio) }}</strong>
+            <p v-if="assetTitle(audio) !== audio.source.original_name" class="media-asset-original">{{ t('media.originalName') }}: {{ audio.source.original_name }}</p>
+            <div class="media-asset-meta"><span>{{ assetFormat(audio) }}</span><span>{{ formatBytes(audio.source.size_bytes, locale) }}</span><span :title="languageLabel(audio.source.language)">{{ languageLabel(audio.source.language) }}</span></div>
+            <p v-if="audio.source.origin" class="media-asset-path" :title="`${audio.source.origin.root_name} / ${audio.source.origin.relative_path}`">{{ audio.source.origin.root_name }} / {{ audio.source.origin.relative_path }}</p>
+            <p v-else class="media-asset-path">{{ t('media.directImport') }}</p>
+            <details data-media-audio-details @click.stop><summary>{{ t('media.details') }}</summary><dl><dt>{{ t('media.mime') }}</dt><dd>{{ audio.source.media_type || '—' }}</dd><dt>{{ t('media.assetId') }}</dt><dd>{{ audio.id }}</dd></dl></details>
+          </div>
+        </article>
         <nav class="batch-actions"><button class="secondary-button compact-button" type="button" :disabled="media.loading || media.audioPage.offset === 0" data-media-audio-previous @click="media.loadAudios(Math.max(0, media.audioPage.offset - 20))">{{ t('batch.previous') }}</button><span>{{ pagination(media.audioPage) }}</span><button class="secondary-button compact-button" type="button" :disabled="media.loading || media.audioPage.offset + 20 >= media.audioPage.total" data-media-audio-next @click="media.loadAudios(media.audioPage.offset + 20)">{{ t('batch.next') }}</button></nav>
         <div class="batch-actions"><button class="secondary-button compact-button" type="button" :disabled="busy" data-media-create-selection @click="request(() => { media.createDraft(); memberOffset = 0; tab = 'groups' })">{{ t('media.newGroup') }}</button><button class="secondary-button compact-button" v-if="media.editing" type="button" :disabled="busy || !media.selected.length" data-media-add-selection @click="media.addMembers(); tab = 'groups'">{{ t('media.addMembers') }}</button></div>
       </template>
@@ -85,4 +107,5 @@ function pagination(page: { total: number; offset: number; items: unknown[] }) {
     </div>
     </div>
   </aside>
+  </Transition>
 </template>

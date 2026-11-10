@@ -43,6 +43,7 @@ const retryingLoad = ref(false)
 const initialLoadFailed = computed(() => !store.document && !store.loading && !!(store.capabilitiesError || store.error))
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
 const mediaOpen = ref(false)
+const mediaMounted = ref(false)
 const media = useProjectMedia(props.projectId)
 const batch = useBatchSession(props.projectId, (audio) => { emit('batchUploaded', audio); void media.loadAudios(0) }, () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value, media)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
@@ -776,8 +777,8 @@ async function runWorkflow(nodeId?: string) {
   if (result) activePanel.value = store.registry?.capabilities.schemaVersion === '1.18' && (store.boundAudioIds?.length || 0) < 2 ? 'run' : 'batch'
   return result
 }
-function closeMedia() { mediaOpen.value = false; void nextTick(() => toolbar.value?.querySelector<HTMLButtonElement>('[data-project-media-open]')?.focus({ preventScroll: true })) }
-function openMedia() { if (controlsLocked.value) return; activePanel.value = null; mediaOpen.value = true; void nextTick(() => toolbar.value?.parentElement?.querySelector<HTMLButtonElement>('[data-media-close]')?.focus({ preventScroll: true })); void media.refresh(); if (!batch.manifest.policy.value) void batch.manifest.loadPolicy() }
+function closeMedia() { mediaOpen.value = false; void nextTick(() => { if (!mediaOpen.value && !mediaSuspended.value) toolbar.value?.querySelector<HTMLButtonElement>('[data-project-media-open]')?.focus({ preventScroll: true }) }) }
+function openMedia() { if (controlsLocked.value) return; activePanel.value = null; mediaMounted.value = true; mediaOpen.value = true; void nextTick(() => { if (mediaOpen.value && !mediaSuspended.value) toolbar.value?.parentElement?.querySelector<HTMLButtonElement>('[data-media-close]')?.focus({ preventScroll: true }) }); void media.refresh(); if (!batch.manifest.policy.value) void batch.manifest.loadPolicy() }
 function groupKey(node: WorkflowNode) { const resource = kind(node)?.resourceInput; return resource?.resourceType === 'audio_group' ? resource.configKey : resource?.groupKey }
 function bindGroup(node: WorkflowNode, id: string) {
   if (controlsLocked.value) return
@@ -1062,7 +1063,7 @@ onUnmounted(() => {
       <div class="settings-actions"><button v-if="!rerun.plan.value && !rerun.planning.value" class="secondary-button" type="button" :disabled="rerun.submitting.value" @click="rerun.open(rerun.target.value!.fromNodeId)">{{ t('workflow.rerunRetry') }}</button><button class="primary-button" type="button" data-rerun-submit :disabled="!rerun.plan.value?.valid || rerun.planning.value || rerun.submitting.value" @click="rerun.submit">{{ rerun.submitting.value ? t('workflow.starting') : t('workflow.rerunStart') }}</button></div>
     </CanvasDialog>
     <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
-    <ProjectMediaSidebar v-if="mediaOpen" :suspended="mediaSuspended" :media="media" :manifest="batch.manifest" :audios="audios || []" :locked="batch.locked.value" @close="closeMedia" />
+    <div v-if="mediaMounted" class="project-media-sidebar-layer"><ProjectMediaSidebar :open="mediaOpen" :suspended="mediaSuspended" :media="media" :manifest="batch.manifest" :audios="audios || []" :locked="batch.locked.value" @close="closeMedia" /></div>
     <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" @open-run="openBatchRun" :locked="batch.locked.value" @close="activePanel = null" />
   </section>
 </template>

@@ -5,6 +5,7 @@ import { message, messageRef } from '../i18n'
 
 export interface Audio {
   id: string
+  name?: string
   source: AudioSource
 }
 

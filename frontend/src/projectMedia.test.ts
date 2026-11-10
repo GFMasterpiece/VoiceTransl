@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { createApp, h, nextTick } from 'vue'
+import { computed, createApp, h, nextTick, provide } from 'vue'
+import { languageSuggestionsKey } from './composables/languageSuggestions'
 import { useProjectMedia, type AudioGroup } from './composables/useProjectMedia'
 import { useBatchSession } from './composables/useBatchSession'
 import { useBatches } from './composables/useBatches'
@@ -429,5 +430,64 @@ describe('nonmodal project media workspace', () => {
     expect(sidebar.style.display).toBe('');expect(body.scrollTop).toBe(210)
     expect(sidebar.querySelector<HTMLInputElement>('[data-group-name]')!.value).toBe('Unsaved')
     expect(leave).not.toHaveBeenCalled()
+    sidebar.querySelector<HTMLButtonElement>('[data-group-discard]')!.click();await settle()
+    sidebar.querySelector<HTMLButtonElement>('[data-media-assets]')!.click();await nextTick()
+    const language=sidebar.querySelector<HTMLInputElement>('[data-batch-language]')!
+    language.focus();language.value='日本';language.dispatchEvent(new Event('input',{bubbles:true}));await nextTick()
+    expect(document.querySelector('[data-language-code="ja"]')).not.toBe(null)
+    sidebar.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick()
+    expect(sidebar.hasAttribute('inert')).toBe(true);expect(sidebar.getAttribute('aria-hidden')).toBe('true')
+    expect(sidebar.querySelector<HTMLButtonElement>('[data-media-close]')!.disabled).toBe(true)
+    expect(document.querySelector('[data-language-code="ja"]')).toBe(null)
+    const opener=host.querySelector<HTMLButtonElement>('[data-project-media-open]')!
+    await nextTick();expect(document.activeElement).toBe(opener)
+    opener.click();await nextTick();await nextTick()
+    expect(host.querySelector('[data-project-media-sidebar]')).toBe(sidebar)
+    expect(opener.getAttribute('aria-expanded')).toBe('true')
+    expect(sidebar.hasAttribute('aria-hidden')).toBe(false)
+    expect(sidebar.hasAttribute('inert')).toBe(false)
+    expect(sidebar.style.display).toBe('')
+    expect(document.querySelector('[data-language-code="ja"]')).toBe(null)
+    sidebar.querySelector<HTMLButtonElement>('[data-media-close]')!.click()
+    host.querySelector<HTMLButtonElement>('[data-open-panel="logs"]')!.click();await settle()
+    expect(document.activeElement?.closest('[role="dialog"]')).not.toBe(null)
+    expect(sidebar.hasAttribute('inert')).toBe(true)
+  })
+})
+
+
+describe('project asset information cards', () => {
+  it('shows only real metadata, uses backend language names, and keeps details independent from selection', async () => {
+    const library=media(),manifest=useBatchManifest('p1',()=>{});sessions.push(manifest)
+    const languages=readCapabilities(capabilities).languages!
+    library.audioPage.value=page([
+      {id:'a1',name:'自定义标题',source:{original_name:'原始录音.wav',language:'ja',size_bytes:1536,media_type:'audio/wav',origin:{root_id:'root1',root_name:'导入目录',relative_path:'第一层/很长的相对路径/录音.wav'}}},
+      {id:'a2',source:{original_name:'direct.FLAC',language:'custom-lang',size_bytes:0,media_type:null}},
+    ])
+    const host=document.createElement('div');document.body.append(host)
+    const app=createApp({setup(){provide(languageSuggestionsKey,{languages:computed(()=>languages),suspended:computed(()=>false)});return()=>h(ProjectMediaSidebar,{media:library,manifest,audios:[],locked:false})}})
+    app.mount(host);unmount=()=>app.unmount();await nextTick()
+    const card=host.querySelector<HTMLElement>('[data-media-audio="a1"]')!
+    const japanese=languages.find(language=>language.code==='ja')!
+    expect(card.textContent).toContain('自定义标题');expect(card.textContent).toContain('原始录音.wav')
+    expect(card.textContent).toContain('WAV');expect(card.textContent).toContain('1.5 KiB')
+    expect(card.textContent).toContain(`${japanese.names['zh-CN']} · ja`)
+    expect(card.textContent).toContain('导入目录 / 第一层/很长的相对路径/录音.wav')
+    expect(card.querySelector<HTMLInputElement>('input')!.getAttribute('aria-label')).toContain('自定义标题')
+    card.querySelector<HTMLElement>('.media-asset-title')!.click();await nextTick()
+    expect(library.selected.value).toEqual(['a1']);expect(card.classList.contains('is-selected')).toBe(true)
+    const details=card.querySelector<HTMLDetailsElement>('[data-media-audio-details]')!
+    details.querySelector<HTMLElement>('summary')!.click();await nextTick()
+    expect(details.open).toBe(true);expect(details.textContent).toContain('audio/wav');expect(details.textContent).toContain('a1')
+    expect(library.selected.value).toEqual(['a1'])
+    details.querySelector<HTMLElement>('dd')!.click();expect(library.selected.value).toEqual(['a1'])
+    card.querySelector<HTMLInputElement>('input')!.click();await nextTick();expect(library.selected.value).toEqual([])
+    const direct=host.querySelector<HTMLElement>('[data-media-audio="a2"]')!
+    expect(direct.textContent).toContain('FLAC');expect(direct.textContent).toContain('0 B')
+    expect(direct.textContent).toContain('直接导入');expect(direct.textContent).toContain('custom-lang')
+    setLocale('en');await nextTick()
+    expect(card.textContent).toContain(`${japanese.names.en} · ja`);expect(card.textContent).toContain('Original filename')
+    expect(direct.textContent).toContain('Direct import');expect(direct.textContent).toContain('custom-lang')
+    expect(details.open).toBe(true);expect(library.selected.value).toEqual([])
   })
 })
