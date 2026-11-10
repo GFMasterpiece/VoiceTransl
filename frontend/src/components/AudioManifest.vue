@@ -56,8 +56,8 @@ function pageLabel(page: { total: number; offset: number; items: unknown[] }) { 
             <tbody><tr v-for="item in manifestPage" :key="item.id" :class="{ 'batch-excluded': !manifest.included(item) }" :data-batch-item="item.id">
               <td><input data-manifest-selected v-model="item.selected" type="checkbox" :disabled="locked" :aria-label="`${t('batch.selected')} ${item.name}`" /></td>
               <td><strong :title="item.name">{{ item.origin?.relative_path || item.name }}</strong><small :title="item.origin ? `${item.origin.root_name} · ${item.origin.root_id}` : undefined">{{ item.fileSelection ? t('batch.flatRoot') : item.origin?.root_name || '—' }} · {{ size(item.sizeBytes) }}</small></td>
-              <td><LanguageCombobox v-model="item.language" data-manifest-language :disabled="locked || !!item.audioId" allow-empty :aria-label="`${t('batch.language')} ${item.name}`" @searching="rowSearch(item.id, $event)" /></td>
-              <td><span class="manifest-status">{{ manifest.validation(item) ? batchStatus('invalid') : batchStatus(item.status) }}</span><small v-if="manifest.validation(item)" class="workflow-run-error">{{ manifest.validation(item) }}</small><small v-if="item.error" class="workflow-run-error">{{ displayError(item.error) }}</small></td>
+              <td :data-label="t('batch.language')"><LanguageCombobox v-model="item.language" data-manifest-language :disabled="locked || !!item.audioId" allow-empty :aria-label="`${t('batch.language')} ${item.name}`" @searching="rowSearch(item.id, $event)" /></td>
+              <td :data-label="t('batch.state')"><span class="manifest-status">{{ manifest.validation(item) ? batchStatus('invalid') : batchStatus(item.status) }}</span><small v-if="manifest.validation(item)" class="workflow-run-error">{{ manifest.validation(item) }}</small><small v-if="item.error" class="workflow-run-error">{{ displayError(item.error) }}</small></td>
               <td><button type="button" class="text-button" :disabled="locked" :aria-label="`${t('batch.remove')} ${item.name}`" @click="manifest.remove(item.id)">×</button></td>
             </tr></tbody>
           </table>

@@ -14,7 +14,7 @@ import { readCapabilities } from './workflow/capabilities'
 import { createNodeRegistry } from './workflow/nodeRegistry'
 import { serializeWorkflow, parseWorkflowFile } from './workflow/editorTransfer'
 import { useWorkflowStore, workflowFieldsHeight, workflowNodeHeight } from './stores/workflow'
-import ProjectMediaDialog from './components/ProjectMediaDialog.vue'
+import ProjectMediaSidebar from './components/ProjectMediaSidebar.vue'
 import NodeGroupInput from './components/NodeGroupInput.vue'
 import capabilities from './workflow/groupCapabilities.fixture.json'
 import { setLocale } from './i18n'
@@ -157,36 +157,36 @@ describe('capability-driven group selection and source execution', () => {
 })
 
 
-describe('media dialog protects separate drafts and Files', () => {
+describe('media sidebar protects separate drafts and Files', () => {
   it('preserves group text and selected Files across locale changes and requires explicit discard to close', async () => {
     vi.stubGlobal('fetch', fetchGroups())
     const library=media(), manifest=useBatchManifest('p1',()=>{}); sessions.push(manifest)
     library.createDraft(); library.draft.value.name='new'; library.draft.value.background='custom background'
     manifest.language.value='ja'; manifest.add([new File(['RIFF'],'audio.wav',{type:'audio/wav'})],false)
     const close=vi.fn(), host=document.createElement('div'); document.body.append(host)
-    const app=createApp({ render:()=>h(ProjectMediaDialog,{media:library,manifest,audios:[],locked:false,onClose:close}) }); app.mount(host);unmount=()=>app.unmount()
+    const app=createApp({ render:()=>h(ProjectMediaSidebar,{media:library,manifest,audios:[],locked:false,onClose:close}) }); app.mount(host);unmount=()=>app.unmount()
     setLocale('en');await nextTick()
     expect(library.draft.value.background).toBe('custom background');expect(manifest.pendingLocal.value).toBe(true)
-    host.querySelector<HTMLElement>('.canvas-dialog-body')!.scrollTop=400
-    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await nextTick()
+    host.querySelector<HTMLElement>('.project-media-sidebar-body')!.scrollTop=400
+    host.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick()
     expect(close).not.toHaveBeenCalled();expect(host.querySelector('[data-media-confirm-discard]')).not.toBe(null)
     await nextTick()
     expect(document.activeElement).toBe(host.querySelector('[data-media-keep-editing]'))
-    expect(host.querySelector<HTMLElement>('.canvas-dialog-body')!.scrollTop).toBe(0)
+    expect(host.querySelector<HTMLElement>('.project-media-sidebar-body')!.scrollTop).toBe(0)
     const editor=host.querySelector<HTMLElement>('[data-media-editor]')!
     expect(editor.hasAttribute('inert')).toBe(true);expect(editor.style.display).toBe('none')
     host.querySelector<HTMLButtonElement>('[data-media-keep-editing]')!.click();await nextTick()
     expect(host.querySelector('[data-media-confirm-view]')).toBe(null)
     expect(editor.hasAttribute('inert')).toBe(false)
     expect(library.draft.value.background).toBe('custom background');expect(manifest.pendingLocal.value).toBe(true)
-    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await nextTick();await nextTick()
-    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick();await nextTick()
+    host.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick();await nextTick()
+    host.querySelector('[data-project-media-sidebar]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick();await nextTick()
     expect(host.querySelector('[data-media-confirm-view]')).toBe(null);expect(close).not.toHaveBeenCalled()
     expect(library.draft.value.background).toBe('custom background');expect(manifest.pendingLocal.value).toBe(true)
-    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await nextTick()
-    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await nextTick()
+    host.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick()
+    host.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick()
     expect(host.querySelector('[data-media-confirm-view]')).toBe(null);expect(close).not.toHaveBeenCalled()
-    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await nextTick()
+    host.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick()
     host.querySelector<HTMLButtonElement>('[data-media-confirm-discard]')!.click();await nextTick()
     expect(close).toHaveBeenCalledTimes(1);expect(manifest.pendingLocal.value).toBe(false)
   })
@@ -195,7 +195,7 @@ describe('media dialog protects separate drafts and Files', () => {
     const library=media(), manifest=useBatchManifest('p1',()=>{});sessions.push(manifest)
     await library.edit(g1)
     const host=document.createElement('div');document.body.append(host)
-    const app=createApp({render:()=>h(ProjectMediaDialog,{media:library,manifest,audios:[],locked:false})});app.mount(host);unmount=()=>app.unmount()
+    const app=createApp({render:()=>h(ProjectMediaSidebar,{media:library,manifest,audios:[],locked:false})});app.mount(host);unmount=()=>app.unmount()
     host.querySelector<HTMLButtonElement>('[data-media-groups]')!.click();await nextTick()
     const field=host.querySelector<HTMLTextAreaElement>('[data-group-background]')!;field.value='new background';field.dispatchEvent(new Event('input',{bubbles:true}));await nextTick()
     library.move('a2',-1);host.querySelector<HTMLButtonElement>('[data-group-save]')!.click();await settle()
@@ -288,12 +288,12 @@ describe('group selection confirmation view', () => {
     const library=media(),manifest=useBatchManifest('p1',()=>{});sessions.push(manifest)
     await library.edit(g1);library.groupPage.value=page([{...group(g2),audio_count:2}]);library.draft.value.background='unsaved A'
     const host=document.createElement('div');document.body.append(host)
-    const app=createApp({render:()=>h(ProjectMediaDialog,{media:library,manifest,audios:[],locked:false})});app.mount(host);unmount=()=>app.unmount()
+    const app=createApp({render:()=>h(ProjectMediaSidebar,{media:library,manifest,audios:[],locked:false})});app.mount(host);unmount=()=>app.unmount()
     host.querySelector<HTMLButtonElement>('[data-media-groups]')!.click();await nextTick()
     host.querySelector<HTMLButtonElement>(`[data-media-group="${g2}"]`)!.click();await nextTick();await nextTick()
     expect(document.activeElement).toBe(host.querySelector('[data-media-keep-editing]'))
     expect(fetcher.mock.calls.some(([url])=>url.endsWith(g2))).toBe(false)
-    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick()
+    host.querySelector('[data-project-media-sidebar]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick()
     expect(library.draft.value.background).toBe('unsaved A');expect(library.draft.value.id).toBe(g1)
     expect(host.querySelector('[data-media-confirm-view]')).toBe(null)
     host.querySelector<HTMLButtonElement>(`[data-media-group="${g2}"]`)!.click();await nextTick()
@@ -342,5 +342,92 @@ describe('real inline service node layout', () => {
     const measured=measureNodeContent(group,{width:336,height:92,fields,resource:0,preview:0,bodyY:62})
     expect(measured.fields).toBeGreaterThanOrEqual(260);expect(measured.height).toBeGreaterThanOrEqual(334)
     connected.mockRestore();bounds.mockRestore()
+  })
+})
+
+
+describe('nonmodal project media workspace', () => {
+  it('keeps selection, dragging and group binding live, isolates sidebar keys, and suspends without losing drafts', async () => {
+    const documentValue={schema_version:'4.0',project_id:'p1',revision:0,workflow_revision:0,updated_at:'2026-11-10',...capabilities.workflow.default_graph}
+    const fallback=fetchGroups()
+    vi.stubGlobal('fetch',vi.fn(async (url:string,init?:RequestInit)=>{
+      if(url.endsWith('/capabilities'))return response(capabilities)
+      if(url.endsWith('/settings'))return response(emptySettings())
+      if(url.endsWith('/workflow'))return response(documentValue)
+      if(url.endsWith('/upload-policy'))return response({allowed_extensions:['wav'],max_upload_bytes:1000000,upload_concurrency:3})
+      if(url.includes('audio-groups')||url.includes('/audios?'))return fallback(url,init)
+      return response(page([]))
+    }))
+    const pinia=createPinia();setActivePinia(pinia)
+    const host=document.createElement('div');document.body.append(host)
+    const app=createApp(WorkflowEditor,{projectId:'p1',audioId:null,audioName:'',audios:[]}).use(pinia);const editor=app.mount(host) as unknown as {requestClose:(action:()=>void)=>string};unmount=()=>app.unmount();await settle()
+    const store=useWorkflowStore()
+    host.querySelector<HTMLButtonElement>('[data-project-media-open]')!.click();await settle()
+    const sidebar=host.querySelector<HTMLElement>('[data-project-media-sidebar]')!
+    const svg=host.querySelector<SVGElement>('.workflow-svg')!
+    expect(sidebar.tagName).toBe('ASIDE');expect(sidebar.hasAttribute('aria-modal')).toBe(false)
+    expect(host.querySelector('[role="dialog"]')).toBe(null)
+    expect(svg.closest('[inert]')).toBe(null)
+    expect(host.querySelector('.node-workflow')!.classList.contains('has-media-sidebar')).toBe(true)
+    const sourceId=store.draft.nodes.find(node=>node.type==='audio_input')!.id
+    const source=host.querySelector<SVGGElement>(`[data-node-id="${sourceId}"]`)!
+    source.dispatchEvent(new MouseEvent('click',{bubbles:true}));await nextTick()
+    expect(store.selectedNodeIds).toEqual([sourceId])
+    const before={...store.draft.nodes.find(node=>node.id===sourceId)!.position}
+    const pointer=(name:string,x:number,y:number)=>{const event=new MouseEvent(name,{bubbles:true,button:0,clientX:x,clientY:y});Object.defineProperty(event,'pointerId',{value:1});return event}
+    source.dispatchEvent(pointer('pointerdown',100,100));svg.dispatchEvent(pointer('pointermove',140,125));svg.dispatchEvent(pointer('pointerup',140,125));await nextTick()
+    expect(store.draft.nodes.find(node=>node.id===sourceId)!.position).not.toEqual(before)
+    const select=source.querySelector<HTMLSelectElement>('[data-node-group]')!
+    expect(select.disabled).toBe(false);select.value=g1;select.dispatchEvent(new Event('change',{bubbles:true}));await settle()
+    expect(store.draft.nodes.find(node=>node.id===sourceId)!.config.group_id).toBe(g1)
+    sidebar.querySelector<HTMLButtonElement>('[data-media-groups]')!.click();await nextTick()
+    sidebar.querySelector<HTMLButtonElement>('[data-media-new-group]')!.click();await nextTick()
+    const field=sidebar.querySelector<HTMLInputElement>('[data-group-name]')!
+    field.value='Unsaved';field.dispatchEvent(new Event('input',{bubbles:true}));field.focus();await nextTick()
+    field.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,isComposing:true}))
+    field.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
+    field.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))
+    field.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}))
+    field.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,keyCode:229}))
+    await nextTick();expect(sidebar.querySelector('[data-media-confirm-view]')).toBe(null)
+    const originalEdges=JSON.stringify(store.draft.edges)
+    for (const target of [source.querySelector<SVGElement>('.node-port-out')!,source.querySelector<SVGElement>('[data-resize="right"]')!,svg]) {
+      field.focus();target.dispatchEvent(pointer('pointerdown',100,100));await nextTick()
+      expect(document.activeElement).toBe(svg)
+      if(target.matches('.node-port-out'))expect(host.querySelector('.workflow-edge-preview')).not.toBe(null)
+      const escape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.activeElement!.dispatchEvent(escape);await nextTick()
+      expect(escape.defaultPrevented).toBe(true)
+      expect(sidebar.querySelector('[data-media-confirm-view]')).toBe(null)
+      expect(host.querySelector('.workflow-edge-preview')).toBe(null)
+      const stopped=JSON.stringify([store.draft,store.pan])
+      svg.dispatchEvent(pointer('pointermove',180,160));svg.dispatchEvent(pointer('pointerup',180,160));await nextTick()
+      expect(JSON.stringify([store.draft,store.pan])).toBe(stopped)
+      expect(JSON.stringify(store.draft.edges)).toBe(originalEdges)
+    }
+    field.focus()
+    const beforeKeys=JSON.stringify(store.draft)
+    field.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true}));field.dispatchEvent(new KeyboardEvent('keydown',{key:'a',ctrlKey:true,bubbles:true}));await nextTick()
+    expect(JSON.stringify(store.draft)).toBe(beforeKeys)
+    expect(document.activeElement).toBe(field)
+    source.focus();expect(document.activeElement).toBe(source)
+    host.querySelector<HTMLButtonElement>('[data-open-panel="logs"]')!.click();await settle()
+    expect(sidebar.style.display).toBe('none');expect(host.querySelector('[role="dialog"]')).not.toBe(null)
+    host.querySelector<HTMLButtonElement>('.canvas-dialog-close')!.click();await settle()
+    expect(sidebar.style.display).toBe('');expect(sidebar.querySelector<HTMLInputElement>('[data-group-name]')!.value).toBe('Unsaved')
+    sidebar.querySelector<HTMLButtonElement>('[data-media-close]')!.click();await nextTick();await nextTick()
+    expect(sidebar.querySelector('[data-media-confirm-view]')).not.toBe(null)
+    expect(svg.closest('[inert]')).toBe(null)
+    source.focus();expect(document.activeElement).toBe(source)
+    sidebar.querySelector<HTMLButtonElement>('[data-media-keep-editing]')!.click();await nextTick()
+    expect(sidebar.querySelector<HTMLInputElement>('[data-group-name]')!.value).toBe('Unsaved')
+    await settle()
+    const body=sidebar.querySelector<HTMLElement>('.project-media-sidebar-body')!;body.scrollTop=210
+    const leave=vi.fn();expect(editor.requestClose(leave)).toBe('pending');await settle()
+    expect(sidebar.style.display).toBe('none')
+    host.querySelector<HTMLButtonElement>('.workflow-discard .secondary-button')!.click();await settle()
+    expect(host.querySelector('[data-project-media-sidebar]')).toBe(sidebar)
+    expect(sidebar.style.display).toBe('');expect(body.scrollTop).toBe(210)
+    expect(sidebar.querySelector<HTMLInputElement>('[data-group-name]')!.value).toBe('Unsaved')
+    expect(leave).not.toHaveBeenCalled()
   })
 })

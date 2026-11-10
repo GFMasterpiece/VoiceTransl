@@ -19,7 +19,7 @@ import NodeLibrary from './NodeLibrary.vue'
 import BatchPanel from './BatchPanel.vue'
 import { useBatchSession } from '../composables/useBatchSession'
 import { workflowExecutionKey } from '../composables/workflowExecution'
-import ProjectMediaDialog from './ProjectMediaDialog.vue'
+import ProjectMediaSidebar from './ProjectMediaSidebar.vue'
 import NodeAudioCollection from './NodeAudioCollection.vue'
 import NodeGroupInput from './NodeGroupInput.vue'
 import { useProjectMedia } from '../composables/useProjectMedia'
@@ -44,7 +44,7 @@ const initialLoadFailed = computed(() => !store.document && !store.loading && !!
 const emit = defineEmits<{ selectAudio: [id: string]; uploaded: [audio: Audio]; batchUploaded: [audio: Audio] }>()
 const mediaOpen = ref(false)
 const media = useProjectMedia(props.projectId)
-const batch = useBatchSession(props.projectId, (audio) => { emit('batchUploaded', audio); void media.loadAudios(0) }, () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value || mediaOpen.value, media)
+const batch = useBatchSession(props.projectId, (audio) => { emit('batchUploaded', audio); void media.loadAudios(0) }, () => props.audios || [], () => !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || rerunModalOpen.value || !!libraryWorld.value, media)
 provide(workflowExecutionKey, { reason: batch.startReason, start: runWorkflow })
 const resourceUploads = ref<Record<string, boolean>>({})
 const resourceBusy = computed(() => Object.values(resourceUploads.value).some(Boolean))
@@ -80,20 +80,20 @@ const canValidateAndSave = computed(() => store.dirty && !controlsLocked.value &
 const commands = useEditorCommands(store, {
   stage,
   context: () => JSON.stringify([props.projectId, props.audioId, store.projectId, store.audioId]),
-  blocked: () => !!libraryWorld.value || controlsLocked.value || store.loading || !!activePanel.value || mediaOpen.value || discardPrompt.value || rerunModalOpen.value,
+  blocked: () => !!libraryWorld.value || controlsLocked.value || store.loading || !!activePanel.value || discardPrompt.value || rerunModalOpen.value,
   pastePoint: () => {
     const viewport = availableViewport()
     return viewport ? canvasPoint({ clientX: viewport.bounds.left + viewport.x + viewport.width / 2, clientY: viewport.bounds.top + viewport.y + viewport.height / 2 } as PointerEvent) : undefined
   },
 })
 const { fileInput, readingImport, clipboardBusy, pendingImport, notice: editorNotice } = commands
-const rerun = useNodeRerun({ context: () => JSON.stringify([props.projectId, props.audioId]), blocked: () => !!libraryWorld.value || !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || mediaOpen.value || media.dirty.value || media.uncertain.value || batch.manifest.uploading.value || batch.collection.incomplete.value || !!batch.batches.pending.value })
+const rerun = useNodeRerun({ context: () => JSON.stringify([props.projectId, props.audioId]), blocked: () => !!libraryWorld.value || !!drag.value || !!resizing.value || !!connectionStart.value || !!marquee.value || !!panning.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || store.historyTransactionActive || media.dirty.value || media.uncertain.value || batch.manifest.uploading.value || batch.collection.incomplete.value || !!batch.batches.pending.value })
 watch(rerun.target, target => { rerunModalOpen.value = !!target }, { flush: 'sync' })
 const rerunSourceLabel = computed(() => store.run ? sourceScopeLabel(store.run.source_node_id, frozenSourceGroup(store.run.workflow, store.run.source_node_id, store.registry)?.name) : '')
 const rerunAudioName = computed(() => props.audios?.find(audio => audio.id === rerun.target.value?.audioId)?.source.original_name || rerun.target.value?.audioId || t('workflow.rerunChooseSource'))
 function rerunFromMenu() { const id = contextMenu.value?.nodeId; closeMenu(true); if (id) void rerun.open(id) }
 function locateRerunNode(id: string) { if (rerun.submitting.value) return; store.selectNode(id); rerun.close(); commands.focusCanvas() }
-const editingBlockedBase = computed(() => controlsLocked.value || !store.document || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || mediaOpen.value || discardPrompt.value || rerunModalOpen.value)
+const editingBlockedBase = computed(() => controlsLocked.value || !store.document || store.loading || readingImport.value || !!pendingImport.value || !!activePanel.value || discardPrompt.value || rerunModalOpen.value)
 const editingBlocked = computed(() => editingBlockedBase.value || !!libraryWorld.value)
 provide(languageSuggestionsKey, { languages: computed(() => store.capabilities?.languages),
   suspended: computed(() => editingBlocked.value || !!contextMenu.value || editMenuOpen.value || !!drag.value || !!resizing.value || !!panning.value || !!connectionStart.value || !!marquee.value),
@@ -306,11 +306,11 @@ function outsideMenu(event: PointerEvent) {
   if (editMenuOpen.value && (!(event.target instanceof Node) || (!editMenuElement.value?.contains(event.target) && !editMenuButton.value?.contains(event.target)))) closeEditMenu()
 }
 function nativeEditorTarget(target: EventTarget | null) {
-  return !(target instanceof Element) || !!target.closest('input, textarea, select, button, audio, video, [contenteditable]:not([contenteditable="false"]), [role="dialog"], .node-resize-handle')
+  return !(target instanceof Element) || !!target.closest('input, textarea, select, button, audio, video, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [data-project-media-sidebar], .node-resize-handle')
 }
 function canvasKeyboard(event: KeyboardEvent) {
   if (event.defaultPrevented || nativeEditorTarget(event.target)) return
-  if (event.key === 'Escape' && (drag.value || resizing.value || marquee.value || connectionStart.value)) { event.preventDefault(); clearGestures(); return }
+  if (event.key === 'Escape' && (drag.value || resizing.value || marquee.value || panning.value || connectionStart.value)) { event.preventDefault(); clearGestures(); return }
   if (editingBlocked.value || contextMenu.value || editMenuOpen.value) return
   const key = event.key.toLowerCase()
   if (event.ctrlKey || event.metaKey) {
@@ -561,6 +561,7 @@ function startResize(event: PointerEvent, node: WorkflowNode, axis: 'right' | 'b
   if (editingBlocked.value || event.button !== 0 || event.isPrimary === false) return
   event.preventDefault()
   clearGestures()
+  stage.value?.focus({ preventScroll: true })
   if (!store.beginHistoryTransaction()) return
   const point = canvasPoint(event)
   resizing.value = { nodeId: node.id, axis, startX: point.x, startY: point.y, ...store.getNodeSize(node) }
@@ -708,6 +709,7 @@ function startConnection(node: WorkflowNode, direction: PortDirection, port: str
   connectPointerId.value = Number.isFinite(event.pointerId) ? event.pointerId : null
   connectPointer.value = canvasPoint(event)
   if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus({ preventScroll: true })
+  else stage.value?.focus({ preventScroll: true })
   store.setError('')
 }
 
@@ -774,7 +776,8 @@ async function runWorkflow(nodeId?: string) {
   if (result) activePanel.value = store.registry?.capabilities.schemaVersion === '1.18' && (store.boundAudioIds?.length || 0) < 2 ? 'run' : 'batch'
   return result
 }
-function openMedia() { if (controlsLocked.value) return; mediaOpen.value = true; void media.refresh(); if (!batch.manifest.policy.value) void batch.manifest.loadPolicy() }
+function closeMedia() { mediaOpen.value = false; void nextTick(() => toolbar.value?.querySelector<HTMLButtonElement>('[data-project-media-open]')?.focus({ preventScroll: true })) }
+function openMedia() { if (controlsLocked.value) return; activePanel.value = null; mediaOpen.value = true; void nextTick(() => toolbar.value?.parentElement?.querySelector<HTMLButtonElement>('[data-media-close]')?.focus({ preventScroll: true })); void media.refresh(); if (!batch.manifest.policy.value) void batch.manifest.loadPolicy() }
 function groupKey(node: WorkflowNode) { const resource = kind(node)?.resourceInput; return resource?.resourceType === 'audio_group' ? resource.configKey : resource?.groupKey }
 function bindGroup(node: WorkflowNode, id: string) {
   if (controlsLocked.value) return
@@ -835,7 +838,7 @@ function requestClose(action: () => void): CloseRequestResult {
   closeLibrary()
   if (store.dirty || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || pendingNeedsConfirmation()) {
     pendingClose = action
-    if (activePanel.value || mediaOpen.value) { activePanel.value = null; mediaOpen.value = false; void nextTick(() => { discardPrompt.value = true }) }
+    if (activePanel.value) { activePanel.value = null; void nextTick(() => { discardPrompt.value = true }) }
     else discardPrompt.value = true
     return 'pending'
   }
@@ -894,7 +897,9 @@ function percentLabel(value: number) {
   return new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
 
-defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || pendingNeedsConfirmation(), hasOpenDialog: () => mediaOpen.value || !!libraryWorld.value || !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || !!rerun.target.value })
+const mediaSuspended = computed(() => !!activePanel.value || rerunModalOpen.value || !!libraryWorld.value || discardPrompt.value || !!pendingImport.value)
+
+defineExpose({ requestClose, needsLeaveConfirmation: () => store.dirty || batch.manifest.pendingLocal.value || media.dirty.value || media.uncertain.value || pendingNeedsConfirmation(), hasOpenDialog: () => !!libraryWorld.value || !!activePanel.value || discardPrompt.value || !!contextMenu.value || editMenuOpen.value || readingImport.value || !!pendingImport.value || clipboardBusy.value || !!rerun.target.value })
 
 onMounted(() => {
   void store.load(props.projectId, props.audioId)
@@ -930,12 +935,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="node-workflow" aria-labelledby="node-workflow-title" :aria-busy="store.loading || store.saving ? 'true' : 'false'">
+  <section class="node-workflow" :class="{ 'has-media-sidebar': mediaOpen && !mediaSuspended }" aria-labelledby="node-workflow-title" :aria-busy="store.loading || store.saving ? 'true' : 'false'">
     <h2 id="node-workflow-title" class="visually-hidden">{{ t('workflow.title') }}</h2>
     <div ref="toolbar" class="workflow-toolbar" role="toolbar" :aria-label="t('workflow.toolbar')">
       <div class="workflow-workspace-header"><slot name="workspace-header" /></div>
       <div class="workflow-toolbar-actions">
-        <button type="button" class="secondary-button compact-button" data-project-media-open :disabled="controlsLocked || !store.document" @click="openMedia">{{ t('media.title') }}</button>
+        <button type="button" class="secondary-button compact-button" data-project-media-open aria-controls="project-media-sidebar" :aria-expanded="mediaOpen && !mediaSuspended" :disabled="controlsLocked || !store.document" @click="openMedia">{{ t('media.title') }}</button>
         <div class="editor-menu-anchor">
           <button ref="editMenuButton" class="secondary-button compact-button" type="button" data-editor-menu aria-haspopup="menu" :aria-expanded="editMenuOpen" :disabled="editingBlocked" @click="toggleEditMenu">{{ t('workflow.editorMenu') }} ▾</button>
           <div v-if="editMenuOpen" ref="editMenuElement" class="editor-command-menu" role="menu" :aria-label="t('workflow.editorMenu')" @keydown="editorMenuKey" @pointerdown.stop>
@@ -1057,7 +1062,7 @@ onUnmounted(() => {
       <div class="settings-actions"><button v-if="!rerun.plan.value && !rerun.planning.value" class="secondary-button" type="button" :disabled="rerun.submitting.value" @click="rerun.open(rerun.target.value!.fromNodeId)">{{ t('workflow.rerunRetry') }}</button><button class="primary-button" type="button" data-rerun-submit :disabled="!rerun.plan.value?.valid || rerun.planning.value || rerun.submitting.value" @click="rerun.submit">{{ rerun.submitting.value ? t('workflow.starting') : t('workflow.rerunStart') }}</button></div>
     </CanvasDialog>
     <WorkflowPanels :panel="activePanel === 'batch' ? null : activePanel" @close="activePanel = null" />
-    <ProjectMediaDialog v-if="mediaOpen" :media="media" :manifest="batch.manifest" :audios="audios || []" :locked="batch.locked.value" @close="mediaOpen = false" />
+    <ProjectMediaSidebar v-if="mediaOpen" :suspended="mediaSuspended" :media="media" :manifest="batch.manifest" :audios="audios || []" :locked="batch.locked.value" @close="closeMedia" />
     <BatchPanel :open="activePanel === 'batch'" :batches="batch.batches" @open-run="openBatchRun" :locked="batch.locked.value" @close="activePanel = null" />
   </section>
 </template>

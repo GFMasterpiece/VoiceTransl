@@ -6,35 +6,39 @@ import type { Audio } from '../stores/projects'
 import type { BatchManifest } from '../composables/useBatchManifest'
 import type { ProjectMedia } from '../composables/useProjectMedia'
 import AudioManifest from './AudioManifest.vue'
-import CanvasDialog from './CanvasDialog.vue'
-const props = defineProps<{ media: ProjectMedia; manifest: BatchManifest; audios: readonly Audio[]; locked: boolean }>()
+const props = defineProps<{ media: ProjectMedia; manifest: BatchManifest; audios: readonly Audio[]; locked: boolean; suspended?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const media = reactive(props.media), manifest = reactive(props.manifest)
-const tab = ref<'assets' | 'groups'>('assets'), confirming = ref(false), memberOffset = ref(0)
+const tab = ref<'assets' | 'groups'>('assets'), confirming = ref(false), memberOffset = ref(0), composing = ref(false)
 let action: (() => void) | null = null
 const editor = ref<HTMLElement | null>(null), keepEditing = ref<HTMLButtonElement | null>(null)
 let previousFocus: HTMLElement | null = null, previousScroll = 0
 function cancelConfirmation() { action = null; confirming.value = false }
 function close() { if (confirming.value) cancelConfirmation(); else request(() => emit('close')) }
+function keydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || composing.value || event.keyCode === 229) return
+  event.preventDefault()
+  close()
+}
 watch(confirming, async (value) => {
   await nextTick()
-  if (confirming.value !== value) return
-  const body = (value ? keepEditing.value : editor.value)?.closest('.canvas-dialog-body')
+  if (confirming.value !== value || props.suspended) return
+  const body = (value ? keepEditing.value : editor.value)?.closest('.project-media-sidebar-body')
   if (body) body.scrollTop = value ? 0 : previousScroll
   if (value) keepEditing.value?.focus({ preventScroll: true })
   else if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
 })
 const busy = computed(() => props.locked || media.saving || manifest.uploading)
 const inheritedLanguages = useLanguageSuggestions()
-provide(languageSuggestionsKey, { languages: inheritedLanguages?.languages || computed(() => undefined), suspended: computed(() => busy.value || confirming.value), context: inheritedLanguages?.context })
+provide(languageSuggestionsKey, { languages: inheritedLanguages?.languages || computed(() => undefined), suspended: computed(() => busy.value || confirming.value || !!props.suspended), context: inheritedLanguages?.context })
 const unsaved = computed(() => media.dirty || media.uncertain || manifest.pendingLocal)
 const valid = computed(() => !!media.draft.name.trim() && new TextEncoder().encode(media.draft.background).length <= 65536)
 const members = computed(() => media.draft.audio_ids.slice(memberOffset.value, memberOffset.value + 20))
 function request(actionToRun: () => void) {
-  if (busy.value || confirming.value) return
+  if (busy.value || confirming.value || !!props.suspended) return
   if (unsaved.value) {
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    previousScroll = editor.value?.closest('.canvas-dialog-body')?.scrollTop || 0
+    previousScroll = editor.value?.closest('.project-media-sidebar-body')?.scrollTop || 0
     action = actionToRun; confirming.value = true
   } else actionToRun()
 }
@@ -44,7 +48,9 @@ function select(id: string, checked: boolean) { media.selected = checked ? [...n
 function pagination(page: { total: number; offset: number; items: unknown[] }) { return t('batch.pagination', { from: page.total ? page.offset + 1 : 0, to: page.offset + page.items.length, total: page.total }) }
 </script>
 <template>
-  <CanvasDialog class="project-media-dialog" :title="t('media.title')" :close-disabled="busy" @close="close">
+  <aside v-show="!suspended" id="project-media-sidebar" class="project-media-sidebar" :aria-label="t('media.title')" data-project-media-sidebar @pointerdown.stop @click.stop @keydown.stop="keydown" @keyup.stop @compositionstart="composing = true" @compositionend="composing = false" @wheel.stop @contextmenu.stop>
+    <header class="project-media-sidebar-header"><h2>{{ t('media.title') }}</h2><button class="canvas-dialog-close" type="button" data-media-close :aria-label="t('workflow.closePanel')" :disabled="busy" @click="close">×</button></header>
+    <div class="project-media-sidebar-body">
     <div class="project-media" data-project-media>
       <section v-if="confirming" class="media-confirmation" role="alert" data-media-confirm-view>
         <p>{{ t('media.unsaved') }}</p>
@@ -77,5 +83,6 @@ function pagination(page: { total: number; offset: number; items: unknown[] }) {
       </template>
       </div>
     </div>
-  </CanvasDialog>
+    </div>
+  </aside>
 </template>
